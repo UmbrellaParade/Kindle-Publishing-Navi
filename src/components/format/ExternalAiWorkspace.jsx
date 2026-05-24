@@ -199,7 +199,12 @@ export default function ExternalAiWorkspace({ sharedText, onDiagnosed, onVersion
 
       setResult(parsed);
       if (task === 'genre' && parsed.kdp_categories?.[0]) {
-        onDiagnosed?.(parsed.kdp_categories[0]);
+        onDiagnosed?.({
+          genreLabel: parsed.genre_label || '',
+          primaryCategory: parsed.kdp_categories[0],
+          kdpCategories: parsed.kdp_categories,
+          source: 'external-ai',
+        });
       }
       toast.success(`${selectedTask.label}の結果を取り込みました`);
       return;

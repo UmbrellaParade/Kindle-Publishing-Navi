@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2, Sparkles, Copy, BookOpen, Download, FileText } from 'lucide-react';
@@ -7,100 +7,334 @@ import { base44 } from '@/api/base44Client';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 
-const GENRE_OPTIONS = [
-  { value: 'ダークファンタジー / 音楽ファンタジー', label: 'ダークファンタジー / 音楽ファンタジー' },
-  { value: 'ヒューマンドラマ', label: 'ヒューマンドラマ' },
-  { value: 'SF・サイバーパンク', label: 'SF・サイバーパンク' },
-  { value: 'ライトノベル', label: 'ライトノベル' },
-  { value: 'ミステリー・サスペンス', label: 'ミステリー・サスペンス' },
-  { value: 'ホラー', label: 'ホラー' },
-  { value: 'ロマンス・恋愛', label: 'ロマンス・恋愛' },
-  { value: 'ノンフィクション・エッセイ', label: 'ノンフィクション・エッセイ' },
-  { value: '歴史・時代小説', label: '歴史・時代小説' },
-  { value: '純文学', label: '純文学' },
-  { value: 'コージーミステリー', label: 'コージーミステリー' },
-  { value: 'アクション・冒険', label: 'アクション・冒険' },
-  { value: '青春・成長物語', label: '青春・成長物語' },
-  { value: 'ビジネス・自己啓発', label: 'ビジネス・自己啓発' },
-  { value: '詩・散文', label: '詩・散文' },
+const DEFAULT_GENRE = 'ダークファンタジー / 音楽ファンタジー';
+
+const COMMON_EDITING_RULES = `【共通ルール】
+- 意味、設定、登場人物、固有名詞、時系列は変えない
+- 説明を足しすぎず、原文の声と文体を残す
+- 1文が長すぎる箇所は自然に分割する
+- 台詞の前後、場面転換、感情の転換点に読みやすい余白を入れる
+- Kindleスマホ表示でも追いやすい段落量に整える`;
+
+const GENRE_PROFILES = [
+  {
+    value: DEFAULT_GENRE,
+    label: DEFAULT_GENRE,
+    aliases: ['ダークファンタジー', '音楽ファンタジー', '音楽', '芸術', 'フィクション > ファンタジー > ダークファンタジー'],
+    instructions: `【ジャンル別方針】
+- 陰影、余韻、音や沈黙の描写を活かす
+- 感情が高まる場面は短文と改行で息継ぎを作る
+- 世界観説明は詰め込みすぎず、場面の流れの中に分散する
+- 章の冒頭と末尾は印象が残る一文に整える`,
+  },
+  {
+    value: 'ハイファンタジー / エピックファンタジー',
+    label: 'ハイファンタジー / エピックファンタジー',
+    aliases: ['ハイファンタジー', 'エピックファンタジー', '叙事詩', 'フィクション > ファンタジー > 叙事詩'],
+    instructions: `【ジャンル別方針】
+- 固有名詞、地名、歴史設定が続く箇所は情報を小分けにする
+- 壮大さを残しつつ、行動と感情の軸を見失わない段落にする
+- 戦闘や旅の場面はテンポよく、説明場面は段落を短めに整理する
+- 章末は物語の前進や余韻が伝わる形に整える`,
+  },
+  {
+    value: '異世界ファンタジー',
+    label: '異世界ファンタジー',
+    aliases: ['異世界', '転生', '転移', 'なろう系'],
+    instructions: `【ジャンル別方針】
+- 主人公の目的、状況、能力がすぐ追えるように文を整理する
+- スキルや設定説明は箇条書き風にしすぎず、短い段落で見せる
+- 会話とリアクションのテンポを上げ、読み進めやすくする
+- コメディや爽快感を削らず、説明過多だけを軽くする`,
+  },
+  {
+    value: '都市ファンタジー / 現代ファンタジー',
+    label: '都市ファンタジー / 現代ファンタジー',
+    aliases: ['都市ファンタジー', '現代ファンタジー', 'ローファンタジー', 'フィクション > ファンタジー > 都市', 'フィクション > ファンタジー > コンテンポラリー'],
+    instructions: `【ジャンル別方針】
+- 日常描写と非日常描写の境目が伝わるように段落を切る
+- 現代的な会話は軽く、異能や怪異の描写は余韻を残す
+- 場所、時間、視点の切り替わりを明確にする
+- 説明よりも出来事の流れで設定を理解できる形に整える`,
+  },
+  {
+    value: 'マジカルリアリズム',
+    label: 'マジカルリアリズム',
+    aliases: ['マジカルリアリズム', 'フィクション > マジカルリアリズム'],
+    instructions: `【ジャンル別方針】
+- 不思議な出来事を説明しすぎず、自然に受け止められる文にする
+- 静かな違和感、象徴、余白を残す
+- 長い心理描写は意味のまとまりごとに分ける
+- 文学的なリズムを保ちながら読みづらい密度だけを調整する`,
+  },
+  {
+    value: 'SF / 近未来SF',
+    label: 'SF / 近未来SF',
+    aliases: ['SF', '近未来', 'フィクション > SF > 一般'],
+    instructions: `【ジャンル別方針】
+- 技術説明は1段落1テーマに整理する
+- 専門用語が続く箇所は、人物の行動や感情を挟んで読みやすくする
+- 世界設定とストーリー進行のバランスを取る
+- 緊迫場面では短文を増やしてスピード感を出す`,
+  },
+  {
+    value: 'サイバーパンク',
+    label: 'サイバーパンク',
+    aliases: ['サイバーパンク', 'フィクション > SF > サイバーパンク'],
+    instructions: `【ジャンル別方針】
+- 硬質な語感と疾走感を残しつつ、情報密度を整理する
+- 都市、端末、身体改造などの描写は短い文で鋭く見せる
+- 会話はテンポよく、説明は必要な位置に絞る
+- アクション場面は視線の移動が追える段落にする`,
+  },
+  {
+    value: 'スペースオペラ',
+    label: 'スペースオペラ',
+    aliases: ['スペースオペラ', '宇宙', '銀河', 'フィクション > SF > スペースオペラ'],
+    instructions: `【ジャンル別方針】
+- 艦隊、惑星、勢力関係の情報を一度に詰め込まない
+- 壮大な描写と人物の目的がつながるように段落を整理する
+- 戦闘や移動は位置関係が追える文にする
+- 固有名詞の連続は必要に応じて短い補助文を挟む`,
+  },
+  {
+    value: 'ミステリー / 探偵小説',
+    label: 'ミステリー / 探偵小説',
+    aliases: ['ミステリー', '探偵', '推理', 'フィクション > ミステリー、探偵小説 > 一般'],
+    instructions: `【ジャンル別方針】
+- 伏線、手がかり、推理の流れが追いやすい段落にする
+- 情報開示の文は短く、誤読しにくく整理する
+- 緊張感のある場面は余白と短文でリズムを作る
+- 犯人や真相に関わる意味は絶対に変えない`,
+  },
+  {
+    value: 'コージーミステリー',
+    label: 'コージーミステリー',
+    aliases: ['コージーミステリー', '日常ミステリー'],
+    instructions: `【ジャンル別方針】
+- 会話の軽さ、生活感、温かさを残す
+- 謎解き部分は自然に読める順番へ整える
+- コメディや人間関係の空気を削らず、文の詰まりを取る
+- 場面転換はやわらかく、読者が迷わない余白を置く`,
+  },
+  {
+    value: 'サスペンス / スリラー',
+    label: 'サスペンス / スリラー',
+    aliases: ['サスペンス', 'スリラー', '超自然サスペンス', 'フィクション > スリラー > 一般', 'フィクション > スリラー > 超自然サスペンス'],
+    instructions: `【ジャンル別方針】
+- 危機が近づく場面は短文で圧を出す
+- 説明は引き延ばさず、行動と発見の順に整理する
+- 章末や場面末に次を読みたくなる余韻を残す
+- 真相や因果関係の意味は変えず、読みやすさだけを整える`,
+  },
+  {
+    value: 'ホラー',
+    label: 'ホラー',
+    aliases: ['ホラー', '怪談', 'フィクション > ホラー'],
+    instructions: `【ジャンル別方針】
+- 恐怖描写は短文、沈黙、余白で間を作る
+- 怪異の説明は明かしすぎず、不穏さを残す
+- 視覚、音、匂いなどの感覚描写を読みやすく分ける
+- 急展開は段落を短くし、読者の呼吸を誘導する`,
+  },
+  {
+    value: '恋愛 / ロマンス',
+    label: '恋愛 / ロマンス',
+    aliases: ['恋愛', 'ロマンス', 'フィクション > ロマンス > 一般'],
+    instructions: `【ジャンル別方針】
+- 心の揺れ、視線、沈黙が伝わるように余白を作る
+- 台詞と地の文のバランスを整え、感情の流れを滑らかにする
+- 甘い場面や切ない場面は短い文で余韻を残す
+- 関係性の変化が自然に追える段落にする`,
+  },
+  {
+    value: 'ロマンスファンタジー',
+    label: 'ロマンスファンタジー',
+    aliases: ['ロマンスファンタジー', '恋愛ファンタジー', 'フィクション > ロマンス > ファンタジー'],
+    instructions: `【ジャンル別方針】
+- 恋愛感情と世界観説明がぶつからないように段落を分ける
+- ときめき、緊張、身分差などの感情差を読みやすく見せる
+- 魔法や王宮設定は必要な分だけ自然に補助する
+- クライマックスでは感情の余韻を残す文に整える`,
+  },
+  {
+    value: 'BL / ブロマンス',
+    label: 'BL / ブロマンス',
+    aliases: ['BL', 'ボーイズラブ', 'ブロマンス', 'ライトノベル > ボーイズラブノベルス'],
+    instructions: `【ジャンル別方針】
+- 距離感、視線、沈黙、言外の感情が伝わる余白を残す
+- 関係性の変化が急に見えないよう、感情の段階を整理する
+- 会話のテンポと心理描写の濃度を場面ごとに調整する
+- 読者が感情移入しやすいよう、長い独白は分割する`,
+  },
+  {
+    value: 'ライトノベル',
+    label: 'ライトノベル',
+    aliases: ['ライトノベル', 'ラノベ', 'キャラ文芸', 'ライトノベル > 一般'],
+    instructions: `【ジャンル別方針】
+- 会話、リアクション、地の文のテンポを軽くする
+- 1文は短めにし、スマホでも追いやすい段落にする
+- キャラクターの声を残し、説明だけ重い箇所を削る
+- 見せ場では改行を使って勢いと余韻を作る`,
+  },
+  {
+    value: 'キャラクター文芸',
+    label: 'キャラクター文芸',
+    aliases: ['キャラクター文芸', 'キャラ文芸', '文芸ライト'],
+    instructions: `【ジャンル別方針】
+- キャラクターの魅力が立つ会話と心理描写を残す
+- 読みやすい文芸感を保ち、硬すぎる説明を軽くする
+- 日常、謎、恋愛、成長の要素が自然につながる段落にする
+- 場面ごとの感情の着地点をわかりやすくする`,
+  },
+  {
+    value: 'アクション / 冒険',
+    label: 'アクション / 冒険',
+    aliases: ['アクション', '冒険', 'アドベンチャー', 'フィクション > アクション、アドベンチャー'],
+    instructions: `【ジャンル別方針】
+- 動作の順番が一目で追える短い文にする
+- 戦闘、逃走、移動はテンポを優先する
+- 説明や心理描写はアクションの流れを止めない位置に置く
+- 場面転換と位置関係を明確にする`,
+  },
+  {
+    value: '歴史 / 時代小説',
+    label: '歴史 / 時代小説',
+    aliases: ['歴史', '時代小説', '大河小説', 'フィクション > 大河小説'],
+    instructions: `【ジャンル別方針】
+- 時代背景の説明は簡潔にし、人物の行動に結びつける
+- 古風な語り口を残しつつ、意味が取りにくい長文は分割する
+- 戦、政争、家族関係などの情報を段落で整理する
+- 台詞は雰囲気を保ちつつ読みやすい長さにする`,
+  },
+  {
+    value: '文学 / 純文学',
+    label: '文学 / 純文学',
+    aliases: ['文学', '純文学', 'フィクション > 文学'],
+    instructions: `【ジャンル別方針】
+- 文体の個性、余韻、象徴表現を残す
+- 長い心理描写は意味のまとまりで分割する
+- 説明しすぎず、読者に委ねる余白を残す
+- 読みにくさだけを整え、文章の密度は削りすぎない`,
+  },
+  {
+    value: '一般文芸 / ヒューマンドラマ',
+    label: '一般文芸 / ヒューマンドラマ',
+    aliases: ['一般文芸', 'ヒューマンドラマ', 'フィクション > 一般'],
+    instructions: `【ジャンル別方針】
+- 人物の心情変化が自然に伝わる順番へ整える
+- 日常描写と感情描写の段落を読みやすく分ける
+- 会話と地の文のバランスを整える
+- 感情の転換点には軽い余白を入れる`,
+  },
+  {
+    value: '青春 / 成長物語',
+    label: '青春 / 成長物語',
+    aliases: ['青春', '成長物語', '学園', 'YA', 'ヤングアダルト'],
+    instructions: `【ジャンル別方針】
+- 主人公の迷い、気づき、変化が追えるように段落を整理する
+- 会話は自然なテンポにし、説明過多を避ける
+- 感動場面は短文と余白で余韻を作る
+- 若い読者にも読みやすい文量に整える`,
+  },
+  {
+    value: '短編小説',
+    label: '短編小説',
+    aliases: ['短編', 'ショートショート', 'フィクション > 短編小説'],
+    instructions: `【ジャンル別方針】
+- 一文ごとの役割を明確にし、冗長な説明を軽くする
+- 導入、転換、余韻が短い分量で伝わるように整える
+- オチや印象的な結末につながる情報は変えない
+- 段落数を増やしすぎず、密度と読みやすさを両立する`,
+  },
+  {
+    value: 'コメディ / 風刺',
+    label: 'コメディ / 風刺',
+    aliases: ['コメディ', 'ユーモア', '風刺', 'フィクション > 風刺'],
+    instructions: `【ジャンル別方針】
+- ツッコミ、間、オチのリズムが伝わる改行にする
+- 説明で笑いを潰さず、テンポを優先する
+- 風刺の意図がぼやけないよう文を整理する
+- 会話の掛け合いは短く読みやすくする`,
+  },
+  {
+    value: 'ノンフィクション / エッセイ',
+    label: 'ノンフィクション / エッセイ',
+    aliases: ['ノンフィクション', 'エッセイ', '随筆'],
+    instructions: `【ジャンル別方針】
+- 1段落1メッセージを意識して整理する
+- 体験、考察、結論の流れが追えるようにする
+- 読者に伝えたい要点を短い文で見せる
+- 著者の語り口は残し、説明の重複だけを軽くする`,
+  },
+  {
+    value: '詩 / 散文詩',
+    label: '詩 / 散文詩',
+    aliases: ['詩', '散文詩', '詩集'],
+    instructions: `【ジャンル別方針】
+- 行間、余白、リズムを作品の一部として扱う
+- 意味を説明しすぎず、響きと余韻を残す
+- 改行位置を整え、視覚的な読みやすさを高める
+- 比喩や象徴表現は不用意に言い換えない`,
+  },
 ];
 
-const GENRE_INSTRUCTIONS = {
-  'ダークファンタジー / 音楽ファンタジー': `【修正方針】
-- 1 文が長すぎる箇所を分割して読みやすく
-- 感情の高まる場面は 1 文 1 行の「息継ぎ」改行を入れる
-- 台詞の前後に適切な空白行
-- 章の冒頭・末尾は余韻が残るよう短い文で締める
-- テンポが単調な連続描写にリズム変化を加える`,
-  'ヒューマンドラマ': `【修正方針】
-- 心理描写の文を丁寧に分割
-- 感情の転換点に空白行
-- 台詞と地の文のバランスを整える`,
-  'SF・サイバーパンク': `【修正方針】
-- 技術描写は簡潔に、感情描写は丁寧に
-- 1 文 1 情報を原則に分割
-- 場面転換に空白行`,
-  'ライトノベル': `【修正方針】
-- 1 文 60 文字以内を目標に分割
-- 台詞は 1 行ごとに改行
-- 感情表現は短い文で`,
-  'ミステリー・サスペンス': `【修正方針】
-- 伏線部分は短く印象的に
-- 緊張感は短い文でリズムを
-- 情報開示は適切な行間で`,
-  'ホラー': `【修正方針】
-- 恐怖描写は短い文で余韻を
-- 1 文 1 行の「間」を効果的に
-- 不気味なシーンは余白で表現`,
-  'ロマンス・恋愛': `【修正方針】
-- 心理描写は丁寧に、感情の機微を
-- 会話と地の文のバランスを
-- 感動的な場面は短い文で締める`,
-  'ノンフィクション・エッセイ': `【修正方針】
-- 1 文 1 メッセージを明確に
-- 段落ごとに適切な行間
-- 読みやすい文長に整理`,
-  '歴史・時代小説': `【修正方針】
-- 時代背景の説明は簡潔に
-- 台詞は時代劇らしいリズムで
-- 場面転換を明確に`,
-  '純文学': `【修正方針】
-- 心理描写を深く、丁寧に
-- 文のリズムに緩急を
-- 余韻を残す表現を`,
-  'コージーミステリー': `【修正方針】
-- 軽妙なタッチで読みやすく
-- 伏線は自然に配置
-- 会話中心の展開に`,
-  'アクション・冒険': `【修正方針】
-- 動作描写は短い文でテンポよく
-- 緊張感は 1 文 1 行で
-- 場面転換を明確に`,
-  '青春・成長物語': `【修正方針】
-- 心情描写は丁寧に、共感やすく
-- 会話と地の文のバランスを
-- 感動的な場面は短い文で`,
-  'ビジネス・自己啓発': `【修正方針】
-- 1 文 1 メッセージを明確に
-- 重要な箇所は改行で強調
-- 読みやすい構成に整理`,
-  '詩・散文': `【修正方針】
-- 行間・余白を効果的に
-- リズムと韻を重視
-- 視覚的な美しさを`,
-};
+const GENRE_OPTIONS = GENRE_PROFILES.map(({ value, label }) => ({ value, label }));
+const GENRE_INSTRUCTIONS = Object.fromEntries(GENRE_PROFILES.map(({ value, instructions }) => [value, instructions]));
+
+function getDiagnosisSearchText(diagnosis) {
+  if (!diagnosis) return '';
+  if (typeof diagnosis === 'string') return diagnosis;
+
+  const parts = [
+    diagnosis.genreLabel,
+    diagnosis.genre_label,
+    diagnosis.genreKey,
+    diagnosis.genre_key,
+    diagnosis.primaryCategory,
+    ...(diagnosis.kdpCategories || []),
+    ...(diagnosis.kdp_categories || []),
+  ];
+
+  return parts.filter(Boolean).join(' / ');
+}
+
+function getDiagnosisDisplayText(diagnosis) {
+  if (!diagnosis) return '';
+  if (typeof diagnosis === 'string') return diagnosis;
+  return diagnosis.genreLabel || diagnosis.genre_label || diagnosis.primaryCategory || diagnosis.kdpCategories?.[0] || diagnosis.kdp_categories?.[0] || '';
+}
+
+function findGenreFromDiagnosis(diagnosis) {
+  const searchText = getDiagnosisSearchText(diagnosis).toLowerCase();
+  if (!searchText) return null;
+
+  return GENRE_PROFILES.find(profile => {
+    const words = [profile.value, profile.label, ...(profile.aliases || [])];
+    return words.some(word => searchText.includes(String(word).toLowerCase()));
+  }) || null;
+}
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 
 export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVersionChange, project }) {
   // FormatGuideTab から使われる場合は project が渡されないため、localStorage から取得
   const projectName = project?.name || '原稿';
-  const [selectedGenre, setSelectedGenre] = useState('ダークファンタジー / 音楽ファンタジー');
+  const [genreSource, setGenreSource] = useState('diagnosed');
+  const [manualGenre, setManualGenre] = useState(DEFAULT_GENRE);
   const [loading, setLoading] = useState(false);
   const [revisedText, setRevisedText] = useState('');
   const [manualText, setManualText] = useState('');
   const [activeTab, setActiveTab] = useState('original');
   const [importedText, setImportedText] = useState('');
+
+  const matchedDiagnosedGenre = useMemo(() => findGenreFromDiagnosis(diagnosedGenre), [diagnosedGenre]);
+  const diagnosisDisplayText = useMemo(() => getDiagnosisDisplayText(diagnosedGenre), [diagnosedGenre]);
+  const isUsingDiagnosedGenre = genreSource === 'diagnosed' && Boolean(matchedDiagnosedGenre);
+  const selectedGenre = isUsingDiagnosedGenre ? matchedDiagnosedGenre.value : manualGenre;
+  const selectedGenreLabel = GENRE_OPTIONS.find(opt => opt.value === selectedGenre)?.label || selectedGenre;
+  const selectedGenreSourceLabel = isUsingDiagnosedGenre ? '診断結果' : '手動選択';
+  const selectedGenreInstructions = GENRE_INSTRUCTIONS[selectedGenre] || GENRE_INSTRUCTIONS[DEFAULT_GENRE];
 
   useEffect(() => {
     setRevisedText('');
@@ -108,13 +342,6 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
     setImportedText('');
     setActiveTab('original');
   }, [sharedText]);
-
-  useEffect(() => {
-    if (diagnosedGenre && !selectedGenre) {
-      const matched = GENRE_OPTIONS.find(g => diagnosedGenre.includes(g.value.split('/')[0].trim()));
-      if (matched) setSelectedGenre(matched.value);
-    }
-  }, [diagnosedGenre]);
 
   const analyze = async () => {
     const text = sharedText.trim();
@@ -126,11 +353,18 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
     setLoading(true);
     setRevisedText('');
 
-    const instructions = GENRE_INSTRUCTIONS[selectedGenre] || GENRE_INSTRUCTIONS['ダークファンタジー / 音楽ファンタジー'];
+    const instructions = `${COMMON_EDITING_RULES}
+
+${selectedGenreInstructions}`;
 
     try {
       const res = await base44.integrations.Core.InvokeLLM({
-        prompt: `あなたは Kindle 出版の文章編集専門家です。以下のテキストを「${selectedGenre}」ジャンルのベストセラーに合わせて、文章の見た目・構成・リズムを整えてください。
+        prompt: `あなたは Kindle 出版の文章編集専門家です。以下のテキストを「${selectedGenreLabel}」ジャンルの読者が読みやすい形に、文章の見た目・構成・リズムを整えてください。
+
+【ジャンル指定】
+- 使用ジャンル: ${selectedGenreLabel}
+- 指定方法: ${selectedGenreSourceLabel}
+${isUsingDiagnosedGenre && diagnosisDisplayText ? `- 診断表示: ${diagnosisDisplayText}` : ''}
 
 【重要】意味・ストーリー・登場人物・設定は絶対に変えないでください。あくまで「読みやすさ」のための調整のみ行ってください。
 
@@ -261,9 +495,41 @@ ${res}
       </p>
 
       {/* ジャンル選択 */}
-      <div className="mb-4 space-y-2">
-        <p className="text-xs font-bold text-foreground">対象ジャンルを選択</p>
-        <Select value={selectedGenre} onValueChange={setSelectedGenre}>
+      <div className="mb-4 space-y-3">
+        <p className="text-xs font-bold text-foreground">対象ジャンル</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => matchedDiagnosedGenre && setGenreSource('diagnosed')}
+            disabled={!matchedDiagnosedGenre}
+            className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
+              isUsingDiagnosedGenre
+                ? 'border-neon-amber/60 bg-neon-amber/10 text-neon-amber'
+                : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground hover:border-neon-amber/40'
+            }`}
+          >
+            <span className="block text-xs font-bold">診断結果を使う</span>
+            <span className="block text-[10px] mt-1 leading-relaxed">
+              {matchedDiagnosedGenre
+                ? `${diagnosisDisplayText ? `${diagnosisDisplayText} → ` : ''}${matchedDiagnosedGenre.label}`
+                : 'ジャンル診断後に選べます'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setGenreSource('manual')}
+            className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+              !isUsingDiagnosedGenre
+                ? 'border-neon-cyan/60 bg-neon-cyan/10 text-neon-cyan'
+                : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground hover:border-neon-cyan/40'
+            }`}
+          >
+            <span className="block text-xs font-bold">手動で選ぶ</span>
+            <span className="block text-[10px] mt-1 leading-relaxed">{manualGenre}</span>
+          </button>
+        </div>
+
+        <Select value={manualGenre} onValueChange={(value) => { setManualGenre(value); setGenreSource('manual'); }}>
           <SelectTrigger className="bg-secondary border-border focus:border-neon-amber/50 text-sm">
             <SelectValue placeholder="ジャンルを選択してください..." />
           </SelectTrigger>
@@ -278,8 +544,8 @@ ${res}
       {/* 修正方針表示 */}
       {selectedGenre && (
         <div className="mb-4 rounded-lg p-3 text-xs leading-relaxed" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid #2a2a4a' }}>
-          <p className="font-bold text-neon-cyan mb-1">{selectedGenre} の修正方針：</p>
-          <p className="text-muted-foreground whitespace-pre-wrap">{GENRE_INSTRUCTIONS[selectedGenre]}</p>
+          <p className="font-bold text-neon-cyan mb-1">{selectedGenreLabel} の修正方針（{selectedGenreSourceLabel}）：</p>
+          <p className="text-muted-foreground whitespace-pre-wrap">{selectedGenreInstructions}</p>
         </div>
       )}
 
@@ -290,7 +556,7 @@ ${res}
       >
         {loading
           ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />修正中...</>
-          : <><Sparkles className="w-3.5 h-3.5 mr-1.5" />✨ このジャンルに合わせて文章を整える</>}
+          : <><Sparkles className="w-3.5 h-3.5 mr-1.5" />✨ {selectedGenreSourceLabel}ジャンルに合わせて文章を整える</>}
       </Button>
       <p className="text-[10px] text-muted-foreground mt-1">※ AIによる読みやすさ調整です。内容を確認してから採用してください。</p>
 

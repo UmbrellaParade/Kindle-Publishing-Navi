@@ -122,7 +122,15 @@ ${inputText}
 
     setAiResult(res);
     if (res?.genre_key) setManualGenre(res.genre_key);
-    if (res?.kdp_categories?.[0] && onDiagnosed) onDiagnosed(res.kdp_categories[0]);
+    if (onDiagnosed) {
+      onDiagnosed({
+        genreKey: res?.genre_key || '',
+        genreLabel: res?.genre_label || '',
+        primaryCategory: res?.kdp_categories?.[0] || '',
+        kdpCategories: res?.kdp_categories || [],
+        source: 'genre-diagnostic-connected',
+      });
+    }
     setLoading(false);
   };
 

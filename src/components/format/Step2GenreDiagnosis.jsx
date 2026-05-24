@@ -57,7 +57,14 @@ ${sharedText.slice(0, 2000)}
       },
     });
     setResult(res);
-    if (res?.kdp_categories?.[0] && onDiagnosed) onDiagnosed(res.kdp_categories[0]);
+    if (onDiagnosed) {
+      onDiagnosed({
+        genreLabel: res?.genre_label || '',
+        primaryCategory: res?.kdp_categories?.[0] || '',
+        kdpCategories: res?.kdp_categories || [],
+        source: 'genre-diagnosis',
+      });
+    }
     setLoading(false);
   };
 
