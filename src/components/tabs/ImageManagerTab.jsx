@@ -5,14 +5,24 @@ import { Button } from '@/components/ui/button';
 import { Upload, Download, RefreshCw, ImageIcon, BookOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import ProjectSelector from '../publishing/ProjectSelector';
+import { downloadImage, getImageDataUrl } from '@/lib/localImageStore';
 
 function ImageSlot({ label, imageUrl, onUpload, onDownload, uploading, color }) {
   const fileRef = useRef(null);
+  const [previewUrl, setPreviewUrl] = useState('');
 
   const colorCls = {
     pink: { border: 'border-neon-pink/30', bg: 'bg-neon-pink/5', text: 'text-neon-pink', btn: 'bg-neon-pink/20 text-neon-pink border-neon-pink/40 hover:bg-neon-pink/30' },
     cyan: { border: 'border-neon-cyan/30', bg: 'bg-neon-cyan/5', text: 'text-neon-cyan', btn: 'bg-neon-cyan/20 text-neon-cyan border-neon-cyan/40 hover:bg-neon-cyan/30' },
   }[color] || {};
+
+  useEffect(() => {
+    let active = true;
+    getImageDataUrl(imageUrl)
+      .then(url => { if (active) setPreviewUrl(url || ''); })
+      .catch(() => { if (active) setPreviewUrl(''); });
+    return () => { active = false; };
+  }, [imageUrl]);
 
   return (
     <div className={`rounded-xl border ${colorCls.border} ${colorCls.bg} p-4 space-y-3`}>
@@ -24,7 +34,7 @@ function ImageSlot({ label, imageUrl, onUpload, onDownload, uploading, color }) 
       {/* プレビュー */}
       <div className={`relative rounded-lg overflow-hidden border ${colorCls.border} bg-secondary/30 aspect-[3/4] max-w-[180px] mx-auto flex items-center justify-center`}>
         {imageUrl ? (
-          <img src={imageUrl} alt={label} className="w-full h-full object-contain" />
+          <img src={previewUrl} alt={label} className="w-full h-full object-contain" />
         ) : (
           <div className="text-center p-4">
             <ImageIcon className="w-8 h-8 mx-auto mb-2 text-muted-foreground/30" />
@@ -89,20 +99,25 @@ export default function ImageManagerTab() {
 
   const uploadImage = async (file, field, setUploading) => {
     setUploading(true);
-    const { file_url } = await base44.integrations.Core.UploadFile({ file });
-    const updated = await base44.entities.PublishingProject.update(currentProject.id, { [field]: file_url });
-    setCurrentProject(updated);
-    setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
-    toast.success('画像を保存しました');
-    setUploading(false);
+    try {
+      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const updated = await base44.entities.PublishingProject.update(currentProject.id, { [field]: file_url });
+      setCurrentProject(updated);
+      setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
+      toast.success('画像を保存しました');
+    } catch (err) {
+      toast.error(err.message || '画像の保存に失敗しました');
+    } finally {
+      setUploading(false);
+    }
   };
 
-  const downloadImage = (url, filename) => {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.target = '_blank';
-    a.click();
+  const handleDownloadImage = async (url, filename) => {
+    try {
+      await downloadImage(url, filename);
+    } catch (err) {
+      toast.error(err.message || '画像をダウンロードできませんでした');
+    }
   };
 
   return (
@@ -136,7 +151,7 @@ export default function ImageManagerTab() {
             label="表紙画像"
             imageUrl={currentProject.cover_image_url}
             onUpload={(f) => uploadImage(f, 'cover_image_url', setUploadingCover)}
-            onDownload={() => downloadImage(currentProject.cover_image_url, `${currentProject.name}_表紙.png`)}
+            onDownload={() => handleDownloadImage(currentProject.cover_image_url, `${currentProject.name}_表紙.png`)}
             uploading={uploadingCover}
             color="pink"
           />
@@ -144,7 +159,7 @@ export default function ImageManagerTab() {
             label="Amazon A+画像"
             imageUrl={currentProject.aplus_image_url}
             onUpload={(f) => uploadImage(f, 'aplus_image_url', setUploadingAplus)}
-            onDownload={() => downloadImage(currentProject.aplus_image_url, `${currentProject.name}_Aplus.png`)}
+            onDownload={() => handleDownloadImage(currentProject.aplus_image_url, `${currentProject.name}_Aplus.png`)}
             uploading={uploadingAplus}
             color="cyan"
           />

@@ -28,12 +28,16 @@ export function useChecklistState(project, onProjectUpdate) {
     if (!project) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
+      const existing = (() => {
+        try { return project.checklist_data ? JSON.parse(project.checklist_data) : {}; }
+        catch { return {}; }
+      })();
       const updated = await base44.entities.PublishingProject.update(project.id, {
-        checklist_data: JSON.stringify({ _data: data, _custom: custom }),
+        checklist_data: JSON.stringify({ ...existing, _data: data, _custom: custom }),
       });
       onProjectUpdate(updated);
     }, 800);
-  }, [project?.id]);
+  }, [project, onProjectUpdate]);
 
   const handleTaskChange = (taskId, newState) => {
     const next = { ...checklistData, [taskId]: newState };

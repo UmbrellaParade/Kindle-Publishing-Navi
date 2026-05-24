@@ -315,6 +315,20 @@ function findGenreFromDiagnosis(diagnosis) {
   }) || null;
 }
 
+function estimateKindlePages(text) {
+  const bodyText = String(text || '').replace(/\s/g, '');
+  const chars = bodyText.length;
+  if (!chars) {
+    return { chars: 0, pages: 0, range: '0' };
+  }
+
+  const pages = Math.max(1, Math.ceil(chars / 600));
+  const min = Math.max(1, Math.floor(chars / 700));
+  const max = Math.max(min, Math.ceil(chars / 500));
+
+  return { chars, pages, range: min === max ? `${pages}` : `${min}〜${max}` };
+}
+
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 
 export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVersionChange, project }) {
@@ -335,6 +349,8 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
   const selectedGenreLabel = GENRE_OPTIONS.find(opt => opt.value === selectedGenre)?.label || selectedGenre;
   const selectedGenreSourceLabel = isUsingDiagnosedGenre ? '診断結果' : '手動選択';
   const selectedGenreInstructions = GENRE_INSTRUCTIONS[selectedGenre] || GENRE_INSTRUCTIONS[DEFAULT_GENRE];
+  const originalPageEstimate = useMemo(() => estimateKindlePages(sharedText), [sharedText]);
+  const finalPageEstimate = useMemo(() => estimateKindlePages(importedText || revisedText || sharedText), [importedText, revisedText, sharedText]);
 
   useEffect(() => {
     setRevisedText('');
@@ -381,6 +397,7 @@ ${text.slice(0, 4000)}
       setRevisedText(res);
       setManualText('');
       setImportedText('');
+      setActiveTab('revised');
       toast.success('文章を整えました');
       setTimeout(() => {
         document.getElementById('readability-result')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -648,6 +665,32 @@ ${res}
                       >
                         <Download className="w-3 h-3 mr-1.5" />📥 この原稿を取り込む
                       </Button>
+                    </div>
+
+                    {/* 推定ページ数 */}
+                    <div className="rounded-lg p-4 border border-neon-amber/30" style={{ background: 'rgba(255,179,0,0.05)' }}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <BookOpen className="w-4 h-4 text-neon-amber" />
+                        <p className="text-sm font-bold text-neon-amber">推定ページ数</p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                        <div className="rounded-md p-2 bg-secondary/50 border border-border/60">
+                          <p className="text-[10px] text-muted-foreground mb-0.5">修正後の目安</p>
+                          <p className="text-lg font-bold text-foreground">{finalPageEstimate.pages}ページ前後</p>
+                        </div>
+                        <div className="rounded-md p-2 bg-secondary/50 border border-border/60">
+                          <p className="text-[10px] text-muted-foreground mb-0.5">幅を見た目安</p>
+                          <p className="text-lg font-bold text-foreground">{finalPageEstimate.range}ページ</p>
+                        </div>
+                        <div className="rounded-md p-2 bg-secondary/50 border border-border/60">
+                          <p className="text-[10px] text-muted-foreground mb-0.5">文字数</p>
+                          <p className="text-lg font-bold text-foreground">{finalPageEstimate.chars.toLocaleString()}字</p>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-2">
+                        日本語本文600字前後を1ページとして計算した概算です。KDP上の正確なページ数はKindle PreviewerとKDP登録画面で最終確認してください。
+                        {originalPageEstimate.chars > 0 && ` 修正前は約${originalPageEstimate.pages}ページ前後です。`}
+                      </p>
                     </div>
 
                     {/* 💾 ダウンロードエリア */}

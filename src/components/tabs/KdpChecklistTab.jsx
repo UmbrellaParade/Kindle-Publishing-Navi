@@ -179,12 +179,16 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
     if (!project) return;
     clearTimeout(checklistSaveTimer.current);
     checklistSaveTimer.current = setTimeout(async () => {
+      const existing = (() => {
+        try { return project.checklist_data ? JSON.parse(project.checklist_data) : {}; }
+        catch { return {}; }
+      })();
       const updated = await base44.entities.PublishingProject.update(project.id, {
-        checklist_data: JSON.stringify({ _data: data, _custom: custom, _kdp_fields: fields }),
+        checklist_data: JSON.stringify({ ...existing, _data: data, _custom: custom, _kdp_fields: fields }),
       });
       onProjectUpdate(updated);
     }, 1000);
-  }, [project?.id, onProjectUpdate]);
+  }, [project, onProjectUpdate]);
 
   // KDP 説明文の保存（kdp_description フィールドを使用）
   const saveDescription = useCallback((val, immediate = false) => {

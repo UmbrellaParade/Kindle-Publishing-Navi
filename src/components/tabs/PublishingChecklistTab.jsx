@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Upload, RefreshCw, ImageIcon, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -6,14 +6,24 @@ import { CREATION_PHASES, ALL_CREATION_IDS } from '@/lib/checklistTasks';
 import { useChecklistState } from '@/hooks/useChecklistState';
 import TaskChecklist from '@/components/shared/TaskChecklist';
 import { toast } from 'sonner';
+import { downloadImage, getImageDataUrl } from '@/lib/localImageStore';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 
 function ImageSlot({ label, imageUrl, onUpload, uploading, color }) {
   const ref = useRef(null);
+  const [previewUrl, setPreviewUrl] = useState('');
   const c = color === 'pink'
     ? { border: 'border-neon-pink/30', bg: 'rgba(255,45,120,0.05)', text: 'text-neon-pink', btn: 'bg-neon-pink/20 text-neon-pink border-neon-pink/40 hover:bg-neon-pink/30' }
     : { border: 'border-neon-cyan/30', bg: 'rgba(0,245,255,0.04)', text: 'text-neon-cyan', btn: 'bg-neon-cyan/20 text-neon-cyan border-neon-cyan/40 hover:bg-neon-cyan/30' };
+
+  useEffect(() => {
+    let active = true;
+    getImageDataUrl(imageUrl)
+      .then(url => { if (active) setPreviewUrl(url || ''); })
+      .catch(() => { if (active) setPreviewUrl(''); });
+    return () => { active = false; };
+  }, [imageUrl]);
 
   return (
     <div className={`rounded-xl border ${c.border} p-4 space-y-3`} style={{ background: c.bg }}>
@@ -23,7 +33,7 @@ function ImageSlot({ label, imageUrl, onUpload, uploading, color }) {
       </div>
       <div className={`rounded-lg overflow-hidden border ${c.border} bg-black/30 aspect-[3/4] max-w-[140px] mx-auto flex items-center justify-center`}>
         {imageUrl
-          ? <img src={imageUrl} alt={label} className="w-full h-full object-contain" />
+          ? <img src={previewUrl} alt={label} className="w-full h-full object-contain" />
           : <div className="text-center p-4"><ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-20" /><p className="text-[10px] text-muted-foreground">画像なし</p></div>
         }
       </div>
@@ -33,7 +43,13 @@ function ImageSlot({ label, imageUrl, onUpload, uploading, color }) {
         </Button>
         {imageUrl && (
           <Button size="sm" variant="ghost" className="h-8 text-xs text-muted-foreground"
-            onClick={() => { const a = document.createElement('a'); a.href = imageUrl; a.download = label + '.png'; a.target = '_blank'; a.click(); }}>
+            onClick={async () => {
+              try {
+                await downloadImage(imageUrl, label + '.png');
+              } catch (err) {
+                toast.error(err.message || '画像をダウンロードできませんでした');
+              }
+            }}>
             <Download className="w-3 h-3 mr-1.5" />ダウンロード
           </Button>
         )}
@@ -52,11 +68,16 @@ export default function PublishingChecklistTab({ project, onProjectUpdate, savin
   const uploadImage = async (file, field, setUploading) => {
     if (!project) return;
     setUploading(true);
-    const { file_url } = await base44.integrations.Core.UploadFile({ file });
-    const updated = await base44.entities.PublishingProject.update(project.id, { [field]: file_url });
-    onProjectUpdate(updated);
-    toast.success('画像を保存しました');
-    setUploading(false);
+    try {
+      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const updated = await base44.entities.PublishingProject.update(project.id, { [field]: file_url });
+      onProjectUpdate(updated);
+      toast.success('画像を保存しました');
+    } catch (err) {
+      toast.error(err.message || '画像の保存に失敗しました');
+    } finally {
+      setUploading(false);
+    }
   };
 
   if (!project) {

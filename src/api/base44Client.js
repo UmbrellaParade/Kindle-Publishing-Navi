@@ -1,5 +1,6 @@
 import { createClient } from '@base44/sdk';
 import { appParams } from '@/lib/app-params';
+import { saveImageFile } from '@/lib/localImageStore';
 
 const { appId, token, functionsVersion, appBaseUrl } = appParams;
 
@@ -225,7 +226,7 @@ const createLocalClient = () => ({
   integrations: {
     Core: {
       UploadFile: async ({ file }) => ({
-        file_url: await fileToDataUrl(file),
+        file_url: file?.type?.startsWith('image/') ? await saveImageFile(file) : await fileToDataUrl(file),
       }),
       InvokeLLM: mockInvokeLLM,
     },

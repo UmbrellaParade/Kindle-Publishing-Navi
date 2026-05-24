@@ -105,12 +105,6 @@ export default function FormatGuideTab() {
         </div>
       </div>
 
-      <ExternalAiWorkspace
-        sharedText={sharedText}
-        onDiagnosed={setDiagnosedGenre}
-        onVersionChange={setVersionState}
-      />
-
       {/* ステップ1：フォーマット判定 */}
       <StepWrapper n="1" label="フォーマット判定" color="cyan">
         <Step1FormatDecision sharedText={sharedText} />
@@ -125,6 +119,12 @@ export default function FormatGuideTab() {
       <StepWrapper n="3" label="ルビ自動付与 → 手動修正 → コピー" color="pink">
         <Step3RubyEditor sharedText={sharedText} />
       </StepWrapper>
+
+      <ExternalAiWorkspace
+        sharedText={sharedText}
+        onDiagnosed={setDiagnosedGenre}
+        onVersionChange={setVersionState}
+      />
 
       {/* ステップ4：読みやすさチェック */}
       <StepWrapper n="4" label="読みやすさチェック → ベストセラー比較＆修正" color="amber">
