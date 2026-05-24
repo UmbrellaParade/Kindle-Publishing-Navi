@@ -152,7 +152,8 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
   const [description, setDescription] = useState('');
   const [addingTask, setAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
-  const saveTimer = useRef(null);
+  const checklistSaveTimer = useRef(null);
+  const descriptionSaveTimer = useRef(null);
 
   // プロジェクト選択時にデータを読み込み
   useEffect(() => {
@@ -167,15 +168,17 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
     
     try {
       const kdpMeta = project.kdp_meta ? JSON.parse(project.kdp_meta) : {};
-      setDescription(kdpMeta.description || '');
-    } catch { setDescription(''); }
+      setDescription(project.kdp_description || kdpMeta.description || '');
+    } catch {
+      setDescription(project.kdp_description || '');
+    }
   }, [project?.id]);
 
   // 自動保存（checklist_data）
   const scheduleSave = useCallback((data, custom, fields) => {
     if (!project) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+    clearTimeout(checklistSaveTimer.current);
+    checklistSaveTimer.current = setTimeout(async () => {
       const updated = await base44.entities.PublishingProject.update(project.id, {
         checklist_data: JSON.stringify({ _data: data, _custom: custom, _kdp_fields: fields }),
       });
@@ -184,16 +187,28 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
   }, [project?.id, onProjectUpdate]);
 
   // KDP 説明文の保存（kdp_description フィールドを使用）
-  const saveDescription = useCallback((val) => {
+  const saveDescription = useCallback((val, immediate = false) => {
     if (!project) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+    clearTimeout(descriptionSaveTimer.current);
+    const persist = async () => {
+      const currentMeta = (() => {
+        try { return project.kdp_meta ? JSON.parse(project.kdp_meta) : {}; }
+        catch { return {}; }
+      })();
       const updated = await base44.entities.PublishingProject.update(project.id, {
         kdp_description: val,
+        kdp_meta: JSON.stringify({ ...currentMeta, description: val }),
       });
       onProjectUpdate(updated);
-    }, 1000);
-  }, [project?.id, onProjectUpdate]);
+    };
+
+    if (immediate) {
+      persist();
+      return;
+    }
+
+    descriptionSaveTimer.current = setTimeout(persist, 1000);
+  }, [project, onProjectUpdate]);
 
   const handleTaskChange = (taskId, newState) => {
     const next = { ...checklistData, [taskId]: newState };
@@ -302,7 +317,11 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
 
       {/* KDP 書籍説明文 */}
       <div className="rounded-xl p-4" style={CARD_STYLE}>
-        <KdpDescriptionEditor description={description} onSave={val => { setDescription(val); saveDescription(val); }} />
+        <KdpDescriptionEditor
+          description={description}
+          onSave={val => { setDescription(val); saveDescription(val); }}
+          onFlush={val => { setDescription(val); saveDescription(val, true); }}
+        />
       </div>
     </div>
   );

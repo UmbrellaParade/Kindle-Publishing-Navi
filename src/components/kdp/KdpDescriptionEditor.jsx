@@ -16,7 +16,7 @@ const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u{2600}-\u{26FF}\u{
 // URL パターン
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]/;
 
-export default function KdpDescriptionEditor({ description, onSave }) {
+export default function KdpDescriptionEditor({ description, onSave, onFlush }) {
   const editorRef = useRef(null);
   const [htmlOutput, setHtmlOutput] = useState(description || '');
   const [charCount, setCharCount] = useState(0);
@@ -171,6 +171,7 @@ export default function KdpDescriptionEditor({ description, onSave }) {
           contentEditable
           suppressContentEditableWarning
           onInput={handleInput}
+          onBlur={() => onFlush?.(editorRef.current?.innerHTML || '')}
           onKeyDown={handleKeyDown}
           data-placeholder="ここに書籍説明文を入力してください。&#10;&#10;例：&#10;H4/H5/H6 で見出し、B で太字、I で斜体、・で箇条書きができます。"
           className="w-full min-h-[240px] px-4 py-3 text-sm focus:outline-none leading-relaxed
