@@ -11,6 +11,7 @@ import Step2GenreDiagnosis from '../format/Step2GenreDiagnosis';
 import Step3RubyEditor from '../format/Step3RubyEditor';
 import Step4ReadabilityCheck from '../format/Step4ReadabilityCheck';
 import Step5Export from '../format/Step5Export';
+import ExternalAiWorkspace from '../format/ExternalAiWorkspace';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 
@@ -103,6 +104,12 @@ export default function FormatGuideTab() {
           )}
         </div>
       </div>
+
+      <ExternalAiWorkspace
+        sharedText={sharedText}
+        onDiagnosed={setDiagnosedGenre}
+        onVersionChange={setVersionState}
+      />
 
       {/* ステップ1：フォーマット判定 */}
       <StepWrapper n="1" label="フォーマット判定" color="cyan">
