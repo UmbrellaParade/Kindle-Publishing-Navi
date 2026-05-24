@@ -1,38 +1,39 @@
-# 🌂 Umbrella Parade Kindle出版ナビ
+**Welcome to your Base44 project** 
 
-Umbrella Parade 専用のKindle KDP入稿サポートツール。
+**About**
 
-## 機能
+View and Edit  your app on [Base44.com](http://Base44.com) 
 
-1. **① フォーマット判定** - docx/epubの自動判定（URLリンク検出）
-2. **② ジャンル診断** - 本文からKDP実在カテゴリーを提案
-3. **③ ルビ付け** - 固有名詞辞書付き・初出のみ/全付与を選択可能
-4. **④ 読みやすさチェック&修正** - Kindleベストセラーとの比較・AI修正・手動編集
-5. **⑤ 出力** - docx（游明朝11pt）またはepubでダウンロード
+This project contains everything you need to run your app locally.
 
-## セットアップ
+**Edit the code in your local development environment**
 
-```bash
-npm install
-npm start
+Any change pushed to the repo will also be reflected in the Base44 Builder.
+
+**Prerequisites:** 
+
+1. Clone the repository using the project's Git URL 
+2. Navigate to the project directory
+3. Install dependencies: `npm install`
+4. Create an `.env.local` file and set the right environment variables
+
+```
+VITE_BASE44_APP_ID=your_app_id
+VITE_BASE44_APP_BASE_URL=your_backend_url
+
+e.g.
+VITE_BASE44_APP_ID=cbef744a8545c389ef439ea6
+VITE_BASE44_APP_BASE_URL=https://my-to-do-list-81bfaad7.base44.app
 ```
 
-## 技術スタック
+Run the app: `npm run dev`
 
-- React 18 + TypeScript
-- docx（docxファイル生成）
-- file-saver（ダウンロード）
+**Publish your changes**
 
-## キャラクター
+Open [Base44.com](http://Base44.com) and click on Publish.
 
-| キャラ | 年齢 | 役割 |
-|--------|------|------|
-| ヴェル13世 | 42歳 | 主人公・雨を晴らせない男 |
-| アマモリ | 少年 | 記録者 |
-| カーラ・マンソン | - | 元相棒・スーパースター |
-| アマヨミ | - | 伏線キャラ（未登場） |
+**Docs & Support**
 
-## 作者
+Documentation: [https://docs.base44.com/Integrations/Using-GitHub](https://docs.base44.com/Integrations/Using-GitHub)
 
-べるぼ（@bellbo13） / Umbrella Parade Project  
-https://umbrellaparade13.com/
+Support: [https://app.base44.com/support](https://app.base44.com/support)

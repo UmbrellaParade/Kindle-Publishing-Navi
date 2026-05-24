@@ -1,0 +1,40 @@
+{
+  "name": "ChecklistTemplate",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u540d"
+    },
+    "items": {
+      "type": "array",
+      "description": "\u5de5\u7a0b\u30ea\u30b9\u30c8",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "link": {
+            "type": "string"
+          },
+          "is_important": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "name"
+  ]
+}

@@ -1,0 +1,75 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Orbitron:wght@400;700;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 35% 8%;
+    --foreground: 0 0% 93%;
+    --card: 230 30% 11%;
+    --card-foreground: 0 0% 93%;
+    --popover: 230 30% 11%;
+    --popover-foreground: 0 0% 93%;
+    --primary: 338 100% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 230 25% 16%;
+    --secondary-foreground: 0 0% 93%;
+    --muted: 230 25% 16%;
+    --muted-foreground: 230 10% 55%;
+    --accent: 185 100% 50%;
+    --accent-foreground: 0 0% 0%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 230 20% 20%;
+    --input: 230 20% 20%;
+    --ring: 338 100% 58%;
+    --radius: 0.75rem;
+
+    --font-heading: 'Orbitron', sans-serif;
+    --font-body: 'Noto Sans JP', sans-serif;
+
+    --neon-pink: 338 100% 58%;
+    --neon-red: 0 72% 51%;
+    --neon-amber: 43 100% 50%;
+    --neon-cyan: 185 100% 50%;
+  }
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-body);
+    background-color: #0d0d1a;
+  }
+}
+
+/* Neon glow utilities */
+.neon-pink-glow  { text-shadow: 0 0 8px hsl(338 100% 58%), 0 0 20px hsl(338 100% 58% / 0.4); }
+.neon-cyan-glow  { text-shadow: 0 0 8px hsl(185 100% 50%), 0 0 20px hsl(185 100% 50% / 0.4); }
+.neon-amber-glow { text-shadow: 0 0 8px hsl(43 100% 50%), 0 0 20px hsl(43 100% 50% / 0.4); }
+.neon-red-glow   { text-shadow: 0 0 8px hsl(0 72% 51%), 0 0 20px hsl(0 72% 51% / 0.4); }
+
+.neon-box-pink  { box-shadow: 0 0 8px hsl(338 100% 58% / 0.35), 0 0 20px hsl(338 100% 58% / 0.15), inset 0 0 8px hsl(338 100% 58% / 0.05); }
+.neon-box-cyan  { box-shadow: 0 0 8px hsl(185 100% 50% / 0.35), 0 0 20px hsl(185 100% 50% / 0.15), inset 0 0 8px hsl(185 100% 50% / 0.05); }
+.neon-box-amber { box-shadow: 0 0 8px hsl(43 100% 50% / 0.35), 0 0 20px hsl(43 100% 50% / 0.15), inset 0 0 8px hsl(43 100% 50% / 0.05); }
+
+.neon-border-pink  { border-color: hsl(338 100% 58% / 0.5); }
+.neon-border-cyan  { border-color: hsl(185 100% 50% / 0.5); }
+
+/* Rain */
+@keyframes rain-fall {
+  0%   { transform: translateY(-100vh); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 0.7; }
+  100% { transform: translateY(100vh) translateX(-20px); opacity: 0; }
+}
+.rain-drop { animation: rain-fall linear infinite; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: #0d0d1a; }
+::-webkit-scrollbar-thumb { background: hsl(338 100% 58% / 0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(338 100% 58% / 0.5); }
