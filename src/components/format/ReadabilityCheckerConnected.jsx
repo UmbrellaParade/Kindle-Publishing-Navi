@@ -292,7 +292,7 @@ ${res}
           ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />修正中...</>
           : <><Sparkles className="w-3.5 h-3.5 mr-1.5" />✨ このジャンルに合わせて文章を整える</>}
       </Button>
-      <p className="text-[10px] text-muted-foreground mt-1">※ 高品質分析のため AI を使用します。Base44 のクレジットが消費されます</p>
+      <p className="text-[10px] text-muted-foreground mt-1">※ AIによる読みやすさ調整です。内容を確認してから採用してください。</p>
 
       <AnimatePresence>
         {revisedText && (

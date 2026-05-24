@@ -205,7 +205,7 @@ ${text.slice(0, 4000)}
 
       {/* Note */}
       <p className="text-[10px] text-muted-foreground mt-1">
-        ※ このチェックはAIによる提案です。最終的な判断は著者自身が行ってください。高品質な分析のためclaude sonnetを使用します（クレジットを消費します）。
+        ※ このチェックはAIによる提案です。最終的な判断は著者自身が行ってください。
       </p>
 
       {/* Results */}
