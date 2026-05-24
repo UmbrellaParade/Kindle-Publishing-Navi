@@ -16,6 +16,20 @@ const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u{2600}-\u{26FF}\u{
 // URL パターン
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]/;
 
+function formatHtmlForDisplay(html) {
+  if (!html.trim()) return '';
+
+  return html
+    .replace(/>\s*</g, '><')
+    .replace(/<br\s*\/?>/gi, '<br>\n')
+    .replace(/<(\/?)(h4|h5|h6|p|div|ul|ol|li)([^>]*)>/gi, '\n<$1$2$3>')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => (/^<li[\s>]/i.test(line) ? `  ${line}` : line))
+    .join('\n');
+}
+
 export default function KdpDescriptionEditor({ description, onSave, onFlush }) {
   const editorRef = useRef(null);
   const [htmlOutput, setHtmlOutput] = useState(description || '');
@@ -96,7 +110,7 @@ export default function KdpDescriptionEditor({ description, onSave, onFlush }) {
   };
 
   const copyHtml = () => {
-    navigator.clipboard.writeText(htmlOutput);
+    navigator.clipboard.writeText(formatHtmlForDisplay(htmlOutput));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
     toast.success('HTML をコピーしました');
@@ -198,7 +212,7 @@ export default function KdpDescriptionEditor({ description, onSave, onFlush }) {
         </div>
         <textarea
           readOnly
-          value={htmlOutput}
+          value={formatHtmlForDisplay(htmlOutput)}
           className="w-full h-32 px-3 py-2 text-xs font-mono rounded-lg focus:outline-none resize-none"
           style={{ background: '#0d0d1a', color: '#00ff88', border: '1px solid #2a2a4a' }}
         />

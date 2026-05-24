@@ -1,9 +1,20 @@
-import React, { useMemo, useState } from 'react';
-import { Bot, CheckCircle, Copy, ExternalLink, FileInput, Sparkles } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Bot, CheckCircle, Copy, ExternalLink, FileInput, KeyRound, Save, Sparkles, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
+const AI_SETTINGS_KEY = 'kindle_navi_ai_settings';
+
+const DEFAULT_SETTINGS = {
+  defaultProvider: 'chatgpt',
+  openaiApiKey: '',
+  openaiModel: 'gpt-4.1',
+  geminiApiKey: '',
+  geminiModel: 'gemini-2.5-pro',
+  claudeApiKey: '',
+  claudeModel: 'claude-sonnet-4-5',
+};
 
 const PROVIDERS = [
   { id: 'chatgpt', label: 'ChatGPT', url: 'https://chatgpt.com/' },
@@ -17,6 +28,15 @@ const TASKS = [
   { id: 'ruby', label: 'ルビ付け' },
   { id: 'readability', label: '読みやすさ修正' },
 ];
+
+function loadAiSettings() {
+  try {
+    const saved = localStorage.getItem(AI_SETTINGS_KEY);
+    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
 
 function extractJson(text) {
   const trimmed = text.trim();
@@ -115,6 +135,11 @@ export default function ExternalAiWorkspace({ sharedText, onDiagnosed, onVersion
   const [task, setTask] = useState('readability');
   const [answer, setAnswer] = useState('');
   const [result, setResult] = useState(null);
+  const [settings, setSettings] = useState(loadAiSettings);
+
+  useEffect(() => {
+    if (settings.defaultProvider) setProvider(settings.defaultProvider);
+  }, []);
 
   const selectedProvider = PROVIDERS.find(item => item.id === provider) || PROVIDERS[0];
   const selectedTask = TASKS.find(item => item.id === task) || TASKS[0];
@@ -131,6 +156,31 @@ export default function ExternalAiWorkspace({ sharedText, onDiagnosed, onVersion
       toast.success(`${selectedProvider.label}用プロンプトをコピーしました`);
     } catch {
       toast.error('コピーできませんでした。プロンプト欄から手動でコピーしてください');
+    }
+  };
+
+  const updateSetting = (key, value) => {
+    setSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  const saveSettings = () => {
+    try {
+      localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(settings));
+      setProvider(settings.defaultProvider);
+      toast.success('AI設定をこのブラウザに保存しました');
+    } catch {
+      toast.error('AI設定を保存できませんでした');
+    }
+  };
+
+  const clearSettings = () => {
+    try {
+      localStorage.removeItem(AI_SETTINGS_KEY);
+      setSettings(DEFAULT_SETTINGS);
+      setProvider(DEFAULT_SETTINGS.defaultProvider);
+      toast.success('AI設定をクリアしました');
+    } catch {
+      toast.error('AI設定をクリアできませんでした');
     }
   };
 
@@ -175,6 +225,99 @@ export default function ExternalAiWorkspace({ sharedText, onDiagnosed, onVersion
         <Bot className="w-4 h-4 text-neon-cyan" />
         <h3 className="font-bold text-sm text-neon-cyan neon-cyan-glow">ChatGPT / Gemini / Claude 連携</h3>
       </div>
+
+      <details className="rounded-lg border border-neon-cyan/25 bg-secondary/30">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-bold text-neon-cyan flex items-center gap-2">
+          <KeyRound className="w-3.5 h-3.5" />AI設定（APIキー・モデル）
+        </summary>
+        <div className="px-3 pb-3 space-y-3">
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            APIキーはこのブラウザ内にだけ保存されます。公開サイトでキーを直接使うと閲覧者に見えるため、API直結は次の段階でバックエンド経由にするのが安全です。今はプロンプトコピー/貼り戻し方式で確実に使えます。
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">既定AI</span>
+              <select
+                value={settings.defaultProvider}
+                onChange={event => updateSetting('defaultProvider', event.target.value)}
+                className="w-full h-9 rounded-md bg-secondary border border-border px-2 text-xs text-foreground focus:outline-none focus:border-neon-cyan"
+              >
+                {PROVIDERS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+
+            <label className="space-y-1 md:col-span-2">
+              <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">OpenAI / ChatGPT APIキー</span>
+              <input
+                type="password"
+                value={settings.openaiApiKey}
+                onChange={event => updateSetting('openaiApiKey', event.target.value)}
+                placeholder="sk-..."
+                className="w-full h-9 rounded-md bg-secondary border border-border px-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-neon-cyan"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">OpenAIモデル</span>
+              <input
+                value={settings.openaiModel}
+                onChange={event => updateSetting('openaiModel', event.target.value)}
+                className="w-full h-9 rounded-md bg-secondary border border-border px-2 text-xs text-foreground focus:outline-none focus:border-neon-cyan"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">Gemini APIキー</span>
+              <input
+                type="password"
+                value={settings.geminiApiKey}
+                onChange={event => updateSetting('geminiApiKey', event.target.value)}
+                placeholder="AIza..."
+                className="w-full h-9 rounded-md bg-secondary border border-border px-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-neon-cyan"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">Geminiモデル</span>
+              <input
+                value={settings.geminiModel}
+                onChange={event => updateSetting('geminiModel', event.target.value)}
+                className="w-full h-9 rounded-md bg-secondary border border-border px-2 text-xs text-foreground focus:outline-none focus:border-neon-cyan"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">Claude APIキー</span>
+              <input
+                type="password"
+                value={settings.claudeApiKey}
+                onChange={event => updateSetting('claudeApiKey', event.target.value)}
+                placeholder="sk-ant-..."
+                className="w-full h-9 rounded-md bg-secondary border border-border px-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-neon-cyan"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">Claudeモデル</span>
+              <input
+                value={settings.claudeModel}
+                onChange={event => updateSetting('claudeModel', event.target.value)}
+                className="w-full h-9 rounded-md bg-secondary border border-border px-2 text-xs text-foreground focus:outline-none focus:border-neon-cyan"
+              />
+            </label>
+          </div>
+
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={saveSettings} className="h-8 text-xs bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 hover:bg-neon-cyan/30">
+              <Save className="w-3.5 h-3.5 mr-1.5" />設定を保存
+            </Button>
+            <Button onClick={clearSettings} variant="ghost" className="h-8 text-xs text-destructive/80 hover:text-destructive hover:bg-destructive/10 border border-destructive/20">
+              <Trash2 className="w-3.5 h-3.5 mr-1.5" />設定をクリア
+            </Button>
+          </div>
+        </div>
+      </details>
 
       <div className="grid grid-cols-1 md:grid-cols-[160px_180px_1fr] gap-3">
         <label className="space-y-1">
