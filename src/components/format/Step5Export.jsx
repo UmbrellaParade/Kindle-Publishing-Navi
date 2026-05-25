@@ -175,6 +175,25 @@ export default function Step5Export({ sharedText, versionState }) {
         </div>
       )}
 
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="rounded-lg p-3 space-y-2" style={{ background: 'rgba(255,45,120,0.04)', border: '1px solid rgba(255,45,120,0.18)' }}>
+          <p className="text-xs font-bold text-neon-pink">DOCXの注意点</p>
+          <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+            <li>・KDPへ手軽にアップロードしたい場合に向いています。</li>
+            <li>・このツールのルビは <code className="text-foreground">｜漢字《かな》</code> の表記として本文に残ります。</li>
+            <li>・Word上の正式なルビ表示にしたい場合は、DOCX側で別途調整が必要です。</li>
+          </ul>
+        </div>
+        <div className="rounded-lg p-3 space-y-2" style={{ background: 'rgba(0,245,255,0.04)', border: '1px solid rgba(0,245,255,0.18)' }}>
+          <p className="text-xs font-bold text-neon-cyan">EPUBの注意点</p>
+          <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+            <li>・ルビを実際のHTML rubyタグとして出したい場合に向いています。</li>
+            <li>・<code className="text-foreground">｜漢字《かな》</code> の表記を <code className="text-foreground">&lt;ruby&gt;&lt;rt&gt;</code> 形式へ変換します。</li>
+            <li>・KDPへ登録する前にKindle Previewerで表示確認してください。</li>
+          </ul>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="p-4 rounded-lg space-y-2" style={{ background: 'rgba(255,45,120,0.05)', border: '1px solid rgba(255,45,120,0.25)' }}>
           <div className="flex items-center gap-2">
@@ -183,6 +202,7 @@ export default function Step5Export({ sharedText, versionState }) {
             {hasUrl && <span className="text-[10px] text-neon-pink bg-neon-pink/20 px-1.5 py-0.5 rounded">推奨</span>}
           </div>
           <p className="text-xs text-muted-foreground">URLリンク有りの作品・初心者・手軽に出版したい場合</p>
+          <p className="text-[10px] text-muted-foreground">ルビ表記: ｜漢字《かな》 のまま出力</p>
           <Button onClick={downloadDocx} disabled={!hasText} className="w-full h-8 text-xs bg-neon-pink/20 text-neon-pink border border-neon-pink/40 hover:bg-neon-pink/30 disabled:opacity-40">
             <Download className="w-3.5 h-3.5 mr-1.5" />docxダウンロード
           </Button>
@@ -194,6 +214,7 @@ export default function Step5Export({ sharedText, versionState }) {
             <span className="text-sm font-bold text-neon-cyan">epub</span>
           </div>
           <p className="text-xs text-muted-foreground">レイアウトにこだわりたい・ルビをHTML rubyタグに変換したい場合</p>
+          <p className="text-[10px] text-muted-foreground">ルビ表記: ｜漢字《かな》 → HTML rubyタグ</p>
           <Button onClick={downloadEpub} disabled={!hasText} className="w-full h-8 text-xs bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 hover:bg-neon-cyan/30 disabled:opacity-40">
             <Download className="w-3.5 h-3.5 mr-1.5" />epubダウンロード
           </Button>

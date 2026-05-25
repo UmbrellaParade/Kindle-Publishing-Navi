@@ -151,18 +151,19 @@ export default function FormatGuideTab() {
 
 function ComparisonGuide() {
   const rows = [
-    { item: 'URLリンクの安定性', docx: '✅ 安定（推奨）', epub: '⚠️ 不安定な場合あり' },
+    { item: '向いている使い方', docx: '手軽にKDPへ登録したい', epub: 'ルビやレイアウトを細かく確認したい' },
+    { item: 'URLリンクの安定性', docx: '✅ 安定（推奨）', epub: '⚠️ 確認必須' },
     { item: 'Kindle Unlimitedへの対応', docx: '✅ 対応', epub: '✅ 対応' },
     { item: 'レイアウトの自由度', docx: '✅ 高い', epub: '△ リフロー型' },
     { item: 'Kindleプレビューアーでの確認', docx: '✅ 推奨', epub: '✅ 推奨' },
-    { item: 'KDPでの推奨度', docx: '⭐⭐⭐（URLリンクあり）', epub: '⭐⭐（URLリンクなし）' },
-    { item: 'ルビ（ふりがな）の対応', docx: '✅ 対応', epub: '✅ 対応' },
+    { item: 'KDPでの使いやすさ', docx: '⭐⭐⭐（まずはこちら）', epub: '⭐⭐（確認できる人向け）' },
+    { item: 'ルビ（ふりがな）の扱い', docx: '｜漢字《かな》 の記法で出力', epub: 'HTML rubyタグに変換' },
     { item: '挿入画像', docx: '✅ 対応', epub: '✅ 対応' },
     { item: 'ファイルサイズ', docx: '小〜中', epub: '小' },
   ];
   return (
     <div className="rounded-xl p-4 space-y-4" style={{ background: '#1a1a2e', border: '1px solid #2a2a4a' }}>
-      <h3 className="text-sm font-bold text-neon-cyan neon-cyan-glow">📊 docx vs epub 比較ガイド</h3>
+      <h3 className="text-sm font-bold text-neon-cyan neon-cyan-glow">📊 このツールでの docx / epub 比較ガイド</h3>
       <div className="overflow-x-auto">
         <table className="w-full text-xs border-collapse">
           <thead>
@@ -184,8 +185,8 @@ function ComparisonGuide() {
         </table>
       </div>
       <div className="space-y-1.5 pt-1">
-        <p className="text-xs text-neon-pink font-bold">✅ 本作（Umbrella Parade）はURLリンクが含まれるため、docx形式を推奨します。</p>
-        <p className="text-xs text-muted-foreground">📌 URLリンクのない作品の場合はepubも選択肢に入ります。</p>
+        <p className="text-xs text-neon-pink font-bold">✅ 迷ったらdocx、ルビ表示まで確認したい場合はepubが目安です。</p>
+        <p className="text-xs text-muted-foreground">📌 どちらもKDP登録前にKindle Previewerで崩れ・リンク・ルビ表示を確認してください。</p>
       </div>
     </div>
   );
