@@ -140,6 +140,17 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
 
   useEffect(() => { setTokens(null); setPlainSegments(null); }, [sharedText]);
 
+  const updateDictAndPreview = useCallback((nextDict) => {
+    setDict(nextDict);
+    saveCustomDict(nextDict);
+
+    if (sharedText.trim().length >= 5) {
+      const result = applyRubyDictionary(sharedText.trim(), nextDict, rubyMode);
+      setTokens(result.tokens);
+      setPlainSegments(result.segments);
+    }
+  }, [rubyMode, sharedText]);
+
   const runRuby = async () => {
     const text = sharedText.trim();
     if (text.length < 5) return;
@@ -158,36 +169,18 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
 
   // 修正1: ルビ削除ハンドラー（辞書にNO_RUBYとして保存）
   const handleDeleteRuby = useCallback((tokenId) => {
-    setTokens(prev => {
-      const updated = prev.map(t => t.id === tokenId ? { ...t, ruby: '', needsCheck: false } : t);
-      const token = updated.find(t => t.id === tokenId);
-      if (token) {
-        setDict(d => {
-          const newDict = { ...d, [token.base]: NO_RUBY };
-          saveCustomDict(newDict);
-          return newDict;
-        });
-      }
-      return updated;
-    });
+    const token = tokens?.find(t => t.id === tokenId);
+    if (!token) return;
+    updateDictAndPreview({ ...dict, [token.base]: NO_RUBY });
     toast.success('ルビを削除し、辞書に「ルビなし」として保存しました');
-  }, []);
+  }, [dict, tokens, updateDictAndPreview]);
 
   const handleSaveRuby = useCallback((tokenId, newRuby) => {
-    setTokens(prev => {
-      const updated = prev.map(t => t.id === tokenId ? { ...t, ruby: newRuby === NO_RUBY ? '' : newRuby, needsCheck: false } : t);
-      const token = updated.find(t => t.id === tokenId);
-      if (token) {
-        setDict(d => {
-          const newDict = { ...d, [token.base]: newRuby };
-          saveCustomDict(newDict);
-          return newDict;
-        });
-      }
-      return updated;
-    });
+    const token = tokens?.find(t => t.id === tokenId);
+    if (!token) return;
+    updateDictAndPreview({ ...dict, [token.base]: newRuby });
     toast.success('辞書を更新しました');
-  }, []);
+  }, [dict, tokens, updateDictAndPreview]);
 
   const handleAddDictEntry = () => {
     const base = newDictBase.trim();
@@ -197,17 +190,22 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
       return;
     }
 
-    const next = { ...dict, [base]: ruby };
-    setDict(next);
-    saveCustomDict(next);
+    updateDictAndPreview({ ...dict, [base]: ruby });
     setNewDictBase('');
     setNewDictRuby('');
     toast.success(`「${base}」を辞書に追加しました`);
+  };
 
-    if (sharedText.trim().length >= 5) {
-      const result = applyRubyDictionary(sharedText.trim(), next, rubyMode);
-      setTokens(result.tokens);
-      setPlainSegments(result.segments);
+  const handleRemoveDictEntry = (base) => {
+    const next = { ...dict };
+    if (base in DEFAULT_DICT) {
+      next[base] = DEFAULT_DICT[base];
+      updateDictAndPreview(next);
+      toast.success(`「${base}」を初期値に戻しました`);
+    } else {
+      delete next[base];
+      updateDictAndPreview(next);
+      toast.success(`「${base}」を辞書から削除しました`);
     }
   };
 
@@ -306,23 +304,31 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
                     <Plus className="w-3 h-3 mr-1" />追加
                   </Button>
                 </div>
-                {Object.entries(dict).map(([base, ruby]) => (
-                  <div key={base} className="flex items-center justify-between gap-2 text-xs">
-                    <span className="text-foreground font-medium">{base}</span>
-                    <span className={`${ruby === NO_RUBY ? 'text-neon-amber' : 'text-muted-foreground'}`}>
-                      → {ruby === NO_RUBY ? 'ルビなし' : ruby}
-                    </span>
-                    <button onClick={() => {
-                      const newDict = { ...dict };
-                      if (base in DEFAULT_DICT) { newDict[base] = DEFAULT_DICT[base]; }
-                      else { delete newDict[base]; }
-                      setDict(newDict); saveCustomDict(newDict);
-                      toast.success(`「${base}」をリセットしました`);
-                    }} className="text-muted-foreground hover:text-neon-red transition-colors">
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
+                {Object.entries(dict).map(([base, ruby]) => {
+                  const isDefaultEntry = base in DEFAULT_DICT;
+                  const isModifiedDefault = isDefaultEntry && ruby !== DEFAULT_DICT[base];
+                  const canRemove = !isDefaultEntry || isModifiedDefault;
+                  return (
+                    <div key={base} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-foreground font-medium">{base}</span>
+                      <span className={`${ruby === NO_RUBY ? 'text-neon-amber' : 'text-muted-foreground'}`}>
+                        → {ruby === NO_RUBY ? 'ルビなし' : ruby}
+                      </span>
+                      {canRemove ? (
+                        <button
+                          onClick={() => handleRemoveDictEntry(base)}
+                          className="text-muted-foreground hover:text-neon-red transition-colors"
+                          title={isDefaultEntry ? '初期値に戻す' : '辞書から削除'}
+                          aria-label={isDefaultEntry ? `${base}を初期値に戻す` : `${base}を辞書から削除`}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground/70 px-1.5">初期</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </motion.div>
           )}
