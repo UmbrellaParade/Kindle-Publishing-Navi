@@ -5,6 +5,11 @@ import { defineConfig } from 'vite'
 // https://vite.dev/config/
 export default defineConfig({
   logLevel: 'error', // Suppress warnings, only show errors
+  server: {
+    host: '0.0.0.0',
+    port: 3000,
+    allowedHosts: ['umbrella-parade-kindle-navi.local'],
+  },
   plugins: [
     base44({
       // Support for legacy code that imports the base44 SDK with @/integrations, @/entities, etc.
