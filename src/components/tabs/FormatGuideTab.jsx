@@ -105,6 +105,8 @@ export default function FormatGuideTab() {
         </div>
       </div>
 
+      <OutputFormatQuickGuide />
+
       {/* ステップ1：フォーマット判定 */}
       <StepWrapper n="1" label="フォーマット判定" color="cyan">
         <Step1FormatDecision sharedText={sharedText} />
@@ -188,6 +190,30 @@ function ComparisonGuide() {
         <p className="text-xs text-neon-pink font-bold">✅ 迷ったらdocx、ルビ表示まで確認したい場合はepubが目安です。</p>
         <p className="text-xs text-muted-foreground">📌 どちらもKDP登録前にKindle Previewerで崩れ・リンク・ルビ表示を確認してください。</p>
       </div>
+    </div>
+  );
+}
+
+function OutputFormatQuickGuide() {
+  return (
+    <div className="rounded-xl p-4 space-y-3" style={{ background: 'rgba(0,245,255,0.04)', border: '1px solid rgba(0,245,255,0.22)' }}>
+      <div className="flex items-center gap-2">
+        <FileText className="w-4 h-4 text-neon-cyan" />
+        <h3 className="text-sm font-bold text-neon-cyan neon-cyan-glow">DOCX / EPUB 出力形式の違い</h3>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="rounded-lg p-3 space-y-1.5" style={{ background: 'rgba(255,45,120,0.05)', border: '1px solid rgba(255,45,120,0.22)' }}>
+          <p className="text-xs font-bold text-neon-pink">DOCX</p>
+          <p className="text-xs text-muted-foreground leading-relaxed">KDPへ手軽に登録したい場合向け。ルビは本文内に <code className="text-foreground">｜漢字《かな》</code> の表記として残ります。</p>
+          <p className="text-[10px] text-muted-foreground">Word上の正式なルビ表示にしたい場合は、DOCX側で別途調整が必要です。</p>
+        </div>
+        <div className="rounded-lg p-3 space-y-1.5" style={{ background: 'rgba(0,245,255,0.05)', border: '1px solid rgba(0,245,255,0.22)' }}>
+          <p className="text-xs font-bold text-neon-cyan">EPUB</p>
+          <p className="text-xs text-muted-foreground leading-relaxed">ルビを実表示したい場合向け。<code className="text-foreground">｜漢字《かな》</code> を <code className="text-foreground">&lt;ruby&gt;&lt;rt&gt;</code> へ変換します。</p>
+          <p className="text-[10px] text-muted-foreground">KDP登録前にKindle Previewerで、崩れ・リンク・ルビ表示を確認してください。</p>
+        </div>
+      </div>
+      <p className="text-xs text-neon-amber">迷ったらDOCX、ルビ表示まで確認したい場合はEPUBが目安です。</p>
     </div>
   );
 }

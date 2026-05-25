@@ -153,6 +153,11 @@ export default function Step5Export({ sharedText, versionState }) {
 
   return (
     <div className="rounded-xl p-4 space-y-4" style={CARD_STYLE}>
+      <div className="flex items-center gap-2">
+        <FileText className="w-4 h-4 text-neon-cyan" />
+        <h3 className="text-sm font-bold text-neon-cyan neon-cyan-glow">DOCX / EPUB 出力形式とルビ表記の違い</h3>
+      </div>
+
       {/* バージョン選択 */}
       {versionState && (
         <div className="p-3 rounded-lg" style={{ background: 'rgba(0,245,255,0.05)', border: '1px solid rgba(0,245,255,0.2)' }}>
