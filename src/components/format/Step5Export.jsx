@@ -16,6 +16,22 @@ function escapeXml(text) {
     .replace(/"/g, '&quot;');
 }
 
+function textWithRubyToXhtml(text) {
+  const pattern = /[｜|]([^《\n]{1,40})《([^》\n]{1,40})》/g;
+  let output = '';
+  let lastIndex = 0;
+  let match;
+
+  while ((match = pattern.exec(text)) !== null) {
+    output += escapeXml(text.slice(lastIndex, match.index));
+    output += `<ruby>${escapeXml(match[1])}<rp>（</rp><rt>${escapeXml(match[2])}</rt><rp>）</rp></ruby>`;
+    lastIndex = pattern.lastIndex;
+  }
+
+  output += escapeXml(text.slice(lastIndex));
+  return output;
+}
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -54,7 +70,7 @@ function buildDocx(text) {
 
 function buildXhtml(text) {
   const lines = text.split('\n').map(line =>
-    line.trim() === '' ? '<p>&#x3000;</p>' : `<p>${escapeXml(line)}</p>`
+    line.trim() === '' ? '<p>&#x3000;</p>' : `<p>${textWithRubyToXhtml(line)}</p>`
   ).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ja">
@@ -177,7 +193,7 @@ export default function Step5Export({ sharedText, versionState }) {
             <FileText className="w-4 h-4 text-neon-cyan" />
             <span className="text-sm font-bold text-neon-cyan">epub</span>
           </div>
-          <p className="text-xs text-muted-foreground">レイアウトにこだわりたい・2冊目以降に挑戦</p>
+          <p className="text-xs text-muted-foreground">レイアウトにこだわりたい・ルビをHTML rubyタグに変換したい場合</p>
           <Button onClick={downloadEpub} disabled={!hasText} className="w-full h-8 text-xs bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 hover:bg-neon-cyan/30 disabled:opacity-40">
             <Download className="w-3.5 h-3.5 mr-1.5" />epubダウンロード
           </Button>

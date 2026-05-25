@@ -2,10 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   BookMarked, Loader2, Copy, Check, AlertTriangle, Pencil, Trash2,
-  ChevronDown, ChevronUp, BookOpen, FileType, X, Save
+  ChevronDown, ChevronUp, BookOpen, FileType, X, Save, Plus
 } from 'lucide-react';
 import NeonCard from '../NeonCard';
-import { base44 } from '@/api/base44Client';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 
@@ -35,6 +34,57 @@ function saveCustomDict(dict) {
     if (DEFAULT_DICT[k] !== v || !(k in DEFAULT_DICT)) custom[k] = v;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(custom));
+}
+
+function applyRubyDictionary(text, dict, rubyMode) {
+  const entries = Object.entries(dict)
+    .filter(([base, ruby]) => base && ruby && ruby !== NO_RUBY)
+    .sort((a, b) => b[0].length - a[0].length);
+
+  const tokens = [];
+  const segments = [];
+  const seen = new Set();
+  let plain = '';
+  let index = 0;
+  let tokenIndex = 0;
+
+  const flushPlain = () => {
+    if (plain) {
+      segments.push({ type: 'plain', text: plain });
+      plain = '';
+    }
+  };
+
+  while (index < text.length) {
+    const matched = entries.find(([base]) => text.startsWith(base, index));
+
+    if (!matched) {
+      plain += text[index];
+      index += 1;
+      continue;
+    }
+
+    const [base, ruby] = matched;
+    const shouldSkipRepeat = rubyMode === 'first' && seen.has(base);
+    seen.add(base);
+
+    if (shouldSkipRepeat) {
+      plain += base;
+      index += base.length;
+      continue;
+    }
+
+    flushPlain();
+    const id = `t${tokenIndex++}`;
+    tokens.push({ id, base, ruby, needsCheck: !(base in DEFAULT_DICT) });
+    segments.push({ type: 'ruby', tokenId: id });
+    index += base.length;
+  }
+
+  flushPlain();
+  if (!segments.length) segments.push({ type: 'plain', text });
+
+  return { tokens, segments };
 }
 
 function RubyEditPopover({ token, onSave, onClose }) {
@@ -73,7 +123,7 @@ function RubyEditPopover({ token, onSave, onClose }) {
   );
 }
 
-export default function RubyEditorConnected({ sharedText }) {
+export default function RubyEditorConnected({ sharedText, onVersionChange }) {
   const [loading, setLoading] = useState(false);
   const [tokens, setTokens] = useState(null);
   const [plainSegments, setPlainSegments] = useState(null);
@@ -83,6 +133,8 @@ export default function RubyEditorConnected({ sharedText }) {
   const [copyFormat, setCopyFormat] = useState('epub');
   const [copied, setCopied] = useState(false);
   const [showNeedsCheck, setShowNeedsCheck] = useState(true);
+  const [newDictBase, setNewDictBase] = useState('');
+  const [newDictRuby, setNewDictRuby] = useState('');
   // 修正1: ルビ付与方式
   const [rubyMode, setRubyMode] = useState('first'); // 'first' | 'all'
 
@@ -95,79 +147,12 @@ export default function RubyEditorConnected({ sharedText }) {
     setTokens(null);
     setPlainSegments(null);
     setEditingId(null);
-
-    // NO_RUBYの語を除外してLLMに渡す辞書を作成
-    const dictStr = Object.entries(dict)
-      .filter(([, v]) => v !== NO_RUBY)
-      .map(([k, v]) => `${k} → ${v}`)
-      .join('\n');
-
-    const noRubyWords = Object.entries(dict)
-      .filter(([, v]) => v === NO_RUBY)
-      .map(([k]) => k)
-      .join('、');
-
-    const modeInstruction = rubyMode === 'first'
-      ? '同じ単語が複数回出てくる場合は、初出のみルビを振り、2回目以降はルビなし（plain扱い）にすること。'
-      : '同じ単語が複数回出てくる場合も、すべての出現箇所にルビを振ること。';
-
-    const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `あなたは日本語の電子書籍編集者です。以下の小説テキストにルビ（読み仮名）を振ってください。
-
-【固有名詞辞書（必ず優先適用すること）】
-${dictStr || '（なし）'}
-
-【ルビなし指定語（これらには絶対にルビを振らないこと）】
-${noRubyWords || '（なし）'}
-
-【ルビ付与ルール】
-1. 辞書に登録されている語は辞書通りに適用すること
-2. ルビなし指定語にはルビを振らないこと
-3. 難読漢字・一般的でない熟語にルビを振る
-4. 小学校レベルの漢字にはルビ不要
-5. 人名・地名・固有名詞は needsCheck: true にする
-6. 辞書登録済みの語は needsCheck: false でよい
-7. ${modeInstruction}
-
-テキストを「ルビあり」「ルビなし」のセグメントに分割して返す。
-ルビありは {base, ruby, needsCheck} の形式。ルビなしは {plain} の形式。
-
-【対象テキスト】
-${text.slice(0, 3000)}`,
-      response_json_schema: {
-        type: 'object',
-        properties: {
-          segments: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                plain: { type: 'string' },
-                base: { type: 'string' },
-                ruby: { type: 'string' },
-                needsCheck: { type: 'boolean' },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    if (res?.segments) {
-      const newTokens = [], newSegments = [];
-      let idx = 0;
-      for (const seg of res.segments) {
-        if (seg.plain !== undefined) {
-          newSegments.push({ type: 'plain', text: seg.plain });
-        } else if (seg.base !== undefined) {
-          const id = `t${idx++}`;
-          newTokens.push({ id, base: seg.base, ruby: seg.ruby || '', needsCheck: seg.needsCheck || false });
-          newSegments.push({ type: 'ruby', tokenId: id });
-        }
-      }
-      setTokens(newTokens);
-      setPlainSegments(newSegments);
-    }
+    const result = applyRubyDictionary(text, dict, rubyMode);
+    setTokens(result.tokens);
+    setPlainSegments(result.segments);
+    toast.success(result.tokens.length > 0
+      ? `${result.tokens.length}か所にルビを付けました`
+      : '辞書に一致する語はありませんでした。辞書に語を追加してください');
     setLoading(false);
   };
 
@@ -204,6 +189,28 @@ ${text.slice(0, 3000)}`,
     toast.success('辞書を更新しました');
   }, []);
 
+  const handleAddDictEntry = () => {
+    const base = newDictBase.trim();
+    const ruby = newDictRuby.trim();
+    if (!base || !ruby) {
+      toast.error('語句とふりがなを入力してください');
+      return;
+    }
+
+    const next = { ...dict, [base]: ruby };
+    setDict(next);
+    saveCustomDict(next);
+    setNewDictBase('');
+    setNewDictRuby('');
+    toast.success(`「${base}」を辞書に追加しました`);
+
+    if (sharedText.trim().length >= 5) {
+      const result = applyRubyDictionary(sharedText.trim(), next, rubyMode);
+      setTokens(result.tokens);
+      setPlainSegments(result.segments);
+    }
+  };
+
   const buildOutputText = () => {
     if (!plainSegments || !tokens) return '';
     const tokenMap = Object.fromEntries(tokens.map(t => [t.id, t]));
@@ -211,9 +218,22 @@ ${text.slice(0, 3000)}`,
       if (seg.type === 'plain') return seg.text;
       const t = tokenMap[seg.tokenId];
       if (!t || !t.ruby) return t?.base || '';
-      return copyFormat === 'epub' ? `${t.base}《${t.ruby}》` : `|${t.base}《${t.ruby}》`;
+      return `｜${t.base}《${t.ruby}》`;
     }).join('');
   };
+
+  const outputText = buildOutputText();
+
+  useEffect(() => {
+    if (!outputText || !onVersionChange) return;
+    onVersionChange({
+      currentVersion: 'ai',
+      originalText: sharedText,
+      aiText: outputText,
+      manualText: '',
+      onVersionChange,
+    });
+  }, [outputText, sharedText, onVersionChange]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(buildOutputText());
@@ -233,7 +253,7 @@ ${text.slice(0, 3000)}`,
         <h3 className="font-bold text-sm text-neon-pink neon-pink-glow">ルビ付け（自動＋手動修正）</h3>
       </div>
       <p className="text-xs text-muted-foreground mb-4">
-        共通テキストにルビを自動付与します。クリックで手動修正でき、辞書に自動保存されます。
+        固有名詞辞書に登録した語を、共通テキスト全文にルビ付けします。クリックで手動修正でき、辞書に自動保存されます。
         {!isReady && <span className="text-neon-amber ml-1">（上の入力エリアに本文を貼り付けてください）</span>}
       </p>
 
@@ -269,6 +289,23 @@ ${text.slice(0, 3000)}`,
           {showDict && (
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
               <div className="mt-2 bg-secondary/50 rounded-lg p-3 border border-border max-h-40 overflow-y-auto space-y-1.5">
+                <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 pb-2 mb-2 border-b border-border">
+                  <input
+                    value={newDictBase}
+                    onChange={(e) => setNewDictBase(e.target.value)}
+                    placeholder="語句（例：天律）"
+                    className="h-8 px-2 text-xs rounded bg-secondary border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-neon-pink/50"
+                  />
+                  <input
+                    value={newDictRuby}
+                    onChange={(e) => setNewDictRuby(e.target.value)}
+                    placeholder="ふりがな（例：てんりつ）"
+                    className="h-8 px-2 text-xs rounded bg-secondary border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-neon-pink/50"
+                  />
+                  <Button onClick={handleAddDictEntry} className="h-8 text-xs bg-neon-pink/20 text-neon-pink border border-neon-pink/40 hover:bg-neon-pink/30">
+                    <Plus className="w-3 h-3 mr-1" />追加
+                  </Button>
+                </div>
                 {Object.entries(dict).map(([base, ruby]) => (
                   <div key={base} className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-foreground font-medium">{base}</span>
@@ -366,10 +403,10 @@ ${text.slice(0, 3000)}`,
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
                 <button onClick={() => setCopyFormat('epub')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${copyFormat === 'epub' ? 'bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40' : 'text-muted-foreground hover:text-foreground'}`}>
-                  <FileType className="w-3.5 h-3.5" />epub / 《》
+                  <FileType className="w-3.5 h-3.5" />標準 / ｜《》
                 </button>
                 <button onClick={() => setCopyFormat('docx')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${copyFormat === 'docx' ? 'bg-neon-pink/20 text-neon-pink border border-neon-pink/40' : 'text-muted-foreground hover:text-foreground'}`}>
-                  <FileType className="w-3.5 h-3.5" />docx / |《》
+                  <FileType className="w-3.5 h-3.5" />KDP確認用
                 </button>
               </div>
               <Button onClick={handleCopy} className="bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 hover:bg-neon-cyan/30 text-xs h-8">
@@ -378,8 +415,8 @@ ${text.slice(0, 3000)}`,
             </div>
 
             <div className="bg-secondary/30 rounded-lg p-3 border border-border">
-              <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-wide">出力プレビュー（{copyFormat === 'epub' ? 'epub/《》記法' : 'docx/|《》記法'}）</p>
-              <pre className="text-xs text-foreground whitespace-pre-wrap leading-relaxed font-body max-h-40 overflow-y-auto">{buildOutputText()}</pre>
+              <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-wide">出力プレビュー（青空文庫風 ｜漢字《かな》 記法）</p>
+              <pre className="text-xs text-foreground whitespace-pre-wrap leading-relaxed font-body max-h-40 overflow-y-auto">{outputText}</pre>
             </div>
           </motion.div>
         )}

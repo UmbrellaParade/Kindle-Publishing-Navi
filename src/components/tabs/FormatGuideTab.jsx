@@ -117,7 +117,7 @@ export default function FormatGuideTab() {
 
       {/* ステップ3：ルビ付け */}
       <StepWrapper n="3" label="ルビ自動付与 → 手動修正 → コピー" color="pink">
-        <Step3RubyEditor sharedText={sharedText} />
+        <Step3RubyEditor sharedText={sharedText} onVersionChange={setVersionState} />
       </StepWrapper>
 
       <ExternalAiWorkspace
