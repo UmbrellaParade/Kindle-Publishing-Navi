@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import {
-  BookMarked, Loader2, Copy, Check, AlertTriangle, Pencil, Trash2,
+  BookMarked, Loader2, Copy, Check, AlertTriangle, Pencil,
   ChevronDown, ChevronUp, BookOpen, FileType, X, Save, Plus
 } from 'lucide-react';
 import NeonCard from '../NeonCard';
@@ -199,14 +199,21 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
   const handleRemoveDictEntry = (base) => {
     const next = { ...dict };
     if (base in DEFAULT_DICT) {
-      next[base] = DEFAULT_DICT[base];
+      next[base] = NO_RUBY;
       updateDictAndPreview(next);
-      toast.success(`「${base}」を初期値に戻しました`);
+      toast.success(`「${base}」のルビを無効化しました`);
     } else {
       delete next[base];
       updateDictAndPreview(next);
       toast.success(`「${base}」を辞書から削除しました`);
     }
+  };
+
+  const handleRestoreDefaultEntry = (base) => {
+    if (!(base in DEFAULT_DICT)) return;
+    const next = { ...dict, [base]: DEFAULT_DICT[base] };
+    updateDictAndPreview(next);
+    toast.success(`「${base}」を初期値に戻しました`);
   };
 
   const buildOutputText = () => {
@@ -241,6 +248,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
   };
 
   const needsCheckTokens = tokens?.filter(t => t.needsCheck) || [];
+  const appliedRubyTokens = tokens?.filter(t => t.ruby) || [];
   const tokenMap = tokens ? Object.fromEntries(tokens.map(t => [t.id, t])) : {};
   const isReady = sharedText.trim().length >= 5;
 
@@ -307,25 +315,33 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
                 {Object.entries(dict).map(([base, ruby]) => {
                   const isDefaultEntry = base in DEFAULT_DICT;
                   const isModifiedDefault = isDefaultEntry && ruby !== DEFAULT_DICT[base];
-                  const canRemove = !isDefaultEntry || isModifiedDefault;
+                  const isDisabled = ruby === NO_RUBY;
                   return (
-                    <div key={base} className="flex items-center justify-between gap-2 text-xs">
-                      <span className="text-foreground font-medium">{base}</span>
-                      <span className={`${ruby === NO_RUBY ? 'text-neon-amber' : 'text-muted-foreground'}`}>
+                    <div key={base} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 text-xs items-center">
+                      <div className="min-w-0">
+                        <span className="text-foreground font-medium break-all">{base}</span>
+                        <span className={`ml-1 ${isDisabled ? 'text-neon-amber' : 'text-muted-foreground'}`}>
                         → {ruby === NO_RUBY ? 'ルビなし' : ruby}
-                      </span>
-                      {canRemove ? (
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {isDefaultEntry && isModifiedDefault && (
+                          <button
+                            onClick={() => handleRestoreDefaultEntry(base)}
+                            className="h-6 px-2 rounded border border-border text-[10px] text-muted-foreground hover:text-neon-cyan hover:border-neon-cyan/40 transition-colors"
+                          >
+                            初期に戻す
+                          </button>
+                        )}
                         <button
                           onClick={() => handleRemoveDictEntry(base)}
-                          className="text-muted-foreground hover:text-neon-red transition-colors"
-                          title={isDefaultEntry ? '初期値に戻す' : '辞書から削除'}
-                          aria-label={isDefaultEntry ? `${base}を初期値に戻す` : `${base}を辞書から削除`}
+                          disabled={isDisabled}
+                          className="h-6 px-2 rounded border border-neon-red/30 text-[10px] text-neon-red hover:bg-neon-red/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          aria-label={isDefaultEntry ? `${base}のルビを無効化` : `${base}を辞書から削除`}
                         >
-                          <Trash2 className="w-3 h-3" />
+                          {isDefaultEntry ? '無効化' : '削除'}
                         </button>
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground/70 px-1.5">初期</span>
-                      )}
+                      </div>
                     </div>
                   );
                 })}
@@ -372,7 +388,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
 
             {/* インタラクティブプレビュー（削除ボタン付き） */}
             <div>
-              <p className="text-xs font-bold mb-2">インタラクティブプレビュー <span className="text-muted-foreground font-normal text-[10px]">（ルビをクリックで編集、×で削除）</span></p>
+              <p className="text-xs font-bold mb-2">インタラクティブプレビュー <span className="text-muted-foreground font-normal text-[10px]">（ルビをクリックで編集、下の一覧から削除）</span></p>
               <div className="bg-secondary/60 rounded-lg p-4 border border-border text-sm leading-loose font-body min-h-[60px]">
                 {plainSegments.map((seg, i) => {
                   if (seg.type === 'plain') return <span key={i} className="whitespace-pre-wrap">{seg.text}</span>;
@@ -392,7 +408,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
                         {t.ruby && (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDeleteRuby(t.id); }}
-                            className="absolute -top-2 -right-2 w-3.5 h-3.5 bg-neon-red/80 hover:bg-neon-red rounded-full flex items-center justify-center opacity-0 group-hover/ruby:opacity-100 transition-opacity z-10"
+                            className="absolute -top-2 -right-2 w-3.5 h-3.5 bg-neon-red/80 hover:bg-neon-red rounded-full flex items-center justify-center opacity-100 transition-opacity z-10"
                             title="ルビを削除"
                           >
                             <X className="w-2 h-2 text-white" />
@@ -405,6 +421,26 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
                 })}
               </div>
             </div>
+
+            {appliedRubyTokens.length > 0 && (
+              <div className="bg-secondary/40 rounded-lg p-3 border border-border">
+                <p className="text-xs font-bold mb-2">付与済みルビ一覧 <span className="text-muted-foreground font-normal text-[10px]">（削除すると同じ語のルビを無効化します）</span></p>
+                <div className="flex flex-wrap gap-2">
+                  {appliedRubyTokens.map(t => (
+                    <span key={t.id} className="inline-flex items-center gap-1.5 rounded border border-neon-pink/25 bg-neon-pink/5 px-2 py-1 text-xs">
+                      <span className="text-foreground font-medium">{t.base}</span>
+                      <span className="text-muted-foreground">《{t.ruby}》</span>
+                      <button
+                        onClick={() => handleDeleteRuby(t.id)}
+                        className="ml-1 rounded border border-neon-red/30 px-1.5 py-0.5 text-[10px] text-neon-red hover:bg-neon-red/10 transition-colors"
+                      >
+                        削除
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">

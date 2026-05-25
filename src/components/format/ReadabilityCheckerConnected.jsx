@@ -13,30 +13,12 @@ const COMMON_EDITING_RULES = `【共通ルール】
 - 意味、設定、登場人物、固有名詞、時系列は変えない
 - 説明を足しすぎず、原文の声と文体を残す
 - 1文が長すぎる箇所は自然に分割する
-- 台詞の前後、場面転換、感情の転換点に読みやすい余白を入れる
+- 改行、段落分け、余白を整え、読者が息継ぎしやすい本文にする
+- 1段落が長すぎる箇所は、意味のまとまりごとに自然に分ける
+- 台詞、地の文、場面転換、感情の転換点に読みやすい余白を入れる
 - Kindleスマホ表示でも追いやすい段落量に整える
+- 縦書き化や横書き化そのものを目的にしない
 - ジャンル差を作り込みすぎず、読みやすさの基本品質を優先する`;
-
-const READING_DIRECTION_OPTIONS = [
-  {
-    value: 'vertical',
-    label: '縦書き向け',
-    description: '小説・文芸・ライトノベル向け。短めの段落と余白で読みやすくします。',
-    instructions: `【縦書き向け】
-- 台詞、地の文、余韻の間を大切にする
-- 長い段落は縦スクロールでも詰まって見えない長さに分ける
-- 章末や場面転換では余白を使って読後感を残す`,
-  },
-  {
-    value: 'horizontal',
-    label: '横書き向け',
-    description: '実用書・エッセイ・Web由来の文章向け。情報の見通しを優先します。',
-    instructions: `【横書き向け】
-- 1段落1メッセージを意識して整理する
-- 箇条書き化しすぎず、情報の流れを見やすくする
-- 見出し、要点、補足の関係がわかる文に整える`,
-  },
-];
 
 const GENRE_PROFILES = [
   {
@@ -358,7 +340,7 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
   const projectName = project?.name || '原稿';
   const [genreSource, setGenreSource] = useState('diagnosed');
   const [manualGenre, setManualGenre] = useState(DEFAULT_GENRE);
-  const [readingDirection, setReadingDirection] = useState('vertical');
+  const [previewMode, setPreviewMode] = useState('normal');
   const [loading, setLoading] = useState(false);
   const [revisedText, setRevisedText] = useState('');
   const [manualText, setManualText] = useState('');
@@ -372,7 +354,6 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
   const selectedGenreLabel = GENRE_OPTIONS.find(opt => opt.value === selectedGenre)?.label || selectedGenre;
   const selectedGenreSourceLabel = isUsingDiagnosedGenre ? '診断結果' : '手動選択';
   const selectedGenreInstructions = GENRE_INSTRUCTIONS[selectedGenre] || GENRE_INSTRUCTIONS[DEFAULT_GENRE];
-  const selectedDirection = READING_DIRECTION_OPTIONS.find(option => option.value === readingDirection) || READING_DIRECTION_OPTIONS[0];
   const originalPageEstimate = useMemo(() => estimateKindlePages(sharedText), [sharedText]);
   const finalPageEstimate = useMemo(() => estimateKindlePages(importedText || revisedText || sharedText), [importedText, revisedText, sharedText]);
 
@@ -381,6 +362,7 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
     setManualText('');
     setImportedText('');
     setActiveTab('original');
+    setPreviewMode('normal');
   }, [sharedText]);
 
   const analyze = async () => {
@@ -395,8 +377,6 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
 
     const instructions = `${COMMON_EDITING_RULES}
 
-${selectedDirection.instructions}
-
 【参考ジャンル】
 ${selectedGenreLabel}
 ※ジャンル別方針は補助情報です。ランキングや市場差を過度に推測せず、読みやすさの基本品質を優先してください。
@@ -404,15 +384,14 @@ ${selectedGenreInstructions}`;
 
     try {
       const res = await base44.integrations.Core.InvokeLLM({
-        prompt: `あなたは Kindle 出版の文章編集専門家です。以下のテキストを「${selectedGenreLabel}」ジャンルの読者が読みやすい形に、文章の見た目・構成・リズムを整えてください。
+        prompt: `あなたは Kindle 出版の文章編集専門家です。以下のテキストを、改行・段落分け・余白・文の長さを中心に読みやすく整えてください。
 
 【ジャンル指定】
 - 使用ジャンル: ${selectedGenreLabel}
 - 指定方法: ${selectedGenreSourceLabel}
-- 読書方向: ${selectedDirection.label}
 ${isUsingDiagnosedGenre && diagnosisDisplayText ? `- 診断表示: ${diagnosisDisplayText}` : ''}
 
-【重要】意味・ストーリー・登場人物・設定は絶対に変えないでください。あくまで「読みやすさ」のための調整のみ行ってください。
+【重要】意味・ストーリー・登場人物・設定は絶対に変えないでください。あくまで「読みやすさ」のための改行・段落・余白調整を中心に行ってください。縦書き化や横書き化そのものは行わないでください。
 
 ${instructions}
 
@@ -537,31 +516,9 @@ ${res}
         <h3 className="font-bold text-sm text-neon-amber neon-amber-glow">📖 読みやすさ修正</h3>
       </div>
       <p className="text-xs text-muted-foreground mb-4">
-        読みやすさの基本ルールを軸に、縦書き/横書きの読書方向へ合わせて文章の見た目・構成・リズムを整えます。ジャンルは補助情報として使います。
+        改行、段落分け、余白、文の長さを中心に、Kindleで読み進めやすい本文へ整えます。ジャンルは補助情報として使います。
         {sharedText.trim().length < 50 && <span className="text-neon-amber ml-1">（上の入力エリアに本文を貼り付けてください）</span>}
       </p>
-
-      {/* 読書方向 */}
-      <div className="mb-4 space-y-2">
-        <p className="text-xs font-bold text-foreground">読書方向</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          {READING_DIRECTION_OPTIONS.map(option => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => setReadingDirection(option.value)}
-              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                readingDirection === option.value
-                  ? 'border-neon-amber/60 bg-neon-amber/10 text-neon-amber'
-                  : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground hover:border-neon-amber/40'
-              }`}
-            >
-              <span className="block text-xs font-bold">{option.label}</span>
-              <span className="block text-[10px] mt-1 leading-relaxed">{option.description}</span>
-            </button>
-          ))}
-        </div>
-      </div>
 
       {/* ジャンル選択 */}
       <div className="mb-4 space-y-3">
@@ -613,8 +570,8 @@ ${res}
       {/* 修正方針表示 */}
       {selectedGenre && (
         <div className="mb-4 rounded-lg p-3 text-xs leading-relaxed" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid #2a2a4a' }}>
-          <p className="font-bold text-neon-cyan mb-1">{selectedDirection.label} + {selectedGenreLabel} の補助方針（{selectedGenreSourceLabel}）：</p>
-          <p className="text-muted-foreground whitespace-pre-wrap mb-3">{selectedDirection.instructions}</p>
+          <p className="font-bold text-neon-cyan mb-1">改行・段落・余白の共通方針 + {selectedGenreLabel} の補助方針（{selectedGenreSourceLabel}）：</p>
+          <p className="text-muted-foreground whitespace-pre-wrap mb-3">{COMMON_EDITING_RULES}</p>
           <p className="text-muted-foreground whitespace-pre-wrap">{selectedGenreInstructions}</p>
         </div>
       )}
@@ -626,7 +583,7 @@ ${res}
       >
         {loading
           ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />修正中...</>
-          : <><Sparkles className="w-3.5 h-3.5 mr-1.5" />✨ {selectedDirection.label}で読みやすく整える</>}
+          : <><Sparkles className="w-3.5 h-3.5 mr-1.5" />✨ 改行と段落を読みやすく整える</>}
       </Button>
       <p className="text-[10px] text-muted-foreground mt-1">※ AIによる読みやすさ調整です。内容を確認してから採用してください。</p>
 
@@ -692,6 +649,46 @@ ${res}
                       <p className="text-[10px] text-muted-foreground mt-2">
                         フォント：明朝系 / 行間：2.0 / Kindle の読書画面に近い表示
                       </p>
+                    </div>
+
+                    <div className="rounded-lg p-4 border border-neon-amber/30" style={{ background: 'rgba(255,179,0,0.04)' }}>
+                      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+                        <div>
+                          <p className="text-sm font-bold text-neon-amber">表示確認プレビュー</p>
+                          <p className="text-[10px] text-muted-foreground mt-1">本文は変更せず、修正後テキストの見え方だけを確認します。</p>
+                        </div>
+                        <div className="flex gap-1 bg-secondary rounded-lg p-1">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewMode('normal')}
+                            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${previewMode === 'normal' ? 'bg-neon-amber/20 text-neon-amber border border-neon-amber/40' : 'text-muted-foreground hover:text-foreground'}`}
+                          >
+                            通常表示
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPreviewMode('vertical')}
+                            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${previewMode === 'vertical' ? 'bg-neon-amber/20 text-neon-amber border border-neon-amber/40' : 'text-muted-foreground hover:text-foreground'}`}
+                          >
+                            縦書きプレビュー
+                          </button>
+                        </div>
+                      </div>
+                      <div
+                        className="rounded-lg p-4 text-sm bg-white text-black border border-border whitespace-pre-wrap"
+                        style={{
+                          minHeight: previewMode === 'vertical' ? 360 : 160,
+                          maxHeight: 420,
+                          overflowX: previewMode === 'vertical' ? 'auto' : 'hidden',
+                          overflowY: previewMode === 'vertical' ? 'hidden' : 'auto',
+                          writingMode: previewMode === 'vertical' ? 'vertical-rl' : 'horizontal-tb',
+                          textOrientation: 'mixed',
+                          lineHeight: 2,
+                          fontFamily: "'Noto Serif JP', 'Yu Mincho', serif",
+                        }}
+                      >
+                        {revisedText}
+                      </div>
                     </div>
 
                     {/* 📥 仕上げ原稿を取り込む */}
