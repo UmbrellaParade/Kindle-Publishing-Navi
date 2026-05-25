@@ -10,11 +10,11 @@ import { base44 } from '@/api/base44Client';
 import { AnimatePresence, motion } from 'framer-motion';
 
 const TABS = [
-  { id: 'creation',  label: '📖 Kindle本制作進捗' },
-  { id: 'kdp',       label: '📝 KDP登録進捗' },
-  { id: 'category',  label: '🏷️ カテゴリーチェック' },
-  { id: 'promo',     label: '📣 プロモーション進捗' },
-  { id: 'format',    label: '🔧 原稿Kindle調整ツール' },
+  { id: 'creation',  label: 'Kindle本制作進捗' },
+  { id: 'kdp',       label: 'KDP登録進捗' },
+  { id: 'category',  label: 'カテゴリーチェック' },
+  { id: 'promo',     label: 'プロモーション進捗' },
+  { id: 'format',    label: '原稿Kindle調整ツール' },
 ];
 
 export default function Home() {
@@ -77,7 +77,7 @@ export default function Home() {
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
                 style={activeTab === tab.id
-                  ? { background: 'rgba(255,45,120,0.1)', border: '1px solid rgba(255,45,120,0.35)' }
+                  ? { background: 'transparent', border: '1px solid transparent' }
                   : { background: 'transparent', border: '1px solid transparent' }
                 }
               >

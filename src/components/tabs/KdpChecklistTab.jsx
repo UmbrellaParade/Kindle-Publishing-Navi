@@ -255,7 +255,7 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
       {/* 進捗バー */}
       <div className="rounded-xl p-4 space-y-2" style={CARD_STYLE}>
         <div className="flex items-center justify-between text-xs">
-          <span className="font-bold flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-neon-pink" />KDP 登録進捗</span>
+          <span className="font-bold">KDP 登録進捗</span>
           <span className="font-bold text-neon-pink">{doneTasks} / {totalTasks} 完了（{pct}%）</span>
         </div>
         <Progress value={pct} className="h-2" />
