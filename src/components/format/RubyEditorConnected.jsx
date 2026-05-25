@@ -21,18 +21,54 @@ const DEFAULT_DICT = {
 // 辞書値がこの定数のとき「ルビなし（スキップ）」
 const NO_RUBY = '__no_ruby__';
 const STORAGE_KEY = 'ruby_custom_dict';
+const HIDDEN_DEFAULTS_KEY = '__hiddenDefaults';
 
-function loadDict() {
+function parseStoredDict() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? { ...DEFAULT_DICT, ...JSON.parse(saved) } : { ...DEFAULT_DICT };
-  } catch { return { ...DEFAULT_DICT }; }
+    if (!saved) return { custom: {}, hiddenDefaults: [] };
+
+    const parsed = JSON.parse(saved);
+    const { [HIDDEN_DEFAULTS_KEY]: hiddenDefaults = [], ...custom } = parsed || {};
+    return {
+      custom,
+      hiddenDefaults: Array.isArray(hiddenDefaults) ? hiddenDefaults : [],
+    };
+  } catch { return { custom: {}, hiddenDefaults: [] }; }
 }
-function saveCustomDict(dict) {
+
+function buildDict(custom, hiddenDefaults) {
+  const hidden = new Set(hiddenDefaults);
+  const dict = {};
+
+  for (const [base, ruby] of Object.entries(DEFAULT_DICT)) {
+    if (!hidden.has(base)) dict[base] = ruby;
+  }
+
+  for (const [base, ruby] of Object.entries(custom)) {
+    if (base !== HIDDEN_DEFAULTS_KEY) dict[base] = ruby;
+  }
+
+  return dict;
+}
+
+function loadDictState() {
+  const { custom, hiddenDefaults } = parseStoredDict();
+  return { dict: buildDict(custom, hiddenDefaults), hiddenDefaults };
+}
+
+function saveCustomDict(dict, hiddenDefaults = []) {
+  const hidden = new Set(hiddenDefaults);
   const custom = {};
+
   for (const [k, v] of Object.entries(dict)) {
+    if (hidden.has(k)) continue;
     if (DEFAULT_DICT[k] !== v || !(k in DEFAULT_DICT)) custom[k] = v;
   }
+
+  const persistedHiddenDefaults = [...hidden].filter(k => k in DEFAULT_DICT);
+  if (persistedHiddenDefaults.length > 0) custom[HIDDEN_DEFAULTS_KEY] = persistedHiddenDefaults;
+
   localStorage.setItem(STORAGE_KEY, JSON.stringify(custom));
 }
 
@@ -128,28 +164,32 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
   const [tokens, setTokens] = useState(null);
   const [plainSegments, setPlainSegments] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [dict, setDict] = useState(loadDict);
+  const [dictState, setDictState] = useState(loadDictState);
   const [showDict, setShowDict] = useState(false);
+  const [showInteractivePreview, setShowInteractivePreview] = useState(true);
   const [copyFormat, setCopyFormat] = useState('epub');
   const [copied, setCopied] = useState(false);
   const [showNeedsCheck, setShowNeedsCheck] = useState(true);
   const [newDictBase, setNewDictBase] = useState('');
   const [newDictRuby, setNewDictRuby] = useState('');
+  const [editingDictBase, setEditingDictBase] = useState(null);
+  const [editingDictRuby, setEditingDictRuby] = useState('');
   // 修正1: ルビ付与方式
   const [rubyMode, setRubyMode] = useState('first'); // 'first' | 'all'
+  const { dict, hiddenDefaults } = dictState;
 
   useEffect(() => { setTokens(null); setPlainSegments(null); }, [sharedText]);
 
-  const updateDictAndPreview = useCallback((nextDict) => {
-    setDict(nextDict);
-    saveCustomDict(nextDict);
+  const updateDictAndPreview = useCallback((nextDict, nextHiddenDefaults = hiddenDefaults) => {
+    setDictState({ dict: nextDict, hiddenDefaults: nextHiddenDefaults });
+    saveCustomDict(nextDict, nextHiddenDefaults);
 
     if (sharedText.trim().length >= 5) {
       const result = applyRubyDictionary(sharedText.trim(), nextDict, rubyMode);
       setTokens(result.tokens);
       setPlainSegments(result.segments);
     }
-  }, [rubyMode, sharedText]);
+  }, [hiddenDefaults, rubyMode, sharedText]);
 
   const runRuby = async () => {
     const text = sharedText.trim();
@@ -190,7 +230,8 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
       return;
     }
 
-    updateDictAndPreview({ ...dict, [base]: ruby });
+    const nextHiddenDefaults = hiddenDefaults.filter(item => item !== base);
+    updateDictAndPreview({ ...dict, [base]: ruby }, nextHiddenDefaults);
     setNewDictBase('');
     setNewDictRuby('');
     toast.success(`「${base}」を辞書に追加しました`);
@@ -198,22 +239,41 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
 
   const handleRemoveDictEntry = (base) => {
     const next = { ...dict };
-    if (base in DEFAULT_DICT) {
-      next[base] = NO_RUBY;
-      updateDictAndPreview(next);
-      toast.success(`「${base}」のルビを無効化しました`);
-    } else {
-      delete next[base];
-      updateDictAndPreview(next);
-      toast.success(`「${base}」を辞書から削除しました`);
+    delete next[base];
+
+    const nextHiddenDefaults = base in DEFAULT_DICT
+      ? [...new Set([...hiddenDefaults, base])]
+      : hiddenDefaults;
+
+    updateDictAndPreview(next, nextHiddenDefaults);
+    if (editingDictBase === base) {
+      setEditingDictBase(null);
+      setEditingDictRuby('');
     }
+    toast.success(`「${base}」を固有名詞辞書から削除しました`);
   };
 
-  const handleRestoreDefaultEntry = (base) => {
-    if (!(base in DEFAULT_DICT)) return;
-    const next = { ...dict, [base]: DEFAULT_DICT[base] };
-    updateDictAndPreview(next);
-    toast.success(`「${base}」を初期値に戻しました`);
+  const startEditDictEntry = (base, ruby) => {
+    setEditingDictBase(base);
+    setEditingDictRuby(ruby === NO_RUBY ? '' : ruby);
+  };
+
+  const cancelEditDictEntry = () => {
+    setEditingDictBase(null);
+    setEditingDictRuby('');
+  };
+
+  const handleSaveDictEntry = (base) => {
+    const ruby = editingDictRuby.trim();
+    if (!ruby) {
+      toast.error('ふりがなを入力してください');
+      return;
+    }
+
+    const nextHiddenDefaults = hiddenDefaults.filter(item => item !== base);
+    updateDictAndPreview({ ...dict, [base]: ruby }, nextHiddenDefaults);
+    cancelEditDictEntry();
+    toast.success(`「${base}」のルビを更新しました`);
   };
 
   const buildOutputText = () => {
@@ -294,7 +354,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
         <AnimatePresence>
           {showDict && (
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-              <div className="mt-2 bg-secondary/50 rounded-lg p-3 border border-border max-h-40 overflow-y-auto space-y-1.5">
+              <div className="mt-2 bg-secondary/50 rounded-lg p-3 border border-border max-h-64 overflow-y-auto space-y-1.5">
                 <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 pb-2 mb-2 border-b border-border">
                   <input
                     value={newDictBase}
@@ -313,34 +373,58 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
                   </Button>
                 </div>
                 {Object.entries(dict).map(([base, ruby]) => {
-                  const isDefaultEntry = base in DEFAULT_DICT;
-                  const isModifiedDefault = isDefaultEntry && ruby !== DEFAULT_DICT[base];
-                  const isDisabled = ruby === NO_RUBY;
+                  const isEditing = editingDictBase === base;
                   return (
                     <div key={base} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 text-xs items-center">
                       <div className="min-w-0">
                         <span className="text-foreground font-medium break-all">{base}</span>
-                        <span className={`ml-1 ${isDisabled ? 'text-neon-amber' : 'text-muted-foreground'}`}>
-                        → {ruby === NO_RUBY ? 'ルビなし' : ruby}
-                        </span>
+                        {isEditing ? (
+                          <input
+                            autoFocus
+                            value={editingDictRuby}
+                            onChange={(e) => setEditingDictRuby(e.target.value)}
+                            placeholder="ふりがな"
+                            className="mt-1 w-full h-7 px-2 text-xs rounded bg-secondary border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-neon-pink/50"
+                          />
+                        ) : (
+                          <span className={`ml-1 ${ruby === NO_RUBY ? 'text-neon-amber' : 'text-muted-foreground'}`}>
+                            → {ruby === NO_RUBY ? 'ルビなし' : ruby}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-1">
-                        {isDefaultEntry && isModifiedDefault && (
+                        {isEditing ? (
+                          <>
+                            <button
+                              onClick={() => handleSaveDictEntry(base)}
+                              className="h-6 px-2 rounded border border-neon-pink/40 text-[10px] text-neon-pink hover:bg-neon-pink/10 transition-colors"
+                            >
+                              保存
+                            </button>
+                            <button
+                              onClick={cancelEditDictEntry}
+                              className="h-6 px-2 rounded border border-border text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                              取消
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => startEditDictEntry(base, ruby)}
+                              className="h-6 px-2 rounded border border-border text-[10px] text-muted-foreground hover:text-neon-cyan hover:border-neon-cyan/40 transition-colors"
+                            >
+                              編集
+                            </button>
                           <button
-                            onClick={() => handleRestoreDefaultEntry(base)}
-                            className="h-6 px-2 rounded border border-border text-[10px] text-muted-foreground hover:text-neon-cyan hover:border-neon-cyan/40 transition-colors"
+                              onClick={() => handleRemoveDictEntry(base)}
+                              className="h-6 px-2 rounded border border-neon-red/30 text-[10px] text-neon-red hover:bg-neon-red/10 transition-colors"
+                              aria-label={`${base}を固有名詞辞書から削除`}
                           >
-                            初期に戻す
+                              削除
                           </button>
+                          </>
                         )}
-                        <button
-                          onClick={() => handleRemoveDictEntry(base)}
-                          disabled={isDisabled}
-                          className="h-6 px-2 rounded border border-neon-red/30 text-[10px] text-neon-red hover:bg-neon-red/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                          aria-label={isDefaultEntry ? `${base}のルビを無効化` : `${base}を辞書から削除`}
-                        >
-                          {isDefaultEntry ? '無効化' : '削除'}
-                        </button>
                       </div>
                     </div>
                   );
@@ -388,43 +472,60 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
 
             {/* インタラクティブプレビュー（削除ボタン付き） */}
             <div>
-              <p className="text-xs font-bold mb-2">インタラクティブプレビュー <span className="text-muted-foreground font-normal text-[10px]">（ルビをクリックで編集、下の一覧から削除）</span></p>
-              <div className="bg-secondary/60 rounded-lg p-4 border border-border text-sm leading-loose font-body min-h-[60px]">
-                {plainSegments.map((seg, i) => {
-                  if (seg.type === 'plain') return <span key={i} className="whitespace-pre-wrap">{seg.text}</span>;
-                  const t = tokenMap[seg.tokenId];
-                  if (!t) return null;
-                  const isEditingThis = editingId === t.id;
-                  return (
-                    <span key={i} className="relative inline-block group/ruby">
-                      <span className="relative inline-flex flex-col items-center align-bottom">
-                        <button onClick={() => setEditingId(isEditingThis ? null : t.id)}
-                          className={`relative inline-flex flex-col items-center align-bottom cursor-pointer rounded px-0.5 transition-colors ${t.needsCheck ? 'bg-neon-amber/10 hover:bg-neon-amber/20' : 'hover:bg-neon-pink/10'} ${isEditingThis ? 'ring-1 ring-neon-pink/60' : ''}`}>
-                          {t.ruby && <span className={`text-[9px] leading-none mb-0.5 ${t.needsCheck ? 'text-neon-amber' : 'text-neon-pink/80'}`}>{t.ruby}</span>}
-                          <span className={`text-sm leading-tight ${t.needsCheck ? 'text-neon-amber' : ''}`}>{t.base}</span>
-                          <Pencil className="absolute -top-1 -right-1 w-2.5 h-2.5 text-neon-pink/50 opacity-0 group-hover/ruby:opacity-100 transition-opacity" />
-                        </button>
-                        {/* 削除ボタン */}
-                        {t.ruby && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteRuby(t.id); }}
-                            className="absolute -top-2 -right-2 w-3.5 h-3.5 bg-neon-red/80 hover:bg-neon-red rounded-full flex items-center justify-center opacity-100 transition-opacity z-10"
-                            title="ルビを削除"
-                          >
-                            <X className="w-2 h-2 text-white" />
-                          </button>
-                        )}
-                      </span>
-                      {isEditingThis && <RubyEditPopover token={t} onSave={handleSaveRuby} onClose={() => setEditingId(null)} />}
-                    </span>
-                  );
-                })}
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowInteractivePreview(v => !v);
+                  setEditingId(null);
+                }}
+                className="flex w-full items-center gap-2 text-left text-xs font-bold mb-2 text-foreground hover:text-neon-pink transition-colors"
+              >
+                {showInteractivePreview ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                インタラクティブプレビュー
+                <span className="text-muted-foreground font-normal text-[10px]">（ルビをクリックで編集、下の一覧から削除）</span>
+              </button>
+              <AnimatePresence>
+                {showInteractivePreview && (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-visible">
+                    <div className="bg-secondary/60 rounded-lg p-4 border border-border text-sm leading-loose font-body min-h-[60px]">
+                      {plainSegments.map((seg, i) => {
+                        if (seg.type === 'plain') return <span key={i} className="whitespace-pre-wrap">{seg.text}</span>;
+                        const t = tokenMap[seg.tokenId];
+                        if (!t) return null;
+                        const isEditingThis = editingId === t.id;
+                        return (
+                          <span key={i} className="relative inline-block group/ruby">
+                            <span className="relative inline-flex flex-col items-center align-bottom">
+                              <button onClick={() => setEditingId(isEditingThis ? null : t.id)}
+                                className={`relative inline-flex flex-col items-center align-bottom cursor-pointer rounded px-0.5 transition-colors ${t.needsCheck ? 'bg-neon-amber/10 hover:bg-neon-amber/20' : 'hover:bg-neon-pink/10'} ${isEditingThis ? 'ring-1 ring-neon-pink/60' : ''}`}>
+                                {t.ruby && <span className={`text-[9px] leading-none mb-0.5 ${t.needsCheck ? 'text-neon-amber' : 'text-neon-pink/80'}`}>{t.ruby}</span>}
+                                <span className={`text-sm leading-tight ${t.needsCheck ? 'text-neon-amber' : ''}`}>{t.base}</span>
+                                <Pencil className="absolute -top-1 -right-1 w-2.5 h-2.5 text-neon-pink/50 opacity-0 group-hover/ruby:opacity-100 transition-opacity" />
+                              </button>
+                              {/* 削除ボタン */}
+                              {t.ruby && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleDeleteRuby(t.id); }}
+                                  className="absolute -top-2 -right-2 w-3.5 h-3.5 bg-neon-red/80 hover:bg-neon-red rounded-full flex items-center justify-center opacity-100 transition-opacity z-10"
+                                  title="ルビを削除"
+                                >
+                                  <X className="w-2 h-2 text-white" />
+                                </button>
+                              )}
+                            </span>
+                            {isEditingThis && <RubyEditPopover token={t} onSave={handleSaveRuby} onClose={() => setEditingId(null)} />}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             {appliedRubyTokens.length > 0 && (
               <div className="bg-secondary/40 rounded-lg p-3 border border-border">
-                <p className="text-xs font-bold mb-2">付与済みルビ一覧 <span className="text-muted-foreground font-normal text-[10px]">（削除すると同じ語のルビを無効化します）</span></p>
+                <p className="text-xs font-bold mb-2">付与済みルビ一覧 <span className="text-muted-foreground font-normal text-[10px]">（削除すると同じ語には今後ルビを付けません）</span></p>
                 <div className="flex flex-wrap gap-2">
                   {appliedRubyTokens.map(t => (
                     <span key={t.id} className="inline-flex items-center gap-1.5 rounded border border-neon-pink/25 bg-neon-pink/5 px-2 py-1 text-xs">

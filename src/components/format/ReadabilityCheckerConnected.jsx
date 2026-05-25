@@ -9,6 +9,27 @@ import { toast } from 'sonner';
 
 const DEFAULT_GENRE = 'ダークファンタジー / 音楽ファンタジー';
 
+const FONT_OPTIONS = [
+  {
+    value: 'serif',
+    label: '明朝系',
+    css: "'Noto Serif JP', 'Yu Mincho', 'Hiragino Mincho ProN', serif",
+    note: '小説・文芸向けの標準候補',
+  },
+  {
+    value: 'gothic',
+    label: 'ゴシック系',
+    css: "'Noto Sans JP', 'Yu Gothic', 'Hiragino Sans', sans-serif",
+    note: '実用書・エッセイ向けの確認用',
+  },
+  {
+    value: 'system',
+    label: '端末標準',
+    css: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    note: '読者端末の標準表示に近い確認用',
+  },
+];
+
 const COMMON_EDITING_RULES = `【共通ルール】
 - 意味、設定、登場人物、固有名詞、時系列は変えない
 - 説明を足しすぎず、原文の声と文体を残す
@@ -341,6 +362,7 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
   const [genreSource, setGenreSource] = useState('diagnosed');
   const [manualGenre, setManualGenre] = useState(DEFAULT_GENRE);
   const [previewMode, setPreviewMode] = useState('normal');
+  const [fontPreview, setFontPreview] = useState('serif');
   const [loading, setLoading] = useState(false);
   const [revisedText, setRevisedText] = useState('');
   const [manualText, setManualText] = useState('');
@@ -354,6 +376,7 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
   const selectedGenreLabel = GENRE_OPTIONS.find(opt => opt.value === selectedGenre)?.label || selectedGenre;
   const selectedGenreSourceLabel = isUsingDiagnosedGenre ? '診断結果' : '手動選択';
   const selectedGenreInstructions = GENRE_INSTRUCTIONS[selectedGenre] || GENRE_INSTRUCTIONS[DEFAULT_GENRE];
+  const selectedFont = FONT_OPTIONS.find(option => option.value === fontPreview) || FONT_OPTIONS[0];
   const originalPageEstimate = useMemo(() => estimateKindlePages(sharedText), [sharedText]);
   const finalPageEstimate = useMemo(() => estimateKindlePages(importedText || revisedText || sharedText), [importedText, revisedText, sharedText]);
 
@@ -363,6 +386,7 @@ export default function Step4ReadabilityCheck({ sharedText, diagnosedGenre, onVe
     setImportedText('');
     setActiveTab('original');
     setPreviewMode('normal');
+    setFontPreview('serif');
   }, [sharedText]);
 
   const analyze = async () => {
@@ -396,7 +420,7 @@ ${isUsingDiagnosedGenre && diagnosisDisplayText ? `- 診断表示: ${diagnosisDi
 ${instructions}
 
 【原文】
-${text.slice(0, 4000)}
+${text}
 
 【出力形式】
 修正後のテキストのみを出力してください。解説やコメントは不要です。`,
@@ -453,7 +477,7 @@ ${text.slice(0, 4000)}
 - 見出しは<h4>、本文は<p>タグ
 
 【テキスト】
-${textToDownload.slice(0, 4000)}`,
+${textToDownload}`,
         model: 'claude_sonnet_4_6',
       });
 
@@ -519,6 +543,36 @@ ${res}
         改行、段落分け、余白、文の長さを中心に、Kindleで読み進めやすい本文へ整えます。ジャンルは補助情報として使います。
         {sharedText.trim().length < 50 && <span className="text-neon-amber ml-1">（上の入力エリアに本文を貼り付けてください）</span>}
       </p>
+
+      <div className="mb-4 rounded-lg p-3 border border-border bg-secondary/40">
+        <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+          <p className="text-xs font-bold text-foreground">フォント確認</p>
+          <p className="text-[10px] text-muted-foreground">Kindleでは読者端末の表示設定が優先されるため、ここでは読み味を確認します。</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+          {FONT_OPTIONS.map(option => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setFontPreview(option.value)}
+              className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                fontPreview === option.value
+                  ? 'border-neon-cyan/60 bg-neon-cyan/10 text-neon-cyan'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:border-neon-cyan/40'
+              }`}
+            >
+              <span className="block text-xs font-bold" style={{ fontFamily: option.css }}>{option.label}</span>
+              <span className="block text-[10px] mt-1 leading-relaxed">{option.note}</span>
+            </button>
+          ))}
+        </div>
+        <div
+          className="rounded-md border border-border bg-white p-3 text-xs leading-relaxed text-black whitespace-pre-wrap"
+          style={{ fontFamily: selectedFont.css }}
+        >
+          {sharedText.trim().slice(0, 160) || 'ここに本文を入れると、選択したフォントで読み味を確認できます。'}
+        </div>
+      </div>
 
       {/* ジャンル選択 */}
       <div className="mb-4 space-y-3">
@@ -618,7 +672,7 @@ ${res}
                         <Copy className="w-3 h-3" />📋 コピー
                       </Button>
                     </div>
-                    <div className="rounded-lg p-3 text-sm leading-relaxed max-h-[600px] overflow-y-auto" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid #2a2a4a' }}>
+                    <div className="rounded-lg p-3 text-sm leading-relaxed max-h-[600px] overflow-y-auto whitespace-pre-wrap" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid #2a2a4a' }}>
                       {sharedText}
                     </div>
                   </div>
@@ -642,12 +696,12 @@ ${res}
                         style={{
                           background: '#ffffff',
                           color: '#111111',
-                          fontFamily: "'Noto Serif JP', serif",
+                          fontFamily: selectedFont.css,
                           border: '1px solid #2a2a4a',
                         }}
                       />
                       <p className="text-[10px] text-muted-foreground mt-2">
-                        フォント：明朝系 / 行間：2.0 / Kindle の読書画面に近い表示
+                        フォント：{selectedFont.label} / 行間：2.0 / Kindle の読書画面に近い表示
                       </p>
                     </div>
 
@@ -684,7 +738,7 @@ ${res}
                           writingMode: previewMode === 'vertical' ? 'vertical-rl' : 'horizontal-tb',
                           textOrientation: 'mixed',
                           lineHeight: 2,
-                          fontFamily: "'Noto Serif JP', 'Yu Mincho', serif",
+                          fontFamily: selectedFont.css,
                         }}
                       >
                         {revisedText}
