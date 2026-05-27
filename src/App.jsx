@@ -43,11 +43,12 @@ const AuthenticatedApp = () => {
 
 
 function App() {
+  const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, '') || undefined;
 
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
-        <Router>
+        <Router basename={routerBasename}>
           <AuthenticatedApp />
         </Router>
         <Toaster />

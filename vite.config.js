@@ -2,8 +2,11 @@ import base44 from "@base44/vite-plugin"
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
+const isGitHubPages = process.env.GITHUB_PAGES === 'true';
+
 // https://vite.dev/config/
 export default defineConfig({
+  base: isGitHubPages ? '/Kindle-Publishing-Navi/' : '/',
   logLevel: 'error', // Suppress warnings, only show errors
   server: {
     host: '0.0.0.0',
