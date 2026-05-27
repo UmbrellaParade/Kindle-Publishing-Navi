@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import JSZip from 'jszip';
-import { FileText, AlertTriangle, Download } from 'lucide-react';
+import { FileText, AlertTriangle, Download, Upload, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 
@@ -21,13 +21,11 @@ function textWithRubyToXhtml(text) {
   let output = '';
   let lastIndex = 0;
   let match;
-
   while ((match = pattern.exec(text)) !== null) {
     output += escapeXml(text.slice(lastIndex, match.index));
     output += `<ruby>${escapeXml(match[1])}<rp>（</rp><rt>${escapeXml(match[2])}</rt><rp>）</rp></ruby>`;
     lastIndex = pattern.lastIndex;
   }
-
   output += escapeXml(text.slice(lastIndex));
   return output;
 }
@@ -43,28 +41,13 @@ function downloadBlob(blob, filename) {
 
 function buildDocx(text) {
   const children = text.split('\n').map((line) => new Paragraph({
-    children: [
-      new TextRun({
-        text: line.trim() === '' ? ' ' : line,
-        font: 'Yu Mincho',
-        size: 22,
-      }),
-    ],
-    spacing: {
-      line: 360,
-      after: line.trim() === '' ? 120 : 80,
-    },
+    children: [new TextRun({ text: line.trim() === '' ? ' ' : line, font: 'Yu Mincho', size: 22 })],
+    spacing: { line: 360, after: line.trim() === '' ? 120 : 80 },
   }));
-
   return new Document({
     creator: 'Umbrella Parade Kindle出版ナビ',
     title: 'Kindle manuscript',
-    sections: [
-      {
-        properties: {},
-        children,
-      },
-    ],
+    sections: [{ properties: {}, children }],
   });
 }
 
@@ -83,7 +66,6 @@ async function buildEpub(text) {
   const zip = new JSZip();
   const content = buildXhtml(text);
   const identifier = `urn:uuid:${crypto.randomUUID?.() || Date.now()}`;
-
   zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
   zip.folder('META-INF').file('container.xml', `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -91,7 +73,6 @@ async function buildEpub(text) {
     <rootfile full-path="OEBPS/package.opf" media-type="application/oebps-package+xml"/>
   </rootfiles>
 </container>`);
-
   const oebps = zip.folder('OEBPS');
   oebps.file('content.xhtml', content);
   oebps.file('nav.xhtml', `<?xml version="1.0" encoding="UTF-8"?>
@@ -116,19 +97,18 @@ async function buildEpub(text) {
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="content" href="content.xhtml" media-type="application/xhtml+xml"/>
   </manifest>
-  <spine>
-    <itemref idref="content"/>
-  </spine>
+  <spine><itemref idref="content"/></spine>
 </package>`);
-
   return zip.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' });
 }
 
 export default function Step5Export({ sharedText, versionState }) {
-  const hasUrl = URL_REGEX.test(sharedText);
-  const hasText = sharedText.trim().length > 0;
+  const [source, setSource] = useState('pipeline'); // 'pipeline' | 'local'
+  const [localText, setLocalText] = useState('');
+  const [localExpanded, setLocalExpanded] = useState(true);
+  const fileInputRef = useRef(null);
 
-  const getOutputText = () => {
+  const getPipelineText = () => {
     if (!versionState) return sharedText;
     const { currentVersion, originalText, aiText, manualText } = versionState;
     if (currentVersion === 'ai' && aiText) return aiText;
@@ -136,17 +116,33 @@ export default function Step5Export({ sharedText, versionState }) {
     return originalText || sharedText;
   };
 
+  const outputText = source === 'local' ? localText : getPipelineText();
+  const hasUrl = URL_REGEX.test(outputText);
+  const hasText = outputText.trim().length > 0;
+
+  const handleLocalFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.endsWith('.txt')) { toast.error('.txtファイルのみ対応しています'); return; }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      setLocalText(ev.target.result || '');
+      setLocalExpanded(false);
+      toast.success('テキストを読み込みました');
+    };
+    reader.readAsText(file, 'UTF-8');
+    e.target.value = '';
+  };
+
   const downloadDocx = async () => {
-    const text = getOutputText();
-    const blob = await Packer.toBlob(buildDocx(text));
+    const blob = await Packer.toBlob(buildDocx(outputText));
     downloadBlob(blob, 'kindle-manuscript.docx');
     toast.success('DOCXをダウンロードしました');
   };
 
   const downloadEpub = async () => {
     if (hasUrl) { toast.warning('URLリンクがあります。docxを推奨します。'); }
-    const text = getOutputText();
-    const blob = await buildEpub(text);
+    const blob = await buildEpub(outputText);
     downloadBlob(blob, 'kindle-manuscript.epub');
     toast.success('EPUBをダウンロードしました');
   };
@@ -155,16 +151,48 @@ export default function Step5Export({ sharedText, versionState }) {
     <div className="rounded-xl p-4 space-y-4" style={CARD_STYLE}>
       <div className="flex items-center gap-2">
         <FileText className="w-4 h-4 text-neon-cyan" />
-        <h3 className="text-sm font-bold text-neon-cyan neon-cyan-glow">DOCX / EPUB 出力形式とルビ表記の違い</h3>
+        <h3 className="text-sm font-bold text-neon-cyan neon-cyan-glow">DOCX / EPUB 出力形式</h3>
       </div>
 
-      {/* バージョン選択 */}
-      {versionState && (
+      {/* 出力元選択 */}
+      <div className="space-y-2">
+        <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">出力する原稿</p>
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setSource('pipeline')}
+            className={`text-xs px-3 py-1.5 rounded-md border transition-colors text-left font-bold ${
+              source === 'pipeline'
+                ? 'bg-neon-cyan/20 text-neon-cyan border-neon-cyan/50'
+                : 'text-muted-foreground border-border hover:text-foreground font-medium'
+            }`}
+            style={source !== 'pipeline' ? { background: 'rgba(255,255,255,0.04)' } : {}}
+          >
+            ステップ1〜2の原稿を使う
+            <span className="block text-[9px] opacity-60 font-normal">上部で貼り付け・修正した原稿</span>
+          </button>
+          <button
+            onClick={() => setSource('local')}
+            className={`text-xs px-3 py-1.5 rounded-md border transition-colors text-left font-bold ${
+              source === 'local'
+                ? 'bg-neon-pink/20 text-neon-pink border-neon-pink/50'
+                : 'text-muted-foreground border-border hover:text-foreground font-medium'
+            }`}
+            style={source !== 'local' ? { background: 'rgba(255,255,255,0.04)' } : {}}
+          >
+            新しく原稿を読み込む
+            <span className="block text-[9px] opacity-60 font-normal">このステップで直接入力</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ステップ連動：バージョン選択 */}
+      {source === 'pipeline' && versionState && (
         <div className="p-3 rounded-lg" style={{ background: 'rgba(0,245,255,0.05)', border: '1px solid rgba(0,245,255,0.2)' }}>
           <p className="text-xs font-bold text-neon-cyan mb-2">出力するバージョンを選択</p>
           <div className="flex gap-2 flex-wrap">
             {[{ key: 'original', label: '元の本文' }, { key: 'ai', label: 'AI修正版' }, { key: 'manual', label: '手動編集版' }].map(({ key, label }) => (
-              <button key={key} onClick={() => versionState.onVersionChange?.({ ...versionState, currentVersion: key })}
+              <button key={key}
+                onClick={() => versionState.onVersionChange?.({ ...versionState, currentVersion: key })}
                 className={`text-xs px-3 py-1.5 rounded-md border transition-colors font-bold ${versionState.currentVersion === key ? 'bg-neon-cyan/20 text-neon-cyan border-neon-cyan/50' : 'text-muted-foreground border-border hover:text-foreground'}`}
                 style={versionState.currentVersion !== key ? { background: 'rgba(255,255,255,0.04)' } : {}}
               >{label}</button>
@@ -173,6 +201,54 @@ export default function Step5Export({ sharedText, versionState }) {
         </div>
       )}
 
+      {/* 独自読み込み入力エリア */}
+      {source === 'local' && (
+        <div className="space-y-2 rounded-lg p-3" style={{ background: 'rgba(255,45,120,0.04)', border: '1px solid rgba(255,45,120,0.2)' }}>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <p className="text-xs font-bold text-neon-pink">原稿を貼り付けるか、.txtから読み込んでください</p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 text-xs text-neon-cyan hover:text-neon-pink transition-colors px-2.5 py-1.5 rounded-md"
+                style={{ background: 'rgba(255,255,255,0.05)' }}
+              >
+                <Upload className="w-3 h-3" />.txtから読み込む
+              </button>
+              {localText && (
+                <button
+                  onClick={() => { setLocalText(''); setLocalExpanded(true); }}
+                  className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors"
+                >
+                  <RefreshCw className="w-3 h-3" />クリア
+                </button>
+              )}
+              {localText && (
+                <button
+                  onClick={() => setLocalExpanded(v => !v)}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {localExpanded ? '折りたたむ' : '編集する'}
+                </button>
+              )}
+            </div>
+          </div>
+          <input ref={fileInputRef} type="file" accept=".txt" className="hidden" onChange={handleLocalFileUpload} />
+          {localExpanded && (
+            <textarea
+              placeholder="ここに原稿を貼り付けてください..."
+              value={localText}
+              onChange={e => setLocalText(e.target.value)}
+              className="w-full min-h-[140px] px-3 py-2.5 text-sm rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none resize-none leading-relaxed"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid #2a2a4a' }}
+            />
+          )}
+          {localText && !localExpanded && (
+            <p className="text-xs text-neon-pink font-bold">{localText.length.toLocaleString()}文字 ✓ 読み込み済み</p>
+          )}
+        </div>
+      )}
+
+      {/* URLリンク警告 */}
       {hasUrl && (
         <div className="flex items-start gap-2 p-2.5 rounded-lg" style={{ background: 'rgba(255,179,0,0.07)', border: '1px solid rgba(255,179,0,0.25)' }}>
           <AlertTriangle className="w-3.5 h-3.5 text-neon-amber flex-shrink-0 mt-0.5" />
@@ -180,25 +256,27 @@ export default function Step5Export({ sharedText, versionState }) {
         </div>
       )}
 
+      {/* 形式説明 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="rounded-lg p-3 space-y-2" style={{ background: 'rgba(255,45,120,0.04)', border: '1px solid rgba(255,45,120,0.18)' }}>
           <p className="text-xs font-bold text-neon-pink">DOCXの注意点</p>
           <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
             <li>・KDPへ手軽にアップロードしたい場合に向いています。</li>
-            <li>・このツールのルビは <code className="text-foreground">｜漢字《かな》</code> の表記として本文に残ります。</li>
+            <li>・ルビは <code className="text-foreground">｜漢字《かな》</code> の表記のまま出力されます。</li>
             <li>・Word上の正式なルビ表示にしたい場合は、DOCX側で別途調整が必要です。</li>
           </ul>
         </div>
         <div className="rounded-lg p-3 space-y-2" style={{ background: 'rgba(0,245,255,0.04)', border: '1px solid rgba(0,245,255,0.18)' }}>
           <p className="text-xs font-bold text-neon-cyan">EPUBの注意点</p>
           <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
-            <li>・ルビを実際のHTML rubyタグとして出したい場合に向いています。</li>
-            <li>・<code className="text-foreground">｜漢字《かな》</code> の表記を <code className="text-foreground">&lt;ruby&gt;&lt;rt&gt;</code> 形式へ変換します。</li>
+            <li>・ルビをHTMLの rubyタグとして出したい場合に向いています。</li>
+            <li>・<code className="text-foreground">｜漢字《かな》</code> を <code className="text-foreground">&lt;ruby&gt;&lt;rt&gt;</code> 形式へ変換します。</li>
             <li>・KDPへ登録する前にKindle Previewerで表示確認してください。</li>
           </ul>
         </div>
       </div>
 
+      {/* ダウンロードボタン */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="p-4 rounded-lg space-y-2" style={{ background: 'rgba(255,45,120,0.05)', border: '1px solid rgba(255,45,120,0.25)' }}>
           <div className="flex items-center gap-2">

@@ -4,44 +4,48 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const LS_KEY = 'format_guide_state';
-
 import Step1FormatDecision from '../format/Step1FormatDecision';
-import Step2GenreDiagnosis from '../format/Step2GenreDiagnosis';
 import Step3RubyEditor from '../format/Step3RubyEditor';
-import Step4ReadabilityCheck from '../format/Step4ReadabilityCheck';
 import Step5Export from '../format/Step5Export';
 import ExternalAiWorkspace from '../format/ExternalAiWorkspace';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 
-export default function FormatGuideTab() {
+export default function FormatGuideTab({ project }) {
+  const lsKey = `format_guide_state_${project?.id || 'global'}`;
+
   const [sharedText, setSharedText] = useState('');
   const [isExpanded, setIsExpanded] = useState(true);
-  const [diagnosedGenre, setDiagnosedGenre] = useState('');
   const [versionState, setVersionState] = useState(null);
   const fileInputRef = useRef(null);
 
-  // localStorageから復元
+  // プロジェクトが切り替わったらそのプロジェクトの保存データを読み込む
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(LS_KEY);
+      const saved = localStorage.getItem(lsKey);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.sharedText) { setSharedText(parsed.sharedText); setIsExpanded(false); }
-        if (parsed.diagnosedGenre) setDiagnosedGenre(parsed.diagnosedGenre);
+        setSharedText(parsed.sharedText || '');
+        setIsExpanded(!parsed.sharedText);
+      } else {
+        setSharedText('');
+        setIsExpanded(true);
       }
-    } catch {}
-  }, []);
+    } catch {
+      setSharedText('');
+      setIsExpanded(true);
+    }
+    setVersionState(null);
+  }, [project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // sharedText/diagnosedGenreが変わったら保存
+  // 原稿が変わったら保存
   useEffect(() => {
-    try { localStorage.setItem(LS_KEY, JSON.stringify({ sharedText, diagnosedGenre })); } catch {}
-  }, [sharedText, diagnosedGenre]);
+    try { localStorage.setItem(lsKey, JSON.stringify({ sharedText })); } catch {}
+  }, [sharedText, lsKey]);
 
   const handleReset = () => {
-    setSharedText(''); setIsExpanded(true); setDiagnosedGenre(''); setVersionState(null);
-    try { localStorage.removeItem(LS_KEY); } catch {}
+    setSharedText(''); setIsExpanded(true); setVersionState(null);
+    try { localStorage.removeItem(lsKey); } catch {}
     toast.success('リセットしました');
   };
 
@@ -64,7 +68,7 @@ export default function FormatGuideTab() {
           <FileText className="w-4 h-4 text-neon-pink" />
           <h3 className="font-bold text-sm text-neon-pink neon-pink-glow">原稿を貼り付けてください</h3>
         </div>
-        <p className="text-xs text-muted-foreground mb-3">ここに本文を貼ると、以下の全ステップ（フォーマット判定・ジャンル診断・ルビ・読みやすさ・出力）が連動します。</p>
+        <p className="text-xs text-muted-foreground mb-3">ここに本文を貼ると、以下の全ステップ（フォーマット判定・ルビ付け・出力）が連動します。</p>
 
         <AnimatePresence>
           {isExpanded && (
@@ -105,36 +109,21 @@ export default function FormatGuideTab() {
         </div>
       </div>
 
-      <OutputFormatQuickGuide />
+      {/* ChatGPT / Gemini / Claude AI設定 */}
+      <ExternalAiWorkspace />
 
       {/* ステップ1：フォーマット判定 */}
-      <StepWrapper n="1" label="フォーマット判定" color="cyan">
+      <StepWrapper n="1" label="フォーマット判定（docx / epub）" color="cyan">
         <Step1FormatDecision sharedText={sharedText} />
       </StepWrapper>
 
-      {/* ステップ2：ジャンル診断 */}
-      <StepWrapper n="2" label="ジャンル診断 → KDPカテゴリー提案" color="pink">
-        <Step2GenreDiagnosis sharedText={sharedText} onDiagnosed={setDiagnosedGenre} />
-      </StepWrapper>
-
-      {/* ステップ3：ルビ付け */}
-      <StepWrapper n="3" label="ルビ自動付与 → 手動修正 → コピー" color="pink">
+      {/* ステップ2：ルビ付け */}
+      <StepWrapper n="2" label="ルビ自動付与 → 手動修正 → コピー" color="pink">
         <Step3RubyEditor sharedText={sharedText} onVersionChange={setVersionState} />
       </StepWrapper>
 
-      <ExternalAiWorkspace
-        sharedText={sharedText}
-        onDiagnosed={setDiagnosedGenre}
-        onVersionChange={setVersionState}
-      />
-
-      {/* ステップ4：読みやすさチェック */}
-      <StepWrapper n="4" label="読みやすさチェック → ベストセラー比較＆修正" color="amber">
-        <Step4ReadabilityCheck sharedText={sharedText} diagnosedGenre={diagnosedGenre} onVersionChange={setVersionState} />
-      </StepWrapper>
-
-      {/* ステップ5：出力 */}
-      <StepWrapper n="5" label="出力（docx / epub）" color="cyan">
+      {/* ステップ3：出力 */}
+      <StepWrapper n="3" label="出力（docx / epub）" color="cyan">
         <Step5Export sharedText={sharedText} versionState={versionState} />
       </StepWrapper>
 
@@ -144,7 +133,7 @@ export default function FormatGuideTab() {
       {/* リセットボタン */}
       <div className="flex justify-center pt-4 pb-2">
         <Button variant="ghost" onClick={handleReset} className="h-8 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10 gap-1.5 border border-destructive/20">
-          <Trash2 className="w-3.5 h-3.5" />全データをリセット（入力テキスト・診断結果を削除）
+          <Trash2 className="w-3.5 h-3.5" />全データをリセット（入力テキスト・修正結果を削除）
         </Button>
       </div>
     </div>
@@ -190,30 +179,6 @@ function ComparisonGuide() {
         <p className="text-xs text-neon-pink font-bold">✅ 迷ったらdocx、ルビ表示まで確認したい場合はepubが目安です。</p>
         <p className="text-xs text-muted-foreground">📌 どちらもKDP登録前にKindle Previewerで崩れ・リンク・ルビ表示を確認してください。</p>
       </div>
-    </div>
-  );
-}
-
-function OutputFormatQuickGuide() {
-  return (
-    <div className="rounded-xl p-4 space-y-3" style={{ background: 'rgba(0,245,255,0.04)', border: '1px solid rgba(0,245,255,0.22)' }}>
-      <div className="flex items-center gap-2">
-        <FileText className="w-4 h-4 text-neon-cyan" />
-        <h3 className="text-sm font-bold text-neon-cyan neon-cyan-glow">DOCX / EPUB 出力形式の違い</h3>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div className="rounded-lg p-3 space-y-1.5" style={{ background: 'rgba(255,45,120,0.05)', border: '1px solid rgba(255,45,120,0.22)' }}>
-          <p className="text-xs font-bold text-neon-pink">DOCX</p>
-          <p className="text-xs text-muted-foreground leading-relaxed">KDPへ手軽に登録したい場合向け。ルビは本文内に <code className="text-foreground">｜漢字《かな》</code> の表記として残ります。</p>
-          <p className="text-[10px] text-muted-foreground">Word上の正式なルビ表示にしたい場合は、DOCX側で別途調整が必要です。</p>
-        </div>
-        <div className="rounded-lg p-3 space-y-1.5" style={{ background: 'rgba(0,245,255,0.05)', border: '1px solid rgba(0,245,255,0.22)' }}>
-          <p className="text-xs font-bold text-neon-cyan">EPUB</p>
-          <p className="text-xs text-muted-foreground leading-relaxed">ルビを実表示したい場合向け。<code className="text-foreground">｜漢字《かな》</code> を <code className="text-foreground">&lt;ruby&gt;&lt;rt&gt;</code> へ変換します。</p>
-          <p className="text-[10px] text-muted-foreground">KDP登録前にKindle Previewerで、崩れ・リンク・ルビ表示を確認してください。</p>
-        </div>
-      </div>
-      <p className="text-xs text-neon-amber">迷ったらDOCX、ルビ表示まで確認したい場合はEPUBが目安です。</p>
     </div>
   );
 }

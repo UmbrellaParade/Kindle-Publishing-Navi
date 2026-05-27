@@ -2,11 +2,12 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   BookMarked, Loader2, Copy, Check, AlertTriangle, Pencil,
-  ChevronDown, ChevronUp, BookOpen, FileType, X, Save, Plus
+  ChevronDown, ChevronUp, BookOpen, FileType, X, Save, Plus, Sparkles
 } from 'lucide-react';
 import NeonCard from '../NeonCard';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
+import { loadExternalAiSettings, callExternalAi, PROVIDER_LABELS } from '../../lib/externalAi';
 
 const DEFAULT_DICT = {
   'ヴェル13世': 'ヴェルじゅうさんせい',
@@ -174,8 +175,10 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
   const [newDictRuby, setNewDictRuby] = useState('');
   const [editingDictBase, setEditingDictBase] = useState(null);
   const [editingDictRuby, setEditingDictRuby] = useState('');
-  // 修正1: ルビ付与方式
   const [rubyMode, setRubyMode] = useState('first'); // 'first' | 'all'
+  const [aiProvider, setAiProvider] = useState('chatgpt');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiOutput, setAiOutput] = useState('');
   const { dict, hiddenDefaults } = dictState;
 
   useEffect(() => { setTokens(null); setPlainSegments(null); }, [sharedText]);
@@ -207,7 +210,44 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
     setLoading(false);
   };
 
-  // 修正1: ルビ削除ハンドラー（辞書にNO_RUBYとして保存）
+  const handleAiRuby = async () => {
+    const text = sharedText.trim();
+    if (text.length < 5) return;
+    const settings = loadExternalAiSettings();
+    const apiKey = aiProvider === 'chatgpt' ? settings.openaiApiKey
+                 : aiProvider === 'gemini'  ? settings.geminiApiKey
+                 : settings.claudeApiKey;
+    if (!apiKey?.trim()) {
+      toast.error(`${PROVIDER_LABELS[aiProvider]}のAPIキーをページ上部のAI設定から入力・保存してください`);
+      return;
+    }
+    const prompt = `あなたはKindle出版の編集者です。以下の本文に、固有名詞・難読語・作品独自語を中心にルビを付けてください。
+
+ルビの記法：青空文庫風 ｜漢字《かな》 形式を使ってください。
+例：｜天律《てんりつ》の｜加護《かご》も、今夜は薄い。
+
+注意点：
+- 一般的な常用漢字（行く・見る・時・人 など）には過剰にルビを振らない
+- 固有名詞、難読語、作品独自の語を優先する
+- 原文の意味・内容は一切変えない
+- 出力は本文のみ。説明・前置き・コメントは不要。
+
+本文：
+${text}`;
+    setAiLoading(true);
+    setAiOutput('');
+    try {
+      const result = await callExternalAi(aiProvider, settings, prompt);
+      setAiOutput(result);
+      toast.success(`${PROVIDER_LABELS[aiProvider]}のルビ提案が完了しました`);
+    } catch (err) {
+      toast.error('エラーが発生しました：' + err.message);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // ルビ削除ハンドラー（辞書にNO_RUBYとして保存）
   const handleDeleteRuby = useCallback((tokenId) => {
     const token = tokens?.find(t => t.id === tokenId);
     if (!token) return;
@@ -250,7 +290,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
       setEditingDictBase(null);
       setEditingDictRuby('');
     }
-    toast.success(`「${base}」を固有名詞辞書から削除しました`);
+    toast.success(`「${base}」をルビ登録ワードから削除しました`);
   };
 
   const startEditDictEntry = (base, ruby) => {
@@ -319,11 +359,33 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
         <h3 className="font-bold text-sm text-neon-pink neon-pink-glow">ルビ付け（自動＋手動修正）</h3>
       </div>
       <p className="text-xs text-muted-foreground mb-4">
-        固有名詞辞書に登録した語を、共通テキスト全文にルビ付けします。クリックで手動修正でき、辞書に自動保存されます。
+        ルビ登録ワードに追加した語を、共通テキスト全文にルビ付けします。クリックで手動修正でき、登録ワードに自動保存されます。
         {!isReady && <span className="text-neon-amber ml-1">（上の入力エリアに本文を貼り付けてください）</span>}
       </p>
 
-      {/* 修正2: ルビ付与方式選択 */}
+      {/* DOCX / EPUB ルビ注意点（常時表示） */}
+      <div className="mb-4 rounded-lg p-3 text-[10px] space-y-1.5" style={{ background: 'rgba(0,245,255,0.04)', border: '1px solid rgba(0,245,255,0.18)' }}>
+        <p className="font-bold text-neon-cyan text-[11px]">📌 DOCX / EPUB 出力形式</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-muted-foreground">
+          <div>
+            <span className="text-neon-pink font-bold">DOCX（KDP直接入稿）</span>
+            <p className="mt-0.5">ルビは <code className="text-foreground bg-secondary px-1 rounded">｜漢字《かな》</code> の記法のまま残ります。KDPが自動でKindle上のルビに変換します。Word上では《》記法のままで表示されます。</p>
+          </div>
+          <div>
+            <span className="text-neon-cyan font-bold">EPUB（Kindle Previewer確認用）</span>
+            <p className="mt-0.5"><code className="text-foreground bg-secondary px-1 rounded">｜漢字《かな》</code> を <code className="text-foreground bg-secondary px-1 rounded">&lt;ruby&gt;&lt;rt&gt;</code> タグに変換します。Previewerでルビの実表示を確認できます。</p>
+            <div className="mt-1.5 inline-flex items-center gap-2 px-2.5 py-1.5 rounded" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(0,245,255,0.2)' }}>
+              <span className="text-[10px] text-muted-foreground">表示例：</span>
+              <span className="text-sm text-foreground" style={{ fontFamily: 'serif', lineHeight: 2.2 }}>
+                <ruby>天律<rt style={{ fontSize: '0.6em', color: '#aaaaaa' }}>てんりつ</rt></ruby>の<ruby>加護<rt style={{ fontSize: '0.6em', color: '#aaaaaa' }}>かご</rt></ruby>も、今夜は薄い。
+              </span>
+            </div>
+          </div>
+        </div>
+        <p className="text-neon-amber">⚠️ どちらもKDP登録前にKindle Previewerで崩れ・ルビ・リンクを確認してください。</p>
+      </div>
+
+      {/* ルビ付与方式選択 */}
       <div className="mb-4 p-3 bg-secondary/50 rounded-lg border border-border">
         <p className="text-xs font-bold mb-2 text-foreground">ルビの付与方法</p>
         <div className="space-y-1.5">
@@ -348,7 +410,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
       <div className="mt-3">
         <button onClick={() => setShowDict(v => !v)} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-neon-cyan transition-colors">
           <BookOpen className="w-3.5 h-3.5" />
-          固有名詞辞書（{Object.keys(dict).length}件）
+          ルビ登録ワード（{Object.keys(dict).length}件）
           {showDict ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
         </button>
         <AnimatePresence>
@@ -419,7 +481,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
                           <button
                               onClick={() => handleRemoveDictEntry(base)}
                               className="h-6 px-2 rounded border border-neon-red/30 text-[10px] text-neon-red hover:bg-neon-red/10 transition-colors"
-                              aria-label={`${base}を固有名詞辞書から削除`}
+                              aria-label={`${base}をルビ登録ワードから削除`}
                           >
                               削除
                           </button>
@@ -443,7 +505,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
               <div className="bg-neon-amber/5 border border-neon-amber/30 rounded-lg p-3">
                 <button onClick={() => setShowNeedsCheck(v => !v)} className="flex items-center gap-2 w-full">
                   <AlertTriangle className="w-4 h-4 text-neon-amber" />
-                  <span className="text-xs font-bold text-neon-amber">固有名詞・要確認（{needsCheckTokens.length}件）</span>
+                  <span className="text-xs font-bold text-neon-amber">ルビ要確認（{needsCheckTokens.length}件）</span>
                   {showNeedsCheck ? <ChevronUp className="w-3.5 h-3.5 text-neon-amber ml-auto" /> : <ChevronDown className="w-3.5 h-3.5 text-neon-amber ml-auto" />}
                 </button>
                 <AnimatePresence>
@@ -557,6 +619,24 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
               </Button>
             </div>
 
+            {/* DOCX / EPUB ルビの扱いについて */}
+            <div className="rounded-lg p-3 space-y-2 text-[11px]" style={{ background: 'rgba(0,245,255,0.04)', border: '1px solid rgba(0,245,255,0.2)' }}>
+              <p className="font-bold text-neon-cyan">📌 形式別ルビの扱いと注意点</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[10px] text-muted-foreground">
+                <div className="space-y-1">
+                  <p className="text-neon-pink font-bold text-[11px]">DOCX（KDP直接入稿向け）</p>
+                  <p>ルビは <code className="text-foreground bg-secondary px-1 rounded">｜漢字《かな》</code> の記法のまま本文に残ります。KDPが自動でKindle上のルビに変換します。</p>
+                  <p className="text-neon-amber">⚠️ Word上では《》記法のままで表示されます（Wordのルビ機能とは別物）。KDP登録後はKindle Previewerで確認してください。</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-neon-cyan font-bold text-[11px]">EPUB（Kindle Previewer確認用）</p>
+                  <p><code className="text-foreground bg-secondary px-1 rounded">｜漢字《かな》</code> を <code className="text-foreground bg-secondary px-1 rounded">&lt;ruby&gt;&lt;rt&gt;かな&lt;/rt&gt;&lt;/ruby&gt;</code> タグに変換します。Previewerでルビの実表示を確認できます。</p>
+                  <p className="text-neon-amber">⚠️ Kindle機種・アプリによってルビ表示が崩れる場合があります。複数デバイスでチェック推奨です。</p>
+                </div>
+              </div>
+              <p className="text-[10px] font-bold text-neon-cyan">✅ 迷ったらDOCX、ルビ表示を実際に確認したい場合はEPUBが目安です。</p>
+            </div>
+
             <div className="bg-secondary/30 rounded-lg p-3 border border-border">
               <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-wide">出力プレビュー（青空文庫風 ｜漢字《かな》 記法）</p>
               <pre className="text-xs text-foreground whitespace-pre-wrap leading-relaxed font-body max-h-40 overflow-y-auto">{outputText}</pre>
@@ -564,6 +644,55 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* 外部AIルビ提案 */}
+      <div className="rounded-lg p-4 space-y-3" style={{ background: 'rgba(0,245,255,0.03)', border: '1px solid rgba(0,245,255,0.2)' }}>
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-3.5 h-3.5 text-neon-cyan" />
+          <p className="text-xs font-bold text-neon-cyan">外部AIでルビを提案（ChatGPT / Gemini / Claude）</p>
+        </div>
+        <p className="text-[10px] text-muted-foreground">外部AIが本文を解析し、固有名詞・難読語に ｜漢字《かな》 形式でルビを付けた全文を出力します。APIキーはページ上部の「AI設定」から設定してください。</p>
+
+        <div className="flex flex-wrap gap-2">
+          {['chatgpt', 'gemini', 'claude'].map(id => (
+            <button key={id} type="button" onClick={() => setAiProvider(id)}
+              className={`text-xs px-3 py-1.5 rounded-md border transition-colors font-bold ${
+                aiProvider === id
+                  ? 'bg-neon-cyan/20 text-neon-cyan border-neon-cyan/50'
+                  : 'text-muted-foreground border-border hover:text-foreground'
+              }`}
+              style={aiProvider !== id ? { background: 'rgba(255,255,255,0.04)' } : {}}
+            >{PROVIDER_LABELS[id]}</button>
+          ))}
+        </div>
+
+        <Button onClick={handleAiRuby} disabled={aiLoading || !isReady}
+          className="w-full h-9 bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 hover:bg-neon-cyan/30 text-xs disabled:opacity-40">
+          {aiLoading
+            ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />提案中...</>
+            : <><Sparkles className="w-3.5 h-3.5 mr-1.5" />{PROVIDER_LABELS[aiProvider]}でルビを提案</>}
+        </Button>
+
+        {aiOutput && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-muted-foreground font-bold">AI提案結果（｜漢字《かな》形式）</p>
+              <button
+                onClick={() => { navigator.clipboard.writeText(aiOutput); toast.success('コピーしました'); }}
+                className="inline-flex items-center gap-1 text-[10px] text-neon-cyan hover:text-neon-pink transition-colors"
+              >
+                <Copy className="w-3 h-3" />コピー
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={aiOutput}
+              className="w-full min-h-[180px] resize-y rounded-lg p-3 text-xs leading-relaxed text-foreground focus:outline-none"
+              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid #2a2a4a' }}
+            />
+          </div>
+        )}
+      </div>
     </NeonCard>
   );
 }

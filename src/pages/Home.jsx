@@ -102,7 +102,7 @@ export default function Home() {
             {activeTab === 'kdp'       && <KdpChecklistTab {...tabProps} />}
             {activeTab === 'category'  && <CategoryCheckTab {...tabProps} />}
             {activeTab === 'promo'     && <PromoChecklistTab {...tabProps} />}
-            {activeTab === 'format'    && <FormatGuideTab />}
+            {activeTab === 'format'    && <FormatGuideTab project={currentProject} />}
           </motion.div>
         </AnimatePresence>
       </main>

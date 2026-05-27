@@ -3,22 +3,27 @@ import { Button } from '@/components/ui/button';
 import { Loader2, CheckCircle, AlertTriangle, Link2 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'sonner';
+import { loadExternalAiSettings, callExternalAi, PROVIDER_LABELS, extractJson } from '../../lib/externalAi';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
-
 const URL_REGEX = /https?:\/\/[^\s。、！？\]）)]+/;
 
 export default function Step1FormatDecision({ sharedText }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [aiProvider, setAiProvider] = useState('internal');
 
   const hasUrl = URL_REGEX.test(sharedText);
   const canAnalyze = sharedText.trim().length >= 50;
 
   const handleAuto = async () => {
     setLoading(true);
-    const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `以下のテキストを分析して、Kindle出版フォーマット（docx か epub）を推奨してください。
+    setResult(null);
+    try {
+      if (aiProvider === 'internal') {
+        const res = await base44.integrations.Core.InvokeLLM({
+          prompt: `以下のテキストを分析して、Kindle出版フォーマット（docx か epub）を推奨してください。
 
 テキスト：
 ${sharedText.slice(0, 2000)}
@@ -27,17 +32,46 @@ ${sharedText.slice(0, 2000)}
 - recommendation: "docx" または "epub"
 - reason: 推奨理由（1〜2文）
 - has_special_layout: 特殊レイアウト（図・表・詩の特殊組版）が必要かどうか（true/false）`,
-      response_json_schema: {
-        type: 'object',
-        properties: {
-          recommendation: { type: 'string' },
-          reason: { type: 'string' },
-          has_special_layout: { type: 'boolean' },
-        },
-      },
-    });
-    setResult(res);
-    setLoading(false);
+          response_json_schema: {
+            type: 'object',
+            properties: {
+              recommendation: { type: 'string' },
+              reason: { type: 'string' },
+              has_special_layout: { type: 'boolean' },
+            },
+          },
+        });
+        setResult(res);
+      } else {
+        const settings = loadExternalAiSettings();
+        const apiKey = aiProvider === 'chatgpt' ? settings.openaiApiKey
+                     : aiProvider === 'gemini'  ? settings.geminiApiKey
+                     : settings.claudeApiKey;
+        if (!apiKey?.trim()) {
+          toast.error(`${PROVIDER_LABELS[aiProvider]}のAPIキーをページ上部のAI設定から入力・保存してください`);
+          setLoading(false);
+          return;
+        }
+        const prompt = `以下のテキストを分析して、Kindle出版フォーマット（docx か epub）を推奨してください。
+次のJSONだけを返してください（説明不要）:
+{"recommendation": "docx", "reason": "推奨理由を1〜2文で", "has_special_layout": false}
+recommendationは "docx" または "epub" のどちらか。
+
+テキスト：
+${sharedText.slice(0, 2000)}`;
+        const text = await callExternalAi(aiProvider, settings, prompt);
+        const parsed = extractJson(text);
+        if (parsed) {
+          setResult(parsed);
+        } else {
+          toast.error('AIの出力をJSON形式で読み取れませんでした');
+        }
+      }
+    } catch (err) {
+      toast.error('エラーが発生しました：' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -65,8 +99,36 @@ ${sharedText.slice(0, 2000)}
       ) : (
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">本文に外部URLリンク（楽曲リンク等）が含まれていません。AIで自動判定することもできます。</p>
+
+          {/* AI選択 */}
+          <div className="space-y-1.5">
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">使用するAI</p>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: 'internal', label: 'このアプリのAI', sub: 'APIキー不要' },
+                { id: 'chatgpt',  label: 'ChatGPT',        sub: 'OpenAI API' },
+                { id: 'gemini',   label: 'Gemini',          sub: 'Google API' },
+                { id: 'claude',   label: 'Claude',          sub: 'Anthropic API' },
+              ].map(({ id, label, sub }) => (
+                <button key={id} type="button" onClick={() => setAiProvider(id)}
+                  className={`text-xs px-3 py-1.5 rounded-md border transition-colors text-left ${
+                    aiProvider === id
+                      ? 'bg-neon-cyan/20 text-neon-cyan border-neon-cyan/50 font-bold'
+                      : 'text-muted-foreground border-border hover:text-foreground font-medium'
+                  }`}
+                  style={aiProvider !== id ? { background: 'rgba(255,255,255,0.04)' } : {}}
+                >
+                  {label}
+                  <span className="block text-[9px] opacity-60 font-normal">{sub}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <Button onClick={handleAuto} disabled={loading || !canAnalyze} className="w-full h-9 text-xs bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 hover:bg-neon-cyan/30 disabled:opacity-40">
-            {loading ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />判定中...</> : 'AIで自動判定する'}
+            {loading
+              ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />判定中...</>
+              : `${aiProvider === 'internal' ? 'AI' : PROVIDER_LABELS[aiProvider]}で自動判定する`}
           </Button>
           {!canAnalyze && <p className="text-[10px] text-muted-foreground">上部に本文を入力してください</p>}
         </div>
