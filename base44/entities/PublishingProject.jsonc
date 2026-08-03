@@ -70,6 +70,11 @@
       "type": "string",
       "description": "SNS \u6295\u7a3f\u6587\u30e1\u30e2\u4e00\u89a7\uff08JSON\uff09"
     },
+    "post_publication_notes": {
+      "type": "string",
+      "description": "\u51fa\u7248\u5f8c\u306e\u5c55\u958b\u30e1\u30e2",
+      "default": ""
+    },
     "manuscript": {
       "type": "string",
       "description": "\u539f\u7a3f\u672c\u6587"

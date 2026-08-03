@@ -37,6 +37,7 @@ export const PROJECT_FIELD_ALLOWLIST = Object.freeze([
   'sns_memo1_title',
   'sns_memo2_title',
   'promotion_notes',
+  'post_publication_notes',
   'manuscript',
   'critique_history',
   'cover_image_url',

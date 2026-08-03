@@ -100,6 +100,7 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
       id: 'p1',
       name: '一般向けガイド',
       manuscript: '本文',
+      post_publication_notes: 'オーディオブック化と続編を検討',
       categories: JSON.stringify([{ value: 'ノンフィクション', custom: '', memo: '', book_type: '実用・ビジネス', theme: '仕事術' }]),
       aplus_image_url: 'local-image:img1',
       kdp_meta: JSON.stringify({ aplus: { version: 1, modules: [{ images: [{ image_url: 'local-image:img1' }] }] } }),
@@ -123,6 +124,7 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
 
   assert.equal(result.appVersion, '1.2.3');
   assert.equal(result.data.projects[0].manuscript, '本文');
+  assert.equal(result.data.projects[0].post_publication_notes, 'オーディオブック化と続編を検討');
   assert.equal(JSON.parse(result.data.projects[0].categories)[0].theme, '仕事術');
   assert.equal(result.data.projects[0].aplus_image_url, 'local-image:img1');
   assert.equal(JSON.parse(result.data.projects[0].kdp_meta).aplus.version, 1);
@@ -162,6 +164,7 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
         name: '既存名',
         author_name: '既存著者',
         strategy_memo: '残す',
+        post_publication_notes: '現在の出版後メモ',
         kdp_meta: JSON.stringify({ description: '現在の紹介文', aplus: { version: 1, modules: [{ id: 'keep' }] } }),
       },
       { id: 'p2', name: '現在だけ' },
@@ -194,6 +197,7 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
   assert.equal(plan.projects.length, 3);
   assert.equal(p1.name, '復元名');
   assert.equal(p1.strategy_memo, '残す');
+  assert.equal(p1.post_publication_notes, '現在の出版後メモ');
   assert.equal(JSON.parse(p1.kdp_meta).description, '復元した紹介文');
   assert.equal(JSON.parse(p1.kdp_meta).aplus.modules[0].id, 'keep');
   assert.equal(plan.formatGuideStates.find(state => state.projectId === 'p1').value.sharedText, '復元本文');
@@ -203,6 +207,53 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
     { 現在語: 'げんざいご', 復元語: 'ふくげんご' },
   );
   assert.equal(plan.images.length, 3);
+});
+
+test('出版後の展開メモはバックアップのmerge・replace・旧版互換で保持される', async () => {
+  const oldBackup = backup({ projects: [{ id: 'p1', name: '旧版の本' }] });
+  assert.equal(
+    validateDataBackup(oldBackup).data.projects[0].post_publication_notes,
+    undefined,
+  );
+
+  const current = backup({
+    projects: [{
+      id: 'p1',
+      name: '現在の本',
+      post_publication_notes: '読者の声を集めて続編へ反映',
+    }],
+  });
+  const mergedWithOld = buildDataRestorePlan(current, oldBackup, 'merge');
+  assert.equal(
+    mergedWithOld.projects[0].post_publication_notes,
+    '読者の声を集めて続編へ反映',
+  );
+
+  const incoming = backup({
+    projects: [{
+      id: 'p1',
+      name: '復元後の本',
+      post_publication_notes: '紙書籍・音声・講座へ展開',
+    }],
+  });
+  const merged = buildDataRestorePlan(current, incoming, 'merge');
+  assert.equal(merged.projects[0].post_publication_notes, '紙書籍・音声・講座へ展開');
+
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{ id: 'old', name: '置換前の本' }]),
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  await importDataBackup(incoming, {
+    mode: 'replace', storage, imageStore, now,
+  });
+  const roundTrip = await createDataBackup({ storage, imageStore, now });
+  assert.equal(
+    roundTrip.data.projects[0].post_publication_notes,
+    '紙書籍・音声・講座へ展開',
+  );
 });
 
 test('merge元にもA+データがある場合だけ入力側のA+内容へ置き換える', () => {
