@@ -195,7 +195,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen relative overflow-hidden" style={{ background: '#0d0d1a' }}>
+    <div className="min-h-screen relative overflow-x-clip" style={{ background: '#0d0d1a' }}>
       <RainEffect />
       <div className="fixed top-0 left-1/4 w-96 h-96 rounded-full blur-3xl pointer-events-none" style={{ background: 'rgba(255,45,120,0.04)' }} />
       <div className="fixed bottom-0 right-1/4 w-96 h-96 rounded-full blur-3xl pointer-events-none" style={{ background: 'rgba(0,245,255,0.04)' }} />
@@ -251,9 +251,13 @@ export default function Home() {
       <AppUpdateBanner beforeReload={flushPendingSaves} />
 
       {/* タブナビゲーション */}
-      <div className="sticky top-0 z-30 border-b" style={{ background: 'rgba(13,13,26,0.97)', borderColor: '#2a2a4a', backdropFilter: 'blur(8px)' }}>
+      <nav
+        aria-label="メイン機能"
+        className="sticky top-0 z-30 border-b shadow-[0_5px_14px_rgba(0,0,0,0.28)]"
+        style={{ background: 'rgba(13,13,26,0.97)', borderColor: '#2a2a4a', backdropFilter: 'blur(8px)' }}
+      >
         <div className="max-w-7xl mx-auto px-2">
-          <div className="flex gap-0.5 py-2 overflow-x-auto scrollbar-hide">
+          <div className="flex gap-0.5 py-2 overflow-x-auto overscroll-x-contain scrollbar-hide">
             {TABS.map(tab => (
               <button
                 key={tab.id}
@@ -261,7 +265,7 @@ export default function Home() {
                 onClick={() => handleTabChange(tab.id)}
                 disabled={switchingTab}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
-                className={`flex-shrink-0 px-3 md:px-4 py-2 text-xs md:text-sm font-bold rounded-lg transition-all duration-200 whitespace-nowrap ${
+                className={`flex-shrink-0 px-3 md:px-4 py-2 text-xs md:text-sm font-bold rounded-lg transition-all duration-200 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 ${
                   activeTab === tab.id
                     ? 'text-neon-pink neon-pink-glow'
                     : 'text-muted-foreground hover:text-foreground'
@@ -276,7 +280,7 @@ export default function Home() {
             ))}
           </div>
         </div>
-      </div>
+      </nav>
 
       {/* コンテンツ */}
       <main className="relative z-10 max-w-7xl mx-auto px-2 py-6 pb-16">
