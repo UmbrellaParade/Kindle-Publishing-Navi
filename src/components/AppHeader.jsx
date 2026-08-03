@@ -10,7 +10,6 @@ import { buildInitialChecklistData } from '@/lib/checklistTasks';
 import { toast } from 'sonner';
 import DataBackupDialog from '@/components/DataBackupDialog';
 import { flushPendingSaves } from '@/lib/saveCoordinator';
-import { removeUnreferencedLocalImages } from '@/lib/localImageStore';
 
 export default function AppHeader({ projects, currentProject, onSelectProject, onRefresh, saving, saved }) {
   const [creating, setCreating] = useState(false);
@@ -35,7 +34,7 @@ export default function AppHeader({ projects, currentProject, onSelectProject, o
 
   const handleDelete = async (proj, e) => {
     e.stopPropagation();
-    if (!window.confirm(`「${proj.name}」を削除しますか？\n原稿調整データ・ルビ辞書・このプロジェクトだけが使う保存画像も削除します。元に戻せないため、必要なら先に「データ管理」からバックアップしてください。`)) return;
+    if (!window.confirm(`「${proj.name}」を削除しますか？\nプロジェクトと原稿調整データ・ルビ辞書は元に戻せません。保存画像は他の本で使っている可能性があるためブラウザ内に残します。必要なら先に「データ管理」からバックアップしてください。`)) return;
 
     try {
       await flushPendingSaves();
@@ -44,9 +43,6 @@ export default function AppHeader({ projects, currentProject, onSelectProject, o
       try {
         localStorage.removeItem(`format_guide_state_${proj.id}`);
         localStorage.removeItem(`ruby_custom_dict_${proj.id}`);
-        await removeUnreferencedLocalImages(
-          list.flatMap(project => [project.cover_image_url, project.aplus_image_url]),
-        );
       } catch (cleanupError) {
         toast.warning(cleanupError?.message || 'プロジェクトは削除しましたが、関連ファイルの整理を完了できませんでした');
       }

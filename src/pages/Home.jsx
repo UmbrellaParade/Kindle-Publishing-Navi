@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import RainEffect from '../components/RainEffect';
 import AppHeader from '../components/AppHeader';
 import PublishingChecklistTab from '../components/tabs/PublishingChecklistTab';
 import KdpChecklistTab from '../components/tabs/KdpChecklistTab';
 import CategoryCheckTab from '../components/tabs/CategoryCheckTab';
 import PromoChecklistTab from '../components/tabs/PromoChecklistTab';
+import AplusContentTab from '../components/tabs/AplusContentTab';
 import FormatGuideTab from '../components/tabs/FormatGuideTab';
 import ReleaseScheduleCard from '../components/ReleaseScheduleCard';
 import AppUpdateBanner from '../components/AppUpdateBanner';
@@ -30,6 +31,7 @@ const TABS = [
   { id: 'kdp',       label: 'KDP登録進捗' },
   { id: 'category',  label: 'カテゴリーチェック' },
   { id: 'promo',     label: 'プロモーション進捗' },
+  { id: 'aplus',     label: 'A+コンテンツ' },
   { id: 'format',    label: '原稿Kindle調整ツール' },
 ];
 
@@ -42,6 +44,7 @@ export default function Home() {
   const [switchingTab, setSwitchingTab] = useState(false);
   const [saveErrorMessage, setSaveErrorMessage] = useState('');
   const [retryingSaves, setRetryingSaves] = useState(false);
+  const tabButtonRefs = useRef({});
 
   const loadProjects = async () => {
     const list = await base44.entities.PublishingProject.list('-created_date', 50);
@@ -175,7 +178,21 @@ export default function Home() {
     }
   };
 
-  const tabProps = { project: currentProject, onProjectUpdate: handleProjectUpdate, saving, saved };
+  useEffect(() => {
+    tabButtonRefs.current[activeTab]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'center',
+    });
+  }, [activeTab]);
+
+  const tabProps = {
+    project: currentProject,
+    onProjectUpdate: handleProjectUpdate,
+    onNavigateTab: handleTabChange,
+    saving,
+    saved,
+  };
 
   return (
     <div className="min-h-screen relative overflow-hidden" style={{ background: '#0d0d1a' }}>
@@ -240,8 +257,10 @@ export default function Home() {
             {TABS.map(tab => (
               <button
                 key={tab.id}
+                ref={element => { tabButtonRefs.current[tab.id] = element; }}
                 onClick={() => handleTabChange(tab.id)}
                 disabled={switchingTab}
+                aria-current={activeTab === tab.id ? 'page' : undefined}
                 className={`flex-shrink-0 px-3 md:px-4 py-2 text-xs md:text-sm font-bold rounded-lg transition-all duration-200 whitespace-nowrap ${
                   activeTab === tab.id
                     ? 'text-neon-pink neon-pink-glow'
@@ -273,6 +292,7 @@ export default function Home() {
             {activeTab === 'kdp'       && <KdpChecklistTab {...tabProps} />}
             {activeTab === 'category'  && <CategoryCheckTab {...tabProps} />}
             {activeTab === 'promo'     && <PromoChecklistTab {...tabProps} />}
+            {activeTab === 'aplus'     && <AplusContentTab {...tabProps} />}
             {activeTab === 'format'    && <FormatGuideTab project={currentProject} />}
           </motion.div>
         </AnimatePresence>

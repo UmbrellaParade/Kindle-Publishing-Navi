@@ -81,6 +81,8 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
       name: '一般向けガイド',
       manuscript: '本文',
       categories: JSON.stringify([{ value: 'ノンフィクション', custom: '', memo: '', book_type: '実用・ビジネス', theme: '仕事術' }]),
+      aplus_image_url: 'local-image:img1',
+      kdp_meta: JSON.stringify({ aplus: { version: 1, modules: [{ images: [{ image_url: 'local-image:img1' }] }] } }),
       token: 'project-secret',
       apiKey: 'project-api-secret',
     }]),
@@ -102,6 +104,8 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
   assert.equal(result.appVersion, '1.2.3');
   assert.equal(result.data.projects[0].manuscript, '本文');
   assert.equal(JSON.parse(result.data.projects[0].categories)[0].theme, '仕事術');
+  assert.equal(result.data.projects[0].aplus_image_url, 'local-image:img1');
+  assert.equal(JSON.parse(result.data.projects[0].kdp_meta).aplus.version, 1);
   assert.equal(result.data.selectedProjectId, 'p1');
   assert.equal(result.data.formatGuideStates[0].value.sharedText, '整形中の本文');
   assert.equal(result.data.projectRubyDictionaries[0].value.一般, 'いっぱん');
@@ -133,7 +137,13 @@ test('不明な構造や不正な画像をimport前に拒否する', () => {
 test('mergeでは既存を残し、同じIDだけ入力側の項目で更新する', () => {
   const current = backup({
     projects: [
-      { id: 'p1', name: '既存名', author_name: '既存著者', strategy_memo: '残す' },
+      {
+        id: 'p1',
+        name: '既存名',
+        author_name: '既存著者',
+        strategy_memo: '残す',
+        kdp_meta: JSON.stringify({ description: '現在の紹介文', aplus: { version: 1, modules: [{ id: 'keep' }] } }),
+      },
       { id: 'p2', name: '現在だけ' },
     ],
     formatGuideStates: [{ projectId: 'p1', value: { sharedText: '現在本文' } }],
@@ -143,7 +153,7 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
   });
   const incoming = backup({
     projects: [
-      { id: 'p1', name: '復元名', author_name: '復元著者' },
+      { id: 'p1', name: '復元名', author_name: '復元著者', kdp_meta: JSON.stringify({ description: '復元した紹介文' }) },
       { id: 'p3', name: '追加本' },
     ],
     formatGuideStates: [
@@ -164,6 +174,8 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
   assert.equal(plan.projects.length, 3);
   assert.equal(p1.name, '復元名');
   assert.equal(p1.strategy_memo, '残す');
+  assert.equal(JSON.parse(p1.kdp_meta).description, '復元した紹介文');
+  assert.equal(JSON.parse(p1.kdp_meta).aplus.modules[0].id, 'keep');
   assert.equal(plan.formatGuideStates.find(state => state.projectId === 'p1').value.sharedText, '復元本文');
   assert.deepEqual(plan.rubyCustomDict.__hiddenDefaults, ['既定A', '既定B']);
   assert.deepEqual(
@@ -171,6 +183,19 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
     { 現在語: 'げんざいご', 復元語: 'ふくげんご' },
   );
   assert.equal(plan.images.length, 3);
+});
+
+test('merge元にもA+データがある場合だけ入力側のA+内容へ置き換える', () => {
+  const current = backup({
+    projects: [{ id: 'p1', name: '本', kdp_meta: JSON.stringify({ aplus: { version: 1, notes: '現在' } }) }],
+  });
+  const incoming = backup({
+    projects: [{ id: 'p1', name: '本', kdp_meta: JSON.stringify({ aplus: { version: 1, notes: '復元' } }) }],
+  });
+
+  const plan = buildDataRestorePlan(current, incoming, 'merge');
+
+  assert.equal(JSON.parse(plan.projects[0].kdp_meta).aplus.notes, '復元');
 });
 
 test('import成功時に復元直前スナップショットを返す', async () => {
