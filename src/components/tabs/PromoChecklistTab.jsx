@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Bot, Check, ChevronDown, ChevronUp, Copy, ExternalLink, Link2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, Link2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { scheduleCoordinatedSave } from '@/lib/saveCoordinator';
@@ -13,7 +13,7 @@ import {
   updatePromotionDocumentSettings,
   validatePromotionDocumentUrl,
 } from '@/lib/promotionDocuments';
-import { buildPromotionCodexPrompt } from '@/lib/promotionCodexPrompt';
+import { getPromotionPostCopyText } from '@/lib/promotionPostCopy';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const INPUT_STYLE = { background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' };
@@ -25,6 +25,22 @@ const SNS_COLORS = {
   'TikTok': 'bg-red-500/20 text-red-400 border-red-500/30',
   'その他': 'bg-secondary text-muted-foreground border-border',
 };
+
+async function copyTextToClipboard({ text, setCopied, emptyMessage, successMessage }) {
+  if (!text.trim()) {
+    toast.error(emptyMessage);
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+    toast.success(successMessage);
+  } catch {
+    toast.error('コピーできませんでした。ブラウザのクリップボード許可を確認してください');
+  }
+}
 
 function DocumentLinkControls({ sectionId, url, collapsed, onUrlChange, onToggleCollapse }) {
   const validation = validatePromotionDocumentUrl(url);
@@ -98,48 +114,21 @@ function SnsPostColumn({
   documentSettings,
   onDocumentUrlChange,
   onToggleCollapse,
-  bookTitle,
-  authorName,
-  bookDescription,
-  releaseTargetDate,
-  promotionGoal,
-  strategyMemo,
 }) {
   const [copied, setCopied] = useState(false);
-  const [codexCopied, setCodexCopied] = useState(false);
+  useEffect(() => setCopied(false), [data.body]);
   const c = color === 'cyan'
     ? { border: 'border-neon-cyan/30', text: 'text-neon-cyan', bg: 'rgba(0,245,255,0.04)', btn: 'bg-neon-cyan/20 text-neon-cyan border-neon-cyan/40 hover:bg-neon-cyan/30' }
     : { border: 'border-neon-amber/30', text: 'text-neon-amber', bg: 'rgba(255,179,0,0.04)', btn: 'bg-neon-amber/20 text-neon-amber border-neon-amber/40 hover:bg-neon-amber/30' };
 
-  const copyToClipboard = async (text, onSuccess, successMessage) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      onSuccess(true);
-      setTimeout(() => onSuccess(false), 2000);
-      toast.success(successMessage);
-    } catch {
-      toast.error('コピーできませんでした。ブラウザのクリップボード許可を確認してください');
-    }
-  };
-
   const handleCopy = () => {
-    copyToClipboard(data.body || '', setCopied, '投稿文をコピーしました');
-  };
-
-  const handleCodexPromptCopy = () => {
-    const prompt = buildPromotionCodexPrompt({
-      bookTitle,
-      authorName,
-      bookDescription,
-      releaseTargetDate,
-      promotionGoal,
-      strategyMemo,
-      selectedSocialNetworks: data.tags,
-      draftTitle: data.subtitle,
-      draftBody: data.body,
-      memoLabel: title.replace(/^\S+\s*/, ''),
+    const postText = getPromotionPostCopyText(data);
+    copyTextToClipboard({
+      text: postText,
+      setCopied,
+      emptyMessage: 'コピーする投稿文を入力してください',
+      successMessage: '投稿文だけをコピーしました',
     });
-    copyToClipboard(prompt, setCodexCopied, 'Codexへの相談文をコピーしました');
   };
 
   return (
@@ -175,23 +164,17 @@ function SnsPostColumn({
             placeholder="投稿文を入力..."
             className="flex-1 text-xs rounded px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-none resize-none leading-relaxed"
             style={{ ...INPUT_STYLE, minHeight: '450px' }} />
-          <div className="mt-auto space-y-2">
-            <div className="rounded-lg border border-violet-400/20 bg-violet-500/5 p-2.5">
-              <p className="mb-2 text-[10px] leading-relaxed text-muted-foreground">
-                書籍情報・発売目標日・出版目標・戦略メモ・選択SNS・現在の下書きを、Codexへ相談しやすい形にまとめます。このボタンでは外部送信しません。
-              </p>
-              <Button
-                size="sm"
-                type="button"
-                onClick={handleCodexPromptCopy}
-                className="h-8 w-full gap-1.5 border border-violet-400/40 bg-violet-500/15 text-xs text-violet-200 hover:bg-violet-500/25"
-              >
-                {codexCopied
-                  ? <><Check className="h-3.5 w-3.5" />相談文をコピー済み</>
-                  : <><Bot className="h-3.5 w-3.5" />Codex相談文をコピー</>}
-              </Button>
-            </div>
-            <Button size="sm" type="button" onClick={handleCopy} className={`h-7 w-full text-xs gap-1.5 border ${c.btn}`}>
+          <div className="mt-auto space-y-1.5">
+            <p className="text-[10px] leading-relaxed text-muted-foreground">
+              タイトルや選択SNSを含めず、入力した投稿文だけをコピーします。
+            </p>
+            <Button
+              size="sm"
+              type="button"
+              onClick={handleCopy}
+              aria-label={`${title}の投稿文だけコピー`}
+              className={`h-9 w-full text-xs gap-1.5 border ${c.btn}`}
+            >
               {copied ? <><Check className="w-3 h-3" />コピー済み</> : <><Copy className="w-3 h-3" />投稿文だけコピー</>}
             </Button>
           </div>
@@ -204,6 +187,7 @@ function SnsPostColumn({
 export default function PromoChecklistTab({ project, onProjectUpdate }) {
   const [goal, setGoal] = useState('');
   const [strategyMemo, setStrategyMemo] = useState('');
+  const [strategyCopied, setStrategyCopied] = useState(false);
   const [snsPost1, setSnsPost1] = useState({ subtitle: '', tags: [], body: '' });
   const [snsPost2, setSnsPost2] = useState({ subtitle: '', tags: [], body: '' });
   const [documentSettings, setDocumentSettings] = useState(createPromotionDocumentSettings);
@@ -212,6 +196,8 @@ export default function PromoChecklistTab({ project, onProjectUpdate }) {
   const documentRevisionRef = useRef(0);
   const documentSaveRevisionsRef = useRef(new Map());
   const pendingDocumentSettingsRef = useRef(new Map());
+  useEffect(() => setStrategyCopied(false), [project?.id, strategyMemo]);
+
   // プロジェクト選択時にデータを読み込み
   useEffect(() => {
     if (!project) {
@@ -345,6 +331,26 @@ export default function PromoChecklistTab({ project, onProjectUpdate }) {
                 placeholder="戦略メモ、Gem の分析結果などをここに貼り付けてください..."
                 className="flex-1 text-xs rounded px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-none resize-none leading-relaxed"
                 style={{ ...INPUT_STYLE, minHeight: '500px' }} />
+              <div className="mt-auto space-y-1.5">
+                <p className="text-[10px] leading-relaxed text-muted-foreground">
+                  入力した戦略メモだけをコピーします。
+                </p>
+                <Button
+                  size="sm"
+                  type="button"
+                  onClick={() => copyTextToClipboard({
+                    text: strategyMemo,
+                    setCopied: setStrategyCopied,
+                    emptyMessage: 'コピーする戦略メモを入力してください',
+                    successMessage: '戦略メモだけをコピーしました',
+                  })}
+                  className="h-9 w-full gap-1.5 border border-neon-pink/40 bg-neon-pink/15 text-xs text-neon-pink hover:bg-neon-pink/25"
+                >
+                  {strategyCopied
+                    ? <><Check className="h-3.5 w-3.5" />コピー済み</>
+                    : <><Copy className="h-3.5 w-3.5" />戦略メモだけコピー</>}
+                </Button>
+              </div>
             </>
           )}
         </div>
@@ -361,12 +367,6 @@ export default function PromoChecklistTab({ project, onProjectUpdate }) {
           onToggleCollapse={() => updateDocumentSettings('sns1', {
             collapsed: !documentSettings.documents.sns1.collapsed,
           })}
-          bookTitle={project.book_title || project.name || ''}
-          authorName={project.author_name || ''}
-          bookDescription={project.kdp_description || ''}
-          releaseTargetDate={project.release_target_date || project.release_date || ''}
-          promotionGoal={goal}
-          strategyMemo={strategyMemo}
         />
 
         {/* 3 列：SNS 投稿文 2 */}
@@ -381,12 +381,6 @@ export default function PromoChecklistTab({ project, onProjectUpdate }) {
           onToggleCollapse={() => updateDocumentSettings('sns2', {
             collapsed: !documentSettings.documents.sns2.collapsed,
           })}
-          bookTitle={project.book_title || project.name || ''}
-          authorName={project.author_name || ''}
-          bookDescription={project.kdp_description || ''}
-          releaseTargetDate={project.release_target_date || project.release_date || ''}
-          promotionGoal={goal}
-          strategyMemo={strategyMemo}
         />
       </div>
     </div>
