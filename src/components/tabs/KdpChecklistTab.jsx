@@ -4,12 +4,16 @@ import { ExternalLink, Zap, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { readChecklistEnvelope, writeChecklistEnvelope } from '@/lib/releaseSchedule';
+import { KDP_PHASES } from '@/lib/checklistTasks';
 import { scheduleCoordinatedSave } from '@/lib/saveCoordinator';
 import { DEFAULT_RELEASE_METHOD, getReleaseMethod } from '@/lib/releaseMethods';
 import { mutatePublishingProject } from '@/lib/projectMutation';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const INPUT_STYLE = { background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' };
+const KDP_TASK_DEFAULTS = Object.fromEntries(
+  KDP_PHASES.flatMap(phase => phase.tasks.map(task => [task.id, task.note_default || ''])),
+);
 
 // KDP 専用タスク定義（カスタムフィールドあり）
 const KDP_TASKS = [
@@ -18,7 +22,6 @@ const KDP_TASKS = [
     title: 'KDP アカウントの本人情報・税務・支払設定と、配信方法を確認する',
     tool: 'KDP アカウント / 配信日オプション',
     inlineFields: [],
-    note_default: '初出版の場合は早めに準備。発売日を指定する電子書籍は予約注文を確認',
   },
   {
     id: 't41', important: false,
@@ -61,12 +64,12 @@ const KDP_TASKS = [
     inlineGrid: true,
   },
   { id: 't44', important: false, title: '原稿と表紙ファイルをアップロードする', tool: 'KDP 編集画面', inlineFields: [] },
-  { id: 't45', important: false, title: 'AI 生成コンテンツを使用した場合は、KDP の質問に正確に回答する', tool: 'KDP 編集画面', inlineFields: [], note_default: '使用ツールと該当範囲を確認。未使用なら画面の案内に従う' },
+  { id: 't45', important: false, title: 'AI 生成コンテンツを使用した場合は、KDP の質問に正確に回答する', tool: 'KDP 編集画面', inlineFields: [] },
   { id: 't46', important: false, title: 'プレビューアーで表示崩れがないか確認', tool: 'KDP 編集画面', inlineFields: [] },
-  { id: 't47', important: false, title: 'KDP セレクトへ登録するか判断する（任意）', tool: 'KDP 価格設定画面', inlineFields: [], note_default: '90 日間の電子書籍独占など、最新の参加条件を確認' },
-  { id: 't48', important: false, title: '35% / 70% の適用条件を確認し、ロイヤリティと価格を設定する', tool: 'KDP 価格設定画面', inlineFields: [], note_default: '価格帯・販売地域・KDP セレクト等の最新条件を確認' },
-  { id: 't49', important: true, title: '内容を最終確認し、選んだ配信方法に合わせて審査へ提出する', tool: 'KDP', inlineFields: [], note_default: '予約注文は「予約注文用に提出」、今すぐ配信は「Kindle 本を出版」。期限より余裕を持って提出' },
-];
+  { id: 't47', important: false, title: 'KDP セレクトへ登録するか判断する（任意）', tool: 'KDP 価格設定画面', inlineFields: [] },
+  { id: 't48', important: false, title: '35% / 70% の適用条件を確認し、ロイヤリティと価格を設定する', tool: 'KDP 価格設定画面', inlineFields: [] },
+  { id: 't49', important: true, title: '内容を最終確認し、選んだ配信方法に合わせて審査へ提出する', tool: 'KDP', inlineFields: [] },
+].map(task => ({ ...task, note_default: KDP_TASK_DEFAULTS[task.id] || '' }));
 
 const ALL_KDP_IDS = KDP_TASKS.map(t => t.id);
 
@@ -107,6 +110,11 @@ function KdpTaskRow({ task, state, onChange, fieldData, onFieldChange }) {
               </span>
             )}
           </div>
+          {task.note_default && (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+              <span className="font-bold text-neon-amber">手順のポイント：</span>{task.note_default}
+            </p>
+          )}
         </div>
 
         {/* インラインフィールド */}

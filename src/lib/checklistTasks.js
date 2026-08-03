@@ -29,7 +29,7 @@ export const CREATION_PHASES = [
     tasks: [
       { id: 't21', title: '原稿をGemに読み込ませ、コンセプト（誰に・何を・どうなる）を伝える', tool: 'Kindle辛口論評Gem', note_default: '', important: false },
       { id: 't22', title: '「価格の制限要因」と「判定」を確認し、修正か進行か決断する', tool: 'Kindle辛口論評Gem', note_default: '過大評価なら修正', important: false },
-      { id: 't23', title: '読者・内容・競合を踏まえて希望小売価格を決定する', tool: 'Kindle辛口論評Gem / KDP最新要件', note_default: '固定の正解はありません。ロイヤリティ条件も確認', important: false },
+      { id: 't23', title: '読者・内容・競合を踏まえて希望小売価格を決定する', tool: 'Kindle辛口論評Gem / KDP最新要件', note_default: '参考価格帯の一例は499〜800円。固定の正解ではないため、読者・内容・競合とKDPの最新条件を確認', important: false },
     ],
   },
   {
@@ -60,9 +60,9 @@ export const KDP_PHASES = [
       { id: 't44', title: '原稿と表紙ファイルをアップロードする', tool: 'KDP編集画面', note_default: '', important: false },
       { id: 't45', title: 'AI生成コンテンツを使用した場合は、KDPの質問に正確に回答する', tool: 'KDP編集画面', note_default: '使用ツールと該当範囲を確認。未使用なら画面の案内に従う', important: false },
       { id: 't46', title: 'プレビューアーで表示崩れがないか確認', tool: 'KDP編集画面', note_default: '', important: false },
-      { id: 't47', title: 'KDPセレクトへ登録するか判断する（任意）', tool: 'KDP価格設定画面', note_default: '90日間の電子書籍独占など、最新の参加条件を確認', important: false },
+      { id: 't47', title: 'KDPセレクトへ登録するか判断する（任意）', tool: 'KDP価格設定画面', note_default: 'KDPセレクトは必須ではありません。90日間の電子書籍独占など最新条件を確認し、販売方針に合う場合に選ぶ', important: false },
       { id: 't48', title: '35% / 70%の適用条件を確認し、ロイヤリティと価格を設定する', tool: 'KDP価格設定画面', note_default: '価格帯・販売地域・KDPセレクト等の最新条件を確認', important: false },
-      { id: 't49', title: '内容を最終確認し、選んだ配信方法に合わせて審査へ提出する', tool: 'KDP', note_default: '予約注文は「予約注文用に提出」、今すぐ配信は「Kindle本を出版」。期限より余裕を持って提出', important: true },
+      { id: 't49', title: '内容を最終確認し、選んだ配信方法に合わせて審査へ提出する', tool: 'KDP', note_default: '予約注文は「予約注文用に提出」、今すぐ配信は「Kindle本を出版」。審査・反映時間は変動するため、期限より余裕を持って提出', important: true },
     ],
   },
 ];
@@ -74,11 +74,11 @@ export const PROMO_PHASES = [
     label: 'フェーズ5：プロモーション',
     color: 'amber',
     tasks: [
-      { id: 't51', title: '【事前】読者や著者仲間と日頃から交流し、役立つ発信をする', tool: '利用するSNS / ブログ / メルマガ', note_default: '無理のない媒体を選ぶ', important: false },
+      { id: 't51', title: '【事前】読者や著者仲間と日頃から交流し、役立つ発信をする', tool: '利用するSNS / ブログ / メルマガ', note_default: '発売直前だけでなく普段から。無理のない媒体で、役立つ交流を続ける', important: false },
       { id: 't52', title: '【3週間前〜】制作の背景や進捗、読者に役立つ内容を発信する', tool: '利用する発信媒体', note_default: '', important: false },
       { id: 't53', title: '【1週間前】タイトル・発売予定日・対象読者を案内する', tool: '利用する発信媒体', note_default: '', important: false },
       { id: 't54', title: '【4日前】表紙と本の内容を紹介する', tool: '利用する発信媒体', note_default: '', important: false },
-      { id: 't55', title: '【発売日】発売を案内し、設定したキャンペーンがあれば開始する', tool: '利用する発信媒体 / KDP', note_default: '値下げ・無料施策は任意。適用条件を確認', important: false },
+      { id: 't55', title: '【発売日】発売を案内し、設定したキャンペーンがあれば開始する', tool: '利用する発信媒体 / KDP', note_default: '発売直後の認知を後押しする。値下げ・無料施策は任意で、KDPの適用条件を確認', important: false },
       { id: 't56', title: '読者の感想を確認し、感謝と今後に役立つ情報を発信する', tool: '利用する発信媒体', note_default: '', important: false },
     ],
   },
