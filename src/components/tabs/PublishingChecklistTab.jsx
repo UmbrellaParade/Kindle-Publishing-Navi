@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Upload, RefreshCw, ImageIcon, Download, Images, ArrowRight, CircleHelp } from 'lucide-react';
+import { Upload, RefreshCw, ImageIcon, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CREATION_PHASES, ALL_CREATION_IDS } from '@/lib/checklistTasks';
 import { useChecklistState } from '@/hooks/useChecklistState';
@@ -57,7 +57,7 @@ function ImageSlot({ label, imageUrl, onUpload, uploading, color }) {
   );
 }
 
-export default function PublishingChecklistTab({ project, onProjectUpdate, onNavigateTab }) {
+export default function PublishingChecklistTab({ project, onProjectUpdate }) {
   const [uploadingCover, setUploadingCover] = useState(false);
   const { checklistData, customTasks, handleTaskChange, handleCustomTaskChange, handleDeleteCustomTask, handleAddCustomTask } =
     useChecklistState(project, onProjectUpdate);
@@ -84,32 +84,8 @@ export default function PublishingChecklistTab({ project, onProjectUpdate, onNav
   return (
     <div className="space-y-6">
       {/* 画像エリア */}
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="max-w-sm">
         <ImageSlot label="表紙画像" imageUrl={project.cover_image_url} onUpload={f => uploadImage(f, 'cover_image_url', setUploadingCover)} uploading={uploadingCover} color="pink" />
-        <section className="flex min-h-full flex-col justify-between gap-4 rounded-xl border border-neon-cyan/30 p-4" style={{ background: 'rgba(0,245,255,0.04)' }}>
-          <div>
-            <div className="flex items-center gap-2 text-neon-cyan">
-              <Images className="h-4 w-4" />
-              <h2 className="text-sm font-bold">Amazon A+ コンテンツ</h2>
-            </div>
-            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-              画像1枚だけでなく、KDPの「標準複数画像モジュール A」と同じ4画像構成を専用画面でまとめて管理できます。
-            </p>
-            <div className="mt-3 flex items-start gap-2 rounded-lg border border-neon-cyan/20 bg-black/10 p-3">
-              <CircleHelp className="mt-0.5 h-4 w-4 flex-shrink-0 text-neon-cyan" />
-              <p className="text-[10px] leading-relaxed text-muted-foreground">
-                代替テキスト・見出し・説明・画像キャプション・ASIN・提出前チェックまで、初心者向けの順番で案内します。
-              </p>
-            </div>
-          </div>
-          <Button
-            type="button"
-            onClick={() => onNavigateTab?.('aplus')}
-            className="min-h-10 w-full border border-neon-cyan/40 bg-neon-cyan/15 text-xs font-bold text-neon-cyan hover:bg-neon-cyan/25"
-          >
-            A+コンテンツを準備する<ArrowRight className="ml-2 h-3.5 w-3.5" />
-          </Button>
-        </section>
       </div>
 
       {/* チェックリスト（フェーズ 0〜3） */}
