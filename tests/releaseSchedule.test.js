@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  RELEASE_TASK_OFFSETS,
   applyReleaseSchedule,
   countOverdueTasks,
   getScheduleWindow,
@@ -8,6 +9,7 @@ import {
   readChecklistEnvelope,
   writeChecklistEnvelope,
 } from '../src/lib/releaseSchedule.js';
+import { ALL_CREATION_IDS, ALL_KDP_IDS, ALL_PROMO_IDS } from '../src/lib/checklistTasks.js';
 
 test('発売日から月や年をまたいで日付を逆算できる', () => {
   assert.equal(offsetDate('2027-01-10', -14), '2026-12-27');
@@ -45,6 +47,20 @@ test('全再設定では手動日と完了済みの日付も更新する', () =>
   assert.equal(result.data.t01.due_date, '2026-10-06');
   assert.equal(result.data.t01.due_date_source, 'auto');
   assert.equal(result.data.t01.is_done, true);
+});
+
+test('制作・KDP・プロモーションの全項目へ目標日を自動設定する', () => {
+  const allTaskIds = [...ALL_CREATION_IDS, ...ALL_KDP_IDS, ...ALL_PROMO_IDS];
+  assert.deepEqual(Object.keys(RELEASE_TASK_OFFSETS).sort(), [...allTaskIds].sort());
+
+  const result = applyReleaseSchedule({}, '2026-12-01');
+  allTaskIds.forEach(taskId => {
+    assert.match(result.data[taskId].due_date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(result.data[taskId].due_date_source, 'auto');
+  });
+  assert.equal(result.data.t49.due_date, '2026-11-17');
+  assert.equal(result.data.t55.due_date, '2026-12-01');
+  assert.equal(result.data.t56.due_date, '2026-12-04');
 });
 
 test('チェックリストの付随データを維持して新形式へ保存する', () => {

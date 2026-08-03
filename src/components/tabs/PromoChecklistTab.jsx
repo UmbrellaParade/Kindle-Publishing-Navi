@@ -1,13 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { PROMO_PHASES, ALL_PROMO_IDS } from '@/lib/checklistTasks';
-import { Progress } from '@/components/ui/progress';
-import { Zap, Copy, Check } from 'lucide-react';
+import { Copy, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { readChecklistEnvelope, writeChecklistEnvelope } from '@/lib/releaseSchedule';
 import { scheduleCoordinatedSave } from '@/lib/saveCoordinator';
-import { mutatePublishingProject } from '@/lib/projectMutation';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const INPUT_STYLE = { background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' };
@@ -19,58 +15,6 @@ const SNS_COLORS = {
   'TikTok': 'bg-red-500/20 text-red-400 border-red-500/30',
   'その他': 'bg-secondary text-muted-foreground border-border',
 };
-
-// ─ タスク行 ─
-function TaskRow({ task, state, onChange }) {
-  const [open, setOpen] = useState(false);
-  const s = state || { is_done: false, due_date: '', note: '' };
-  return (
-    <div className={`rounded-lg border transition-all ${s.is_done ? 'opacity-50' : task.important ? 'border-neon-pink/30' : 'border-border/60'}`}
-      style={{ background: s.is_done ? 'rgba(255,255,255,0.02)' : task.important ? 'rgba(255,45,120,0.04)' : 'rgba(255,255,255,0.03)' }}>
-      <div className="flex items-start gap-2 px-3 py-2.5">
-        <button type="button" onClick={() => onChange({ ...s, is_done: !s.is_done })}
-          aria-label={`「${task.title}」を${s.is_done ? '未完了' : '完了'}にする`}
-          aria-pressed={s.is_done}
-          className={`flex-shrink-0 w-7 h-7 rounded-md border-2 transition-all flex items-center justify-center ${s.is_done ? 'bg-neon-cyan border-neon-cyan' : 'border-muted-foreground/40 hover:border-neon-cyan'}`}>
-          {s.is_done && <span className="text-black text-[10px] font-black leading-none">✓</span>}
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1 flex-wrap">
-            {task.important && <Zap className="w-3 h-3 text-neon-pink flex-shrink-0" />}
-            <span className={`text-xs leading-relaxed ${s.is_done ? 'line-through text-muted-foreground' : task.important ? 'font-bold text-neon-pink' : 'text-foreground'}`}>{task.title}</span>
-          </div>
-          <div className="mt-0.5 flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] text-muted-foreground">{task.tool}</span>
-            {s.due_date && (
-              <span className={`text-[10px] rounded px-1.5 py-0.5 ${s.due_date_source === 'auto' ? 'bg-neon-cyan/10 text-neon-cyan' : 'bg-neon-amber/10 text-neon-amber'}`}>
-                目標 {s.due_date}
-              </span>
-            )}
-          </div>
-        </div>
-        <button type="button" aria-label={`「${task.title}」の詳細を${open ? '閉じる' : '開く'}`} aria-expanded={open} onClick={() => setOpen(v => !v)} className="flex-shrink-0 text-[10px] text-muted-foreground hover:text-foreground px-2 py-1.5 rounded" style={{ background: 'rgba(255,255,255,0.05)' }}>
-          {open ? '▲' : '▼'}
-        </button>
-      </div>
-      {open && (
-        <div className="px-3 pb-3 space-y-2 border-t border-border/40 pt-2">
-          <div className="flex items-center gap-2">
-            <label className="text-[10px] text-muted-foreground whitespace-nowrap">完了目標日</label>
-            <input type="date" value={s.due_date || ''} onChange={e => onChange({ ...s, due_date: e.target.value, due_date_source: 'manual' })}
-              className="text-xs rounded px-2 py-1 text-foreground focus:outline-none flex-1" style={INPUT_STYLE} />
-            {s.due_date && (
-              <span className={`text-[9px] whitespace-nowrap ${s.due_date_source === 'auto' ? 'text-neon-cyan' : 'text-neon-amber'}`}>
-                {s.due_date_source === 'auto' ? '自動' : '手動'}
-              </span>
-            )}
-          </div>
-          <textarea value={s.note || ''} onChange={e => onChange({ ...s, note: e.target.value })} rows={2}
-            placeholder="メモ..." className="w-full text-xs rounded px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-none resize-none" style={INPUT_STYLE} />
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─ SNS 投稿文カラム ─
 function SnsPostColumn({ title, data, onChange, color }) {
@@ -87,7 +31,7 @@ function SnsPostColumn({ title, data, onChange, color }) {
   };
 
   return (
-    <div className={`rounded-xl border ${c.border} p-3 flex flex-col gap-3`} style={{ background: c.bg, minHeight: '600px' }}>
+    <div className={`min-w-0 rounded-xl border ${c.border} p-3 flex flex-col gap-3`} style={{ background: c.bg, minHeight: '600px' }}>
       <h3 className={`text-sm font-bold ${c.text}`}>{title}</h3>
       <input value={data.subtitle || ''} onChange={e => onChange({ ...data, subtitle: e.target.value })}
         placeholder="例：発売告知ツイート"
@@ -114,21 +58,14 @@ function SnsPostColumn({ title, data, onChange, color }) {
   );
 }
 
-export default function PromoChecklistTab({ project, onProjectUpdate, saving, saved }) {
-  const [checklistData, setChecklistData] = useState({});
+export default function PromoChecklistTab({ project, onProjectUpdate }) {
   const [goal, setGoal] = useState('');
   const [strategyMemo, setStrategyMemo] = useState('');
   const [snsPost1, setSnsPost1] = useState({ subtitle: '', tags: [], body: '' });
   const [snsPost2, setSnsPost2] = useState({ subtitle: '', tags: [], body: '' });
   // プロジェクト選択時にデータを読み込み
   useEffect(() => {
-    if (!project) { setChecklistData({}); setGoal(''); setStrategyMemo(''); setSnsPost1({ subtitle: '', tags: [], body: '' }); setSnsPost2({ subtitle: '', tags: [], body: '' }); return; }
-    
-    // checklist_data から読み込み
-    try {
-      const parsed = project.checklist_data ? JSON.parse(project.checklist_data) : {};
-      setChecklistData(parsed._data || {});
-    } catch { setChecklistData({}); }
+    if (!project) { setGoal(''); setStrategyMemo(''); setSnsPost1({ subtitle: '', tags: [], body: '' }); setSnsPost2({ subtitle: '', tags: [], body: '' }); return; }
 
     // promotion_goal, strategy_memo, sns_memo1, sns_memo2 から読み込み
     setGoal(project.promotion_goal || '');
@@ -143,20 +80,7 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
       const memo2 = project.sns_memo2 ? JSON.parse(project.sns_memo2) : { subtitle: '', tags: [], body: '' };
       setSnsPost2(memo2);
     } catch { setSnsPost2({ subtitle: '', tags: [], body: '' }); }
-  }, [project?.id, project?.checklist_data, project?.promotion_goal, project?.strategy_memo, project?.sns_memo1, project?.sns_memo2]);
-
-  // 自動保存（checklist_data）
-  const scheduleSaveChecklist = (taskId, taskState) => {
-    if (!project) return;
-    scheduleCoordinatedSave(`promo-checklist:${project.id}:${taskId}`, async () => {
-      const updated = await mutatePublishingProject(project.id, latest => {
-        const { data: latestData } = readChecklistEnvelope(latest?.checklist_data);
-        const nextData = { ...latestData, [taskId]: taskState };
-        return { checklist_data: writeChecklistEnvelope(latest?.checklist_data, nextData) };
-      }, project);
-      onProjectUpdate(updated);
-    }, 1000);
-  };
+  }, [project?.id, project?.promotion_goal, project?.strategy_memo, project?.sns_memo1, project?.sns_memo2]);
 
   // 自動保存（promotion_goal, strategy_memo, sns_memo）
   const scheduleSavePromo = (updates) => {
@@ -168,31 +92,12 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
     }, 1000);
   };
 
-  const handleTaskChange = (taskId, newState) => {
-    const next = { ...checklistData, [taskId]: newState };
-    setChecklistData(next);
-    scheduleSaveChecklist(taskId, newState);
-  };
-
-  const allTasks = PROMO_PHASES.flatMap(p => p.tasks);
-  const doneTasks = ALL_PROMO_IDS.filter(id => checklistData[id]?.is_done).length;
-  const pct = ALL_PROMO_IDS.length > 0 ? Math.round((doneTasks / ALL_PROMO_IDS.length) * 100) : 0;
-
   if (!project) {
     return <div className="text-center py-20 text-muted-foreground"><span className="text-4xl">📣</span><p className="mt-3 text-sm">プロジェクトを選択してください</p></div>;
   }
 
   return (
     <div className="space-y-5">
-      {/* 進捗バー */}
-      <div className="rounded-xl p-4 space-y-2" style={CARD_STYLE}>
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-bold flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-neon-pink" />プロモーション進捗</span>
-          <span className="font-bold text-neon-pink">{doneTasks} / {ALL_PROMO_IDS.length} 完了（{pct}%）</span>
-        </div>
-        <Progress value={pct} className="h-2" />
-      </div>
-
       {/* 出版目標 */}
       <div className="rounded-xl p-4 space-y-2" style={CARD_STYLE}>
         <p className="text-sm font-bold text-neon-pink neon-pink-glow">🎯 出版目標</p>
@@ -202,11 +107,11 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
           style={INPUT_STYLE} />
       </div>
 
-      {/* 4 カラムレイアウト */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* PCは3カラムを均等表示 */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* 1 列：戦略メモ */}
-        <div className="rounded-xl border border-neon-pink/25 p-3 flex flex-col gap-3" style={{ background: 'rgba(255,45,120,0.04)', minHeight: '600px' }}>
-          <h3 className="text-sm font-bold text-neon-pink neon-pink-glow">📊 戦略メモ</h3>
+        <div className="min-w-0 rounded-xl border border-neon-pink/25 p-3 flex flex-col gap-3" style={{ background: 'rgba(255,45,120,0.04)', minHeight: '600px' }}>
+          <h3 className="text-sm font-bold text-neon-pink neon-pink-glow">📊 プロモーション戦略メモ</h3>
           <p className="text-[10px] text-muted-foreground leading-relaxed">Kindle 辛口論評 Gem の結果、戦略などを貼り付けて保存</p>
           <textarea value={strategyMemo} onChange={e => { setStrategyMemo(e.target.value); scheduleSavePromo({ strategy_memo: e.target.value }); }}
             placeholder="戦略メモ、Gem の分析結果などをここに貼り付けてください..."
@@ -214,17 +119,7 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
             style={{ ...INPUT_STYLE, minHeight: '500px' }} />
         </div>
 
-        {/* 2 列：プロモーションチェックリスト */}
-        <div className="rounded-xl border border-neon-amber/25 p-3 flex flex-col gap-2" style={{ background: 'rgba(255,179,0,0.04)', minHeight: '600px' }}>
-          <h3 className="text-sm font-bold text-neon-amber neon-amber-glow">📋 フェーズ 5:プロモーション</h3>
-          <div className="flex-1 space-y-2">
-            {allTasks.map(task => (
-              <TaskRow key={task.id} task={task} state={checklistData[task.id]} onChange={s => handleTaskChange(task.id, s)} />
-            ))}
-          </div>
-        </div>
-
-        {/* 3 列：SNS 投稿文 1 */}
+        {/* 2 列：SNS 投稿文 1 */}
         <SnsPostColumn
           title="✍️ SNS 投稿文章メモ 1"
           data={snsPost1}
@@ -232,7 +127,7 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
           color="cyan"
         />
 
-        {/* 4 列：SNS 投稿文 2 */}
+        {/* 3 列：SNS 投稿文 2 */}
         <SnsPostColumn
           title="✍️ SNS 投稿文章メモ 2"
           data={snsPost2}

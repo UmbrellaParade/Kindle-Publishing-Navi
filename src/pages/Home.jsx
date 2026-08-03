@@ -30,7 +30,7 @@ const TABS = [
   { id: 'creation',  label: 'Kindle本制作進捗' },
   { id: 'kdp',       label: 'KDP登録進捗' },
   { id: 'category',  label: 'カテゴリーチェック' },
-  { id: 'promo',     label: 'プロモーション進捗' },
+  { id: 'promo',     label: 'プロモーション戦略メモ' },
   { id: 'aplus',     label: 'A+コンテンツ' },
   { id: 'format',    label: '原稿Kindle調整ツール' },
 ];
