@@ -16,6 +16,7 @@ const PHASE_COLORS = {
 function TaskRow({ task, state, onChange }) {
   const [open, setOpen] = useState(false);
   const s = state || { is_done: false, due_date: '', note: '' };
+  const dueDateInputId = `task-due-date-${task.id}`;
 
   return (
     <div className={`rounded-lg border transition-all ${s.is_done ? 'opacity-50' : task.important ? 'border-neon-pink/30' : 'border-border/60 hover:border-border'}`}
@@ -39,11 +40,21 @@ function TaskRow({ task, state, onChange }) {
           </div>
           <div className="mt-0.5 flex items-center gap-2 flex-wrap">
             <span className="text-[10px] text-muted-foreground">{task.tool}</span>
-            {s.due_date && (
-              <span className={`text-[10px] rounded px-1.5 py-0.5 ${s.due_date_source === 'auto' ? 'bg-neon-cyan/10 text-neon-cyan' : 'bg-neon-amber/10 text-neon-amber'}`}>
-                目標 {s.due_date}
-              </span>
-            )}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <label htmlFor={dueDateInputId} className="text-[10px] font-bold text-muted-foreground whitespace-nowrap">目標日</label>
+            <input
+              id={dueDateInputId}
+              type="date"
+              aria-label={`「${task.title}」の目標日`}
+              value={s.due_date || ''}
+              onChange={e => onChange({ ...s, due_date: e.target.value, due_date_source: 'manual' })}
+              className="h-8 min-w-[132px] rounded px-2 text-xs text-foreground focus:outline-none focus:border-neon-cyan"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' }}
+            />
+            <span className={`text-[9px] whitespace-nowrap ${s.due_date ? (s.due_date_source === 'auto' ? 'text-neon-cyan' : 'text-neon-amber') : 'text-muted-foreground'}`}>
+              {s.due_date ? (s.due_date_source === 'auto' ? '自動' : '手動') : '未設定'}
+            </span>
           </div>
         </div>
         <button type="button" aria-label={`「${task.title}」の詳細を${open ? '閉じる' : '開く'}`} aria-expanded={open} onClick={() => setOpen(v => !v)} className="text-[10px] text-muted-foreground hover:text-foreground flex-shrink-0 mt-0.5 px-2 py-1.5 rounded transition-colors" style={{ background: 'rgba(255,255,255,0.05)' }}>
@@ -51,19 +62,10 @@ function TaskRow({ task, state, onChange }) {
         </button>
       </div>
       {open && (
-        <div className="px-3 pb-3 space-y-2 border-t border-border/40 pt-2">
-          <div className="flex items-center gap-2">
-            <label className="text-[10px] text-muted-foreground whitespace-nowrap">完了目標日</label>
-            <input type="date" value={s.due_date || ''} onChange={e => onChange({ ...s, due_date: e.target.value, due_date_source: 'manual' })}
-              className="text-xs rounded px-2 py-1 text-foreground focus:outline-none flex-1"
-              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' }} />
-            {s.due_date && (
-              <span className={`text-[9px] whitespace-nowrap ${s.due_date_source === 'auto' ? 'text-neon-cyan' : 'text-neon-amber'}`}>
-                {s.due_date_source === 'auto' ? '自動' : '手動'}
-              </span>
-            )}
-          </div>
+        <div className="px-3 pb-3 space-y-1.5 border-t border-border/40 pt-2">
+          <label htmlFor={`task-note-${task.id}`} className="text-[10px] text-muted-foreground">メモ・備考</label>
           <textarea value={s.note || ''} onChange={e => onChange({ ...s, note: e.target.value })} rows={2}
+            id={`task-note-${task.id}`}
             placeholder="メモ・備考..."
             className="w-full text-xs rounded px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-none resize-none"
             style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' }} />
@@ -73,21 +75,27 @@ function TaskRow({ task, state, onChange }) {
   );
 }
 
-function PhaseSection({ phase, checklistData, onTaskChange }) {
+export function PhaseSection({ phase, checklistData, onTaskChange }) {
   const [open, setOpen] = useState(true);
   const c = PHASE_COLORS[phase.color] || PHASE_COLORS.cyan;
   const done = phase.tasks.filter(t => checklistData[t.id]?.is_done).length;
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ ...CARD_STYLE, borderLeft: c.left }}>
-      <button onClick={() => setOpen(v => !v)} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/5 transition-colors">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={`phase-${phase.id}-tasks`}
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/5 transition-colors"
+      >
         <h3 className={`text-sm font-bold flex-1 ${c.header}`}>{phase.label}</h3>
         <span className={`text-[10px] px-2 py-0.5 rounded-full border font-bold ${c.badge}`}>{done}/{phase.tasks.length}</span>
         {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
       </button>
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
+          <motion.div id={`phase-${phase.id}-tasks`} initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
             <div className="px-4 pb-4 space-y-2">
               {phase.tasks.map(task => (
                 <TaskRow key={task.id} task={task} state={checklistData[task.id]} onChange={s => onTaskChange(task.id, s)} />
@@ -100,20 +108,32 @@ function PhaseSection({ phase, checklistData, onTaskChange }) {
   );
 }
 
+export function ChecklistProgress({ allTaskIds, checklistData, customTasks = [], progressLabel }) {
+  const customDone = customTasks.filter(task => task.state?.is_done).length;
+  const totalTasks = allTaskIds.length + customTasks.length;
+  const doneTasks = allTaskIds.filter(id => checklistData[id]?.is_done).length + customDone;
+  const pct = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+  return (
+    <div className="rounded-xl p-4 space-y-2" style={CARD_STYLE}>
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="font-bold text-foreground">{progressLabel || '進捗'}</span>
+        <span className="text-right font-bold text-neon-pink">{doneTasks} / {totalTasks} 完了（{pct}%）</span>
+      </div>
+      <Progress value={pct} className="h-2" />
+    </div>
+  );
+}
+
 /**
  * 汎用チェックリストコンポーネント
  * phases: PhaseオブジェクトArray
  * allTaskIds: 全タスクID配列（進捗計算用）
  * checklistData / customTasks / onTaskChange / onCustomTaskChange / onDeleteCustomTask / onAddCustomTask: 親から渡す
  */
-export default function TaskChecklist({ phases, allTaskIds, checklistData, customTasks, onTaskChange, onCustomTaskChange, onDeleteCustomTask, onAddCustomTask, progressLabel }) {
+export default function TaskChecklist({ phases, allTaskIds, checklistData, customTasks, onTaskChange, onCustomTaskChange, onDeleteCustomTask, onAddCustomTask, progressLabel, showProgress = true, afterPhases = null }) {
   const [addingTask, setAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
-
-  const customDone = customTasks.filter(t => t.state?.is_done).length;
-  const totalTasks = allTaskIds.length + customTasks.length;
-  const doneTasks = allTaskIds.filter(id => checklistData[id]?.is_done).length + customDone;
-  const pct = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
   const handleAdd = () => {
     if (!newTaskTitle.trim()) return;
@@ -126,18 +146,21 @@ export default function TaskChecklist({ phases, allTaskIds, checklistData, custo
   return (
     <div className="space-y-4">
       {/* 進捗バー */}
-      <div className="rounded-xl p-4 space-y-2" style={CARD_STYLE}>
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-bold text-foreground">{progressLabel || '進捗'}</span>
-          <span className="font-bold text-neon-pink">{doneTasks} / {totalTasks} 完了（{pct}%）</span>
-        </div>
-        <Progress value={pct} className="h-2" />
-      </div>
+      {showProgress && (
+        <ChecklistProgress
+          allTaskIds={allTaskIds}
+          checklistData={checklistData}
+          customTasks={customTasks}
+          progressLabel={progressLabel}
+        />
+      )}
 
       {/* フェーズ別 */}
       {phases.map(phase => (
         <PhaseSection key={phase.id} phase={phase} checklistData={checklistData} onTaskChange={onTaskChange} />
       ))}
+
+      {afterPhases}
 
       {/* カスタムタスク */}
       {customTasks.length > 0 && (
