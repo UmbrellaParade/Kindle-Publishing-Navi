@@ -31,7 +31,7 @@ const TABS = [
   { id: 'kdp',       label: 'KDP登録進捗' },
   { id: 'category',  label: 'カテゴリーチェック' },
   { id: 'promo',     label: 'プロモーション戦略メモ' },
-  { id: 'aplus',     label: 'A+コンテンツ' },
+  { id: 'aplus',     label: '表紙＆A+コンテンツ' },
   { id: 'format',    label: '原稿Kindle調整ツール' },
 ];
 

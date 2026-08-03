@@ -11,10 +11,35 @@ import {
   getAplusReadiness,
   normalizeAplusContent,
   readAplusContent,
+  selectAplusUploadBaseContent,
   validateAplusAsinText,
   validateAplusImageMetadata,
   writeAplusContent,
 } from './aplusContent.js';
+
+test('初回のA+画像保存では画面に表示した画像枠IDをそのまま使う', () => {
+  const displayed = readAplusContent('', { projectName: '初回出版' });
+  const latest = readAplusContent('', { projectName: '初回出版' });
+
+  assert.equal(displayed.hasSavedAplus, false);
+  assert.equal(latest.hasSavedAplus, false);
+  assert.notEqual(displayed.content.modules[0].id, latest.content.modules[0].id);
+
+  const uploadBase = selectAplusUploadBaseContent(latest, displayed.content);
+  assert.equal(uploadBase.modules[0].id, displayed.content.modules[0].id);
+  assert.equal(uploadBase.modules[0].images[0].id, displayed.content.modules[0].images[0].id);
+});
+
+test('保存済みA+がある画像保存では最新の保存内容を優先する', () => {
+  const displayed = createDefaultAplusContent({ projectName: '古い画面' });
+  const saved = createDefaultAplusContent({ projectName: '最新データ' });
+  const latest = readAplusContent(writeAplusContent('', saved));
+
+  assert.equal(latest.hasSavedAplus, true);
+  const uploadBase = selectAplusUploadBaseContent(latest, displayed);
+  assert.equal(uploadBase.content_name, '最新データ A+コンテンツ');
+  assert.equal(uploadBase.modules[0].id, saved.modules[0].id);
+});
 
 test('新しいA+コンテンツは標準複数画像モジュールAの4枠で始まる', () => {
   const content = createDefaultAplusContent({ projectName: 'はじめての出版' });
