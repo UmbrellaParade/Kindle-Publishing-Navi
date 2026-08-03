@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { PROMO_PHASES, ALL_PROMO_IDS } from '@/lib/checklistTasks';
 import { Progress } from '@/components/ui/progress';
 import { Zap, Copy, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
+import { readChecklistEnvelope, writeChecklistEnvelope } from '@/lib/releaseSchedule';
+import { scheduleCoordinatedSave } from '@/lib/saveCoordinator';
+import { mutatePublishingProject } from '@/lib/projectMutation';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const INPUT_STYLE = { background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' };
@@ -25,8 +28,10 @@ function TaskRow({ task, state, onChange }) {
     <div className={`rounded-lg border transition-all ${s.is_done ? 'opacity-50' : task.important ? 'border-neon-pink/30' : 'border-border/60'}`}
       style={{ background: s.is_done ? 'rgba(255,255,255,0.02)' : task.important ? 'rgba(255,45,120,0.04)' : 'rgba(255,255,255,0.03)' }}>
       <div className="flex items-start gap-2 px-3 py-2.5">
-        <button onClick={() => onChange({ ...s, is_done: !s.is_done })}
-          className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border-2 transition-all flex items-center justify-center ${s.is_done ? 'bg-neon-cyan border-neon-cyan' : 'border-muted-foreground/40 hover:border-neon-cyan'}`}>
+        <button type="button" onClick={() => onChange({ ...s, is_done: !s.is_done })}
+          aria-label={`「${task.title}」を${s.is_done ? '未完了' : '完了'}にする`}
+          aria-pressed={s.is_done}
+          className={`flex-shrink-0 w-7 h-7 rounded-md border-2 transition-all flex items-center justify-center ${s.is_done ? 'bg-neon-cyan border-neon-cyan' : 'border-muted-foreground/40 hover:border-neon-cyan'}`}>
           {s.is_done && <span className="text-black text-[10px] font-black leading-none">✓</span>}
         </button>
         <div className="flex-1 min-w-0">
@@ -34,9 +39,16 @@ function TaskRow({ task, state, onChange }) {
             {task.important && <Zap className="w-3 h-3 text-neon-pink flex-shrink-0" />}
             <span className={`text-xs leading-relaxed ${s.is_done ? 'line-through text-muted-foreground' : task.important ? 'font-bold text-neon-pink' : 'text-foreground'}`}>{task.title}</span>
           </div>
-          <span className="text-[10px] text-muted-foreground">{task.tool}</span>
+          <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] text-muted-foreground">{task.tool}</span>
+            {s.due_date && (
+              <span className={`text-[10px] rounded px-1.5 py-0.5 ${s.due_date_source === 'auto' ? 'bg-neon-cyan/10 text-neon-cyan' : 'bg-neon-amber/10 text-neon-amber'}`}>
+                目標 {s.due_date}
+              </span>
+            )}
+          </div>
         </div>
-        <button onClick={() => setOpen(v => !v)} className="flex-shrink-0 text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.05)' }}>
+        <button type="button" aria-label={`「${task.title}」の詳細を${open ? '閉じる' : '開く'}`} aria-expanded={open} onClick={() => setOpen(v => !v)} className="flex-shrink-0 text-[10px] text-muted-foreground hover:text-foreground px-2 py-1.5 rounded" style={{ background: 'rgba(255,255,255,0.05)' }}>
           {open ? '▲' : '▼'}
         </button>
       </div>
@@ -44,8 +56,13 @@ function TaskRow({ task, state, onChange }) {
         <div className="px-3 pb-3 space-y-2 border-t border-border/40 pt-2">
           <div className="flex items-center gap-2">
             <label className="text-[10px] text-muted-foreground whitespace-nowrap">完了目標日</label>
-            <input type="date" value={s.due_date || ''} onChange={e => onChange({ ...s, due_date: e.target.value })}
+            <input type="date" value={s.due_date || ''} onChange={e => onChange({ ...s, due_date: e.target.value, due_date_source: 'manual' })}
               className="text-xs rounded px-2 py-1 text-foreground focus:outline-none flex-1" style={INPUT_STYLE} />
+            {s.due_date && (
+              <span className={`text-[9px] whitespace-nowrap ${s.due_date_source === 'auto' ? 'text-neon-cyan' : 'text-neon-amber'}`}>
+                {s.due_date_source === 'auto' ? '自動' : '手動'}
+              </span>
+            )}
           </div>
           <textarea value={s.note || ''} onChange={e => onChange({ ...s, note: e.target.value })} rows={2}
             placeholder="メモ..." className="w-full text-xs rounded px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-none resize-none" style={INPUT_STYLE} />
@@ -103,8 +120,6 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
   const [strategyMemo, setStrategyMemo] = useState('');
   const [snsPost1, setSnsPost1] = useState({ subtitle: '', tags: [], body: '' });
   const [snsPost2, setSnsPost2] = useState({ subtitle: '', tags: [], body: '' });
-  const saveTimer = useRef(null);
-
   // プロジェクト選択時にデータを読み込み
   useEffect(() => {
     if (!project) { setChecklistData({}); setGoal(''); setStrategyMemo(''); setSnsPost1({ subtitle: '', tags: [], body: '' }); setSnsPost2({ subtitle: '', tags: [], body: '' }); return; }
@@ -128,16 +143,17 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
       const memo2 = project.sns_memo2 ? JSON.parse(project.sns_memo2) : { subtitle: '', tags: [], body: '' };
       setSnsPost2(memo2);
     } catch { setSnsPost2({ subtitle: '', tags: [], body: '' }); }
-  }, [project?.id]);
+  }, [project?.id, project?.checklist_data, project?.promotion_goal, project?.strategy_memo, project?.sns_memo1, project?.sns_memo2]);
 
   // 自動保存（checklist_data）
-  const scheduleSaveChecklist = (data) => {
+  const scheduleSaveChecklist = (taskId, taskState) => {
     if (!project) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      const updated = await base44.entities.PublishingProject.update(project.id, {
-        checklist_data: JSON.stringify({ _data: data }),
-      });
+    scheduleCoordinatedSave(`promo-checklist:${project.id}:${taskId}`, async () => {
+      const updated = await mutatePublishingProject(project.id, latest => {
+        const { data: latestData } = readChecklistEnvelope(latest?.checklist_data);
+        const nextData = { ...latestData, [taskId]: taskState };
+        return { checklist_data: writeChecklistEnvelope(latest?.checklist_data, nextData) };
+      }, project);
       onProjectUpdate(updated);
     }, 1000);
   };
@@ -145,8 +161,8 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
   // 自動保存（promotion_goal, strategy_memo, sns_memo）
   const scheduleSavePromo = (updates) => {
     if (!project) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+    const fields = Object.keys(updates).sort().join(',');
+    scheduleCoordinatedSave(`promo-fields:${project.id}:${fields}`, async () => {
       const updated = await base44.entities.PublishingProject.update(project.id, updates);
       onProjectUpdate(updated);
     }, 1000);
@@ -155,7 +171,7 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
   const handleTaskChange = (taskId, newState) => {
     const next = { ...checklistData, [taskId]: newState };
     setChecklistData(next);
-    scheduleSaveChecklist(next);
+    scheduleSaveChecklist(taskId, newState);
   };
 
   const allTasks = PROMO_PHASES.flatMap(p => p.tasks);
@@ -181,7 +197,7 @@ export default function PromoChecklistTab({ project, onProjectUpdate, saving, sa
       <div className="rounded-xl p-4 space-y-2" style={CARD_STYLE}>
         <p className="text-sm font-bold text-neon-pink neon-pink-glow">🎯 出版目標</p>
         <textarea value={goal} onChange={e => { setGoal(e.target.value); scheduleSavePromo({ promotion_goal: e.target.value }); }} rows={3}
-          placeholder="例：6/26 発売 99 円スタートダッシュで 3 冠獲得！"
+          placeholder="例：読者 100 人に届け、レビューや感想を次作の改善につなげる"
           className="w-full text-sm rounded px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none resize-none leading-relaxed"
           style={INPUT_STYLE} />
       </div>

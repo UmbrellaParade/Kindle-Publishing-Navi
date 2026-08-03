@@ -22,8 +22,11 @@ function TaskRow({ task, state, onChange }) {
       style={{ background: s.is_done ? 'rgba(255,255,255,0.02)' : task.important ? 'rgba(255,45,120,0.04)' : 'rgba(255,255,255,0.03)' }}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
         <button
+          type="button"
           onClick={() => onChange({ ...s, is_done: !s.is_done })}
-          className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border-2 transition-all flex items-center justify-center ${s.is_done ? 'bg-neon-cyan border-neon-cyan' : 'border-muted-foreground/40 hover:border-neon-cyan'}`}
+          aria-label={`「${task.title}」を${s.is_done ? '未完了' : '完了'}にする`}
+          aria-pressed={s.is_done}
+          className={`flex-shrink-0 w-7 h-7 rounded-md border-2 transition-all flex items-center justify-center ${s.is_done ? 'bg-neon-cyan border-neon-cyan' : 'border-muted-foreground/40 hover:border-neon-cyan'}`}
         >
           {s.is_done && <span className="text-black text-[10px] font-black leading-none">✓</span>}
         </button>
@@ -34,9 +37,16 @@ function TaskRow({ task, state, onChange }) {
               {task.title}
             </span>
           </div>
-          <span className="text-[10px] text-muted-foreground mt-0.5 inline-block">{task.tool}</span>
+          <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] text-muted-foreground">{task.tool}</span>
+            {s.due_date && (
+              <span className={`text-[10px] rounded px-1.5 py-0.5 ${s.due_date_source === 'auto' ? 'bg-neon-cyan/10 text-neon-cyan' : 'bg-neon-amber/10 text-neon-amber'}`}>
+                目標 {s.due_date}
+              </span>
+            )}
+          </div>
         </div>
-        <button onClick={() => setOpen(v => !v)} className="text-[10px] text-muted-foreground hover:text-foreground flex-shrink-0 mt-0.5 px-1.5 py-0.5 rounded transition-colors" style={{ background: 'rgba(255,255,255,0.05)' }}>
+        <button type="button" aria-label={`「${task.title}」の詳細を${open ? '閉じる' : '開く'}`} aria-expanded={open} onClick={() => setOpen(v => !v)} className="text-[10px] text-muted-foreground hover:text-foreground flex-shrink-0 mt-0.5 px-2 py-1.5 rounded transition-colors" style={{ background: 'rgba(255,255,255,0.05)' }}>
           {open ? '▲' : '▼'}
         </button>
       </div>
@@ -44,9 +54,14 @@ function TaskRow({ task, state, onChange }) {
         <div className="px-3 pb-3 space-y-2 border-t border-border/40 pt-2">
           <div className="flex items-center gap-2">
             <label className="text-[10px] text-muted-foreground whitespace-nowrap">完了目標日</label>
-            <input type="date" value={s.due_date || ''} onChange={e => onChange({ ...s, due_date: e.target.value })}
+            <input type="date" value={s.due_date || ''} onChange={e => onChange({ ...s, due_date: e.target.value, due_date_source: 'manual' })}
               className="text-xs rounded px-2 py-1 text-foreground focus:outline-none flex-1"
               style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' }} />
+            {s.due_date && (
+              <span className={`text-[9px] whitespace-nowrap ${s.due_date_source === 'auto' ? 'text-neon-cyan' : 'text-neon-amber'}`}>
+                {s.due_date_source === 'auto' ? '自動' : '手動'}
+              </span>
+            )}
           </div>
           <textarea value={s.note || ''} onChange={e => onChange({ ...s, note: e.target.value })} rows={2}
             placeholder="メモ・備考..."

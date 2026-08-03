@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, RefreshCw, ChevronDown, ChevronUp, FileText, Trash2 } from 'lucide-react';
+import { AlertTriangle, Download, Upload, RefreshCw, ChevronDown, ChevronUp, FileText, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -8,45 +8,111 @@ import Step1FormatDecision from '../format/Step1FormatDecision';
 import Step3RubyEditor from '../format/Step3RubyEditor';
 import Step5Export from '../format/Step5Export';
 import ExternalAiWorkspace from '../format/ExternalAiWorkspace';
+import { scheduleCoordinatedSave } from '@/lib/saveCoordinator';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 
+function getAuthorName(project) {
+  if (typeof project?.author_name === 'string' && project.author_name.trim()) {
+    return project.author_name.trim();
+  }
+
+  try {
+    const checklist = project?.checklist_data ? JSON.parse(project.checklist_data) : {};
+    const fields = checklist?._kdp_fields || {};
+    const authorName = fields.t42_author_name || fields.author_name;
+    return typeof authorName === 'string' ? authorName.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
 export default function FormatGuideTab({ project }) {
   const lsKey = `format_guide_state_${project?.id || 'global'}`;
+  const authorName = getAuthorName(project);
 
   const [sharedText, setSharedText] = useState('');
   const [isExpanded, setIsExpanded] = useState(true);
   const [versionState, setVersionState] = useState(null);
+  const [storageReady, setStorageReady] = useState(false);
+  const [loadedStorageKey, setLoadedStorageKey] = useState('');
+  const [storageError, setStorageError] = useState('');
+  const [recoveryKey, setRecoveryKey] = useState('');
   const fileInputRef = useRef(null);
 
   // プロジェクトが切り替わったらそのプロジェクトの保存データを読み込む
   useEffect(() => {
+    setStorageReady(false);
+    setLoadedStorageKey('');
+    setStorageError('');
+    setRecoveryKey('');
     try {
       const saved = localStorage.getItem(lsKey);
       if (saved) {
         const parsed = JSON.parse(saved);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.sharedText !== 'string') {
+          throw new Error('保存形式が正しくありません');
+        }
         setSharedText(parsed.sharedText || '');
         setIsExpanded(!parsed.sharedText);
       } else {
         setSharedText('');
         setIsExpanded(true);
       }
-    } catch {
+      setStorageReady(true);
+      setLoadedStorageKey(lsKey);
+    } catch (error) {
+      const corruptKey = `format_guide_corrupt_backup_${project?.id || 'global'}`;
+      try {
+        const raw = localStorage.getItem(lsKey);
+        if (raw !== null && localStorage.getItem(corruptKey) === null) {
+          localStorage.setItem(corruptKey, raw);
+        }
+        if (localStorage.getItem(corruptKey) !== null) setRecoveryKey(corruptKey);
+      } catch {
+        // 原文退避に失敗した場合も、元キーは上書きしない。
+      }
       setSharedText('');
       setIsExpanded(true);
+      setStorageError(`保存済みの原稿調整データを読み込めないため、上書きを停止しました（${error?.message || 'JSON破損'}）`);
     }
     setVersionState(null);
-  }, [project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lsKey, project?.id]);
 
   // 原稿が変わったら保存
   useEffect(() => {
-    try { localStorage.setItem(lsKey, JSON.stringify({ sharedText })); } catch {}
-  }, [sharedText, lsKey]);
+    if (!storageReady || storageError || loadedStorageKey !== lsKey) return;
+    scheduleCoordinatedSave(`format-guide:${project?.id || 'global'}`, async () => {
+      localStorage.setItem(lsKey, JSON.stringify({ sharedText }));
+    }, 250);
+  }, [sharedText, lsKey, project?.id, storageReady, storageError, loadedStorageKey]);
 
   const handleReset = () => {
+    const recoveryNote = storageError
+      ? '\n読み込めなかった原文の退避データは削除せず残します。'
+      : '';
+    if (!window.confirm(`このプロジェクトの原稿調整データを削除しますか？\n必要なら先に「データ管理」からバックアップしてください。${recoveryNote}`)) return;
     setSharedText(''); setIsExpanded(true); setVersionState(null);
     try { localStorage.removeItem(lsKey); } catch {}
+    setStorageError('');
+    setStorageReady(true);
+    setLoadedStorageKey(lsKey);
     toast.success('リセットしました');
+  };
+
+  const downloadRecovery = () => {
+    try {
+      const raw = recoveryKey ? localStorage.getItem(recoveryKey) : null;
+      if (raw === null) throw new Error('退避データが見つかりません');
+      const url = URL.createObjectURL(new Blob([raw], { type: 'application/json;charset=utf-8' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `kindle-navi-recovered-manuscript-${project?.id || 'global'}.json`;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      toast.error(error?.message || '退避データをダウンロードできませんでした');
+    }
   };
 
   const handleFileUpload = (e) => {
@@ -70,12 +136,29 @@ export default function FormatGuideTab({ project }) {
         </div>
         <p className="text-xs text-muted-foreground mb-3">ここに本文を貼ると、以下の全ステップ（フォーマット判定・ルビ付け・出力）が連動します。</p>
 
+        {storageError && (
+          <div className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive" role="alert">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <div className="space-y-2">
+                <p>{storageError}</p>
+                {recoveryKey && (
+                  <button type="button" onClick={downloadRecovery} className="inline-flex items-center gap-1.5 rounded border border-destructive/40 px-2 py-1 hover:bg-destructive/10">
+                    <Download className="w-3 h-3" />退避した原文データをダウンロード
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <AnimatePresence>
           {isExpanded && (
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
               <textarea
-                placeholder={`小説本文をここにペーストしてください（50文字以上）\n\n例：\n　雨は止まなかった。\n「また雨か」とヴェルは呟いた。天律の加護も、今夜は薄い。`}
+                placeholder={`原稿本文をここにペーストしてください（50文字以上）\n\n例：\nはじめに\nこの本では、毎日の仕事を整えるための3つの工夫を紹介します。まず、今日やることを一つ選びましょう。`}
                 value={sharedText}
+                disabled={Boolean(storageError)}
                 onChange={e => { setSharedText(e.target.value); if (e.target.value.length > 100) setIsExpanded(false); }}
                 className="w-full min-h-[140px] px-3 py-2.5 text-sm rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none resize-none leading-relaxed"
                 style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid #2a2a4a' }}
@@ -90,12 +173,12 @@ export default function FormatGuideTab({ project }) {
               ? <span className="text-xs text-neon-pink font-bold">{sharedText.length.toLocaleString()}文字 ✓ 準備完了</span>
               : <span className="text-xs text-muted-foreground">{sharedText.length}文字（50文字以上で各機能が有効）</span>
             }
-            <button onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-1.5 text-xs text-neon-cyan hover:text-neon-pink transition-colors px-2.5 py-1.5 rounded-md" style={{ background: 'rgba(255,255,255,0.05)' }}>
+            <button disabled={Boolean(storageError)} onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-1.5 text-xs text-neon-cyan hover:text-neon-pink disabled:opacity-40 transition-colors px-2.5 py-1.5 rounded-md" style={{ background: 'rgba(255,255,255,0.05)' }}>
               <Upload className="w-3 h-3" />.txtから読み込む
             </button>
             <input ref={fileInputRef} type="file" accept=".txt" className="hidden" onChange={handleFileUpload} />
             {sharedText.length > 0 && (
-              <button onClick={() => { setSharedText(''); setIsExpanded(true); }} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-neon-red transition-colors">
+              <button disabled={Boolean(storageError)} onClick={() => { setSharedText(''); setIsExpanded(true); }} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-neon-red disabled:opacity-40 transition-colors">
                 <RefreshCw className="w-3 h-3" />クリア
               </button>
             )}
@@ -119,12 +202,12 @@ export default function FormatGuideTab({ project }) {
 
       {/* ステップ2：ルビ付け */}
       <StepWrapper n="2" label="ルビ自動付与 → 手動修正 → コピー" color="pink">
-        <Step3RubyEditor sharedText={sharedText} onVersionChange={setVersionState} />
+        <Step3RubyEditor projectId={project?.id} sharedText={sharedText} onVersionChange={setVersionState} />
       </StepWrapper>
 
       {/* ステップ3：出力 */}
       <StepWrapper n="3" label="出力（docx / epub）" color="cyan">
-        <Step5Export sharedText={sharedText} versionState={versionState} />
+        <Step5Export sharedText={sharedText} versionState={versionState} authorName={authorName} />
       </StepWrapper>
 
       {/* docx vs epub 比較ガイド */}
@@ -142,14 +225,14 @@ export default function FormatGuideTab({ project }) {
 
 function ComparisonGuide() {
   const rows = [
-    { item: '向いている使い方', docx: '手軽にKDPへ登録したい', epub: 'ルビやレイアウトを細かく確認したい' },
-    { item: 'URLリンクの安定性', docx: '✅ 安定（推奨）', epub: '⚠️ 確認必須' },
+    { item: '向いている使い方', docx: '文章中心の原稿をWordでも調整したい', epub: 'ルビや文書構造をHTML形式で確認したい' },
+    { item: 'URLリンク', docx: 'Previewerで動作確認', epub: 'Previewerで動作確認' },
     { item: 'Kindle Unlimitedへの対応', docx: '✅ 対応', epub: '✅ 対応' },
-    { item: 'レイアウトの自由度', docx: '✅ 高い', epub: '△ リフロー型' },
+    { item: 'レイアウト', docx: '出力後にWordで調整可能', epub: 'このツールではリフロー型' },
     { item: 'Kindleプレビューアーでの確認', docx: '✅ 推奨', epub: '✅ 推奨' },
-    { item: 'KDPでの使いやすさ', docx: '⭐⭐⭐（まずはこちら）', epub: '⭐⭐（確認できる人向け）' },
+    { item: 'KDP登録前の作業', docx: '必要に応じてWordで仕上げる', epub: 'EPUBの検証結果を確認する' },
     { item: 'ルビ（ふりがな）の扱い', docx: '｜漢字《かな》 の記法で出力', epub: 'HTML rubyタグに変換' },
-    { item: '挿入画像', docx: '✅ 対応', epub: '✅ 対応' },
+    { item: '画像・図表', docx: '出力後にWordで追加・調整', epub: 'このテキスト出力には含まれない' },
     { item: 'ファイルサイズ', docx: '小〜中', epub: '小' },
   ];
   return (
@@ -176,7 +259,7 @@ function ComparisonGuide() {
         </table>
       </div>
       <div className="space-y-1.5 pt-1">
-        <p className="text-xs text-neon-pink font-bold">✅ 迷ったらdocx、ルビ表示まで確認したい場合はepubが目安です。</p>
+        <p className="text-xs text-neon-pink font-bold">✅ 文章中心で後から調整するならdocx、HTMLルビを確認するならepubが目安です。</p>
         <p className="text-xs text-muted-foreground">📌 どちらもKDP登録前にKindle Previewerで崩れ・リンク・ルビ表示を確認してください。</p>
       </div>
     </div>

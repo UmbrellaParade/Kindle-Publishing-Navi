@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const URL_REGEX = /https?:\/\/[^\s。、！？\]）)]+/;
+const DEFAULT_CREATOR = 'Umbrella Parade Kindle出版ナビ';
 
 function escapeXml(text) {
   return text
@@ -39,13 +40,13 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-function buildDocx(text) {
+function buildDocx(text, creator = DEFAULT_CREATOR) {
   const children = text.split('\n').map((line) => new Paragraph({
     children: [new TextRun({ text: line.trim() === '' ? ' ' : line, font: 'Yu Mincho', size: 22 })],
     spacing: { line: 360, after: line.trim() === '' ? 120 : 80 },
   }));
   return new Document({
-    creator: 'Umbrella Parade Kindle出版ナビ',
+    creator,
     title: 'Kindle manuscript',
     sections: [{ properties: {}, children }],
   });
@@ -62,7 +63,7 @@ function buildXhtml(text) {
 </head><body>${lines}</body></html>`;
 }
 
-async function buildEpub(text) {
+async function buildEpub(text, creator = DEFAULT_CREATOR) {
   const zip = new JSZip();
   const content = buildXhtml(text);
   const identifier = `urn:uuid:${crypto.randomUUID?.() || Date.now()}`;
@@ -90,6 +91,7 @@ async function buildEpub(text) {
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="bookid">${identifier}</dc:identifier>
     <dc:title>Kindle manuscript</dc:title>
+    <dc:creator>${escapeXml(creator)}</dc:creator>
     <dc:language>ja</dc:language>
     <meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')}</meta>
   </metadata>
@@ -102,7 +104,7 @@ async function buildEpub(text) {
   return zip.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' });
 }
 
-export default function Step5Export({ sharedText, versionState }) {
+export default function Step5Export({ sharedText, versionState, authorName }) {
   const [source, setSource] = useState('pipeline'); // 'pipeline' | 'local'
   const [localText, setLocalText] = useState('');
   const [localExpanded, setLocalExpanded] = useState(true);
@@ -119,6 +121,7 @@ export default function Step5Export({ sharedText, versionState }) {
   const outputText = source === 'local' ? localText : getPipelineText();
   const hasUrl = URL_REGEX.test(outputText);
   const hasText = outputText.trim().length > 0;
+  const creator = typeof authorName === 'string' && authorName.trim() ? authorName.trim() : DEFAULT_CREATOR;
 
   const handleLocalFileUpload = (e) => {
     const file = e.target.files?.[0];
@@ -135,14 +138,14 @@ export default function Step5Export({ sharedText, versionState }) {
   };
 
   const downloadDocx = async () => {
-    const blob = await Packer.toBlob(buildDocx(outputText));
+    const blob = await Packer.toBlob(buildDocx(outputText, creator));
     downloadBlob(blob, 'kindle-manuscript.docx');
     toast.success('DOCXをダウンロードしました');
   };
 
   const downloadEpub = async () => {
-    if (hasUrl) { toast.warning('URLリンクがあります。docxを推奨します。'); }
-    const blob = await buildEpub(outputText);
+    if (hasUrl) { toast.warning('URLリンクはKindle Previewerで動作を確認してください。'); }
+    const blob = await buildEpub(outputText, creator);
     downloadBlob(blob, 'kindle-manuscript.epub');
     toast.success('EPUBをダウンロードしました');
   };
@@ -252,7 +255,7 @@ export default function Step5Export({ sharedText, versionState }) {
       {hasUrl && (
         <div className="flex items-start gap-2 p-2.5 rounded-lg" style={{ background: 'rgba(255,179,0,0.07)', border: '1px solid rgba(255,179,0,0.25)' }}>
           <AlertTriangle className="w-3.5 h-3.5 text-neon-amber flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-neon-amber">URLリンクがある作品はdocxを推奨します。epubではリンクが正しく埋め込まれない場合があります。</p>
+          <p className="text-xs text-neon-amber">URLリンクがあります。形式にかかわらず、KDP登録前にKindle Previewerでリンク先と動作を確認してください。</p>
         </div>
       )}
 
@@ -282,9 +285,8 @@ export default function Step5Export({ sharedText, versionState }) {
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-neon-pink" />
             <span className="text-sm font-bold text-neon-pink">docx（游明朝・11pt）</span>
-            {hasUrl && <span className="text-[10px] text-neon-pink bg-neon-pink/20 px-1.5 py-0.5 rounded">推奨</span>}
           </div>
-          <p className="text-xs text-muted-foreground">URLリンク有りの作品・初心者・手軽に出版したい場合</p>
+          <p className="text-xs text-muted-foreground">文章中心の原稿を、出力後にWordでも調整したい場合</p>
           <p className="text-[10px] text-muted-foreground">ルビ表記: ｜漢字《かな》 のまま出力</p>
           <Button onClick={downloadDocx} disabled={!hasText} className="w-full h-8 text-xs bg-neon-pink/20 text-neon-pink border border-neon-pink/40 hover:bg-neon-pink/30 disabled:opacity-40">
             <Download className="w-3.5 h-3.5 mr-1.5" />docxダウンロード
@@ -301,7 +303,7 @@ export default function Step5Export({ sharedText, versionState }) {
           <Button onClick={downloadEpub} disabled={!hasText} className="w-full h-8 text-xs bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 hover:bg-neon-cyan/30 disabled:opacity-40">
             <Download className="w-3.5 h-3.5 mr-1.5" />epubダウンロード
           </Button>
-          {hasUrl && <p className="text-[10px] text-neon-amber">⚠️ URLリンクあり → docx推奨</p>}
+          {hasUrl && <p className="text-[10px] text-neon-amber">⚠️ URLリンクはPreviewerで確認</p>}
         </div>
       </div>
     </div>

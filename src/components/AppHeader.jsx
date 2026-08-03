@@ -8,6 +8,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { buildInitialChecklistData } from '@/lib/checklistTasks';
 import { toast } from 'sonner';
+import DataBackupDialog from '@/components/DataBackupDialog';
+import { flushPendingSaves } from '@/lib/saveCoordinator';
+import { removeUnreferencedLocalImages } from '@/lib/localImageStore';
 
 export default function AppHeader({ projects, currentProject, onSelectProject, onRefresh, saving, saved }) {
   const [creating, setCreating] = useState(false);
@@ -15,23 +18,43 @@ export default function AppHeader({ projects, currentProject, onSelectProject, o
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
-    const proj = await base44.entities.PublishingProject.create({
-      name: newName.trim(),
-      checklist_data: JSON.stringify(buildInitialChecklistData()),
-    });
-    toast.success(`「${newName}」を作成しました`);
-    setNewName('');
-    setCreating(false);
-    await onRefresh();
-    onSelectProject(proj);
+    try {
+      const proj = await base44.entities.PublishingProject.create({
+        name: newName.trim(),
+        checklist_data: JSON.stringify({ _data: buildInitialChecklistData() }),
+      });
+      toast.success(`「${newName}」を作成しました`);
+      setNewName('');
+      setCreating(false);
+      await onRefresh();
+      onSelectProject(proj);
+    } catch (error) {
+      toast.error(error?.message || 'プロジェクトを作成できませんでした');
+    }
   };
 
   const handleDelete = async (proj, e) => {
     e.stopPropagation();
-    await base44.entities.PublishingProject.delete(proj.id);
-    toast.success('削除しました');
-    const list = await onRefresh();
-    if (currentProject?.id === proj.id) onSelectProject(list?.[0] || null);
+    if (!window.confirm(`「${proj.name}」を削除しますか？\n原稿調整データ・ルビ辞書・このプロジェクトだけが使う保存画像も削除します。元に戻せないため、必要なら先に「データ管理」からバックアップしてください。`)) return;
+
+    try {
+      await flushPendingSaves();
+      await base44.entities.PublishingProject.delete(proj.id);
+      const list = await onRefresh();
+      try {
+        localStorage.removeItem(`format_guide_state_${proj.id}`);
+        localStorage.removeItem(`ruby_custom_dict_${proj.id}`);
+        await removeUnreferencedLocalImages(
+          list.flatMap(project => [project.cover_image_url, project.aplus_image_url]),
+        );
+      } catch (cleanupError) {
+        toast.warning(cleanupError?.message || 'プロジェクトは削除しましたが、関連ファイルの整理を完了できませんでした');
+      }
+      toast.success('プロジェクトと関連データを削除しました');
+      if (currentProject?.id === proj.id) onSelectProject(list?.[0] || null);
+    } catch (error) {
+      toast.error(error?.message || 'プロジェクトを削除できませんでした');
+    }
   };
 
   return (
@@ -41,7 +64,7 @@ export default function AppHeader({ projects, currentProject, onSelectProject, o
         <h1 className="font-heading font-black text-xl md:text-2xl tracking-widest neon-pink-glow text-neon-pink">
           🌂 Umbrella Parade Kindle 出版ナビ
         </h1>
-        <p className="text-[10px] text-muted-foreground tracking-widest mt-0.5">── ヴェル 13 世と歩む、入稿完了への道 ──</p>
+        <p className="text-[10px] text-muted-foreground tracking-widest mt-0.5">── 企画から出版・告知まで、迷わず進める ──</p>
         {saving && (
           <div className="absolute top-4 right-4 text-[10px] text-neon-cyan flex items-center gap-1">
             <span className="animate-spin">💾</span> 保存中...
@@ -100,6 +123,11 @@ export default function AppHeader({ projects, currentProject, onSelectProject, o
         >
           <Plus className="w-4 h-4" />
         </Button>
+
+        <DataBackupDialog
+          beforeAction={flushPendingSaves}
+          onRestored={() => window.location.reload()}
+        />
 
         {currentProject && (
           <span className="text-xs text-neon-cyan font-bold truncate max-w-[200px] hidden md:block">

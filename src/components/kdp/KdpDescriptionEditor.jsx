@@ -3,9 +3,19 @@ import { Button } from '@/components/ui/button';
 import { Copy, Check, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { Progress } from '@/components/ui/progress';
+import DOMPurify from 'dompurify';
 
 const MAX_CHARS = 4000;
 const WARNING_CHARS = 3500;
+const KDP_ALLOWED_TAGS = ['br', 'b', 'strong', 'em', 'i', 'u', 'h4', 'h5', 'h6', 'ol', 'ul', 'li', 'p'];
+
+function sanitizeKdpHtml(value) {
+  return DOMPurify.sanitize(String(value || ''), {
+    ALLOWED_TAGS: KDP_ALLOWED_TAGS,
+    ALLOWED_ATTR: [],
+    ALLOW_DATA_ATTR: false,
+  });
+}
 
 // 絵文字パターン（Unicode 絵文字範囲のみ）
 // 0x1F300-0x1F9FF: 絵文字メイン範囲
@@ -42,21 +52,23 @@ export default function KdpDescriptionEditor({ description, onSave, onFlush }) {
   // 初期値をエディターにセット
   useEffect(() => {
     if (editorRef.current && !isInitialized.current) {
-      editorRef.current.innerHTML = description || '';
+      const safeDescription = sanitizeKdpHtml(description);
+      editorRef.current.innerHTML = safeDescription;
       isInitialized.current = true;
-      setHtmlOutput(description || '');
-      updateStats(description || '');
+      setHtmlOutput(safeDescription);
+      updateStats(safeDescription);
     }
   }, []);
 
   // description が外部から変わった場合
   useEffect(() => {
     if (editorRef.current && isInitialized.current) {
+      const safeDescription = sanitizeKdpHtml(description);
       const current = editorRef.current.innerHTML;
-      if (current !== (description || '')) {
-        editorRef.current.innerHTML = description || '';
-        setHtmlOutput(description || '');
-        updateStats(description || '');
+      if (current !== safeDescription) {
+        editorRef.current.innerHTML = safeDescription;
+        setHtmlOutput(safeDescription);
+        updateStats(safeDescription);
       }
     }
   }, [description]);
@@ -74,7 +86,8 @@ export default function KdpDescriptionEditor({ description, onSave, onFlush }) {
   const handleInput = useCallback(() => {
     const el = editorRef.current;
     if (!el) return;
-    const html = el.innerHTML;
+    const html = sanitizeKdpHtml(el.innerHTML);
+    if (html !== el.innerHTML) el.innerHTML = html;
     setHtmlOutput(html);
     onSave(html);
     updateStats(html);
@@ -185,7 +198,7 @@ export default function KdpDescriptionEditor({ description, onSave, onFlush }) {
           contentEditable
           suppressContentEditableWarning
           onInput={handleInput}
-          onBlur={() => onFlush?.(editorRef.current?.innerHTML || '')}
+          onBlur={() => onFlush?.(sanitizeKdpHtml(editorRef.current?.innerHTML || ''))}
           onKeyDown={handleKeyDown}
           data-placeholder="ここに書籍説明文を入力してください。&#10;&#10;例：&#10;H4/H5/H6 で見出し、B で太字、I で斜体、・で箇条書きができます。"
           className="w-full min-h-[240px] px-4 py-3 text-sm focus:outline-none leading-relaxed

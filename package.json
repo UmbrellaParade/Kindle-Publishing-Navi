@@ -1,13 +1,14 @@
 {
   "name": "base44-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
+    "test": "node --test tests/*.test.js src/lib/*.test.js",
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview"
   },
@@ -52,6 +53,7 @@
     "cmdk": "^1.0.0",
     "date-fns": "^3.6.0",
     "docx": "^8.5.0",
+    "dompurify": "^3.4.12",
     "embla-carousel-react": "^8.5.2",
     "framer-motion": "^11.16.4",
     "html2canvas": "^1.4.1",
@@ -69,9 +71,7 @@
     "react-hot-toast": "^2.6.0",
     "react-leaflet": "^4.2.1",
     "react-markdown": "^9.0.1",
-    "react-quill": "^2.0.0",
     "react-resizable-panels": "^2.1.7",
-    "react-router-dom": "^6.26.0",
     "recharts": "^2.15.4",
     "sonner": "^2.0.1",
     "tailwind-merge": "^3.0.2",

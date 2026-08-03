@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import RainEffect from '../components/RainEffect';
 import AppHeader from '../components/AppHeader';
 import PublishingChecklistTab from '../components/tabs/PublishingChecklistTab';
@@ -6,8 +6,24 @@ import KdpChecklistTab from '../components/tabs/KdpChecklistTab';
 import CategoryCheckTab from '../components/tabs/CategoryCheckTab';
 import PromoChecklistTab from '../components/tabs/PromoChecklistTab';
 import FormatGuideTab from '../components/tabs/FormatGuideTab';
-import { base44 } from '@/api/base44Client';
+import ReleaseScheduleCard from '../components/ReleaseScheduleCard';
+import AppUpdateBanner from '../components/AppUpdateBanner';
+import BrowserStorageNotice from '../components/BrowserStorageNotice';
+import LegacyMigrationNotice from '../components/LegacyMigrationNotice';
+import { base44, LOCAL_PROJECTS_KEY } from '@/api/base44Client';
 import { AnimatePresence, motion } from 'framer-motion';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
+import {
+  flushPendingSaves,
+  getPendingSaveCount,
+  hasUnresolvedSaveErrors,
+  retryFailedSaves,
+} from '@/lib/saveCoordinator';
+import { toast } from 'sonner';
+import { CURRENT_APP_VERSION } from '@/hooks/useAppUpdate';
+import { createBackupFileName, createDataBackup, downloadDataBackup } from '@/lib/dataBackup';
+
+const SELECTED_PROJECT_KEY = 'kindle_publishing_navi_selected_project_id';
 
 const TABS = [
   { id: 'creation',  label: 'Kindle本制作進捗' },
@@ -23,6 +39,9 @@ export default function Home() {
   const [currentProject, setCurrentProject] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [switchingTab, setSwitchingTab] = useState(false);
+  const [saveErrorMessage, setSaveErrorMessage] = useState('');
+  const [retryingSaves, setRetryingSaves] = useState(false);
 
   const loadProjects = async () => {
     const list = await base44.entities.PublishingProject.list('-created_date', 50);
@@ -30,19 +49,130 @@ export default function Home() {
     return list;
   };
 
+  const handleSelectProject = (project) => {
+    setCurrentProject(project);
+    try {
+      if (project?.id) localStorage.setItem(SELECTED_PROJECT_KEY, project.id);
+      else localStorage.removeItem(SELECTED_PROJECT_KEY);
+    } catch {
+      // 保存領域が利用できない場合も、そのセッション中の選択は維持する。
+    }
+  };
+
   useEffect(() => {
     loadProjects().then(list => {
-      if (list.length > 0) setCurrentProject(list[0]);
+      let selectedId = '';
+      try {
+        selectedId = localStorage.getItem(SELECTED_PROJECT_KEY) || '';
+      } catch {
+        // 保存領域を読めない場合は先頭のプロジェクトを表示する。
+      }
+      if (list.length > 0) handleSelectProject(list.find(project => project.id === selectedId) || list[0]);
+    }).catch(error => toast.error(error?.message || 'プロジェクトを読み込めませんでした'));
+  }, []);
+
+  const prepareLegacyMigration = useCallback(async () => {
+    await flushPendingSaves();
+    const backup = await createDataBackup({ appVersion: CURRENT_APP_VERSION });
+    downloadDataBackup(backup, {
+      filename: createBackupFileName('kindle-navi-before-legacy-import'),
     });
   }, []);
 
+  const handleLegacyMigrationError = useCallback(error => {
+    toast.error(error?.message || '旧版データを確認できませんでした');
+  }, []);
+
+  useEffect(() => {
+    const handleSaveError = event => {
+      const message = event.detail?.error?.message || 'データを保存できませんでした。空き容量やブラウザ設定を確認してください。';
+      setSaveErrorMessage(message);
+      toast.error(message);
+    };
+    const handleSavePending = event => {
+      setSaving((event.detail?.count || 0) > 0);
+      setSaveErrorMessage(current => (
+        (event.detail?.errorCount || 0) > 0
+          ? current || '未保存の変更があります。保存を再試行してください。'
+          : ''
+      ));
+    };
+    const flushWhenLeaving = () => {
+      retryFailedSaves().catch(() => {
+        // 保存エラーは kindle-save-error で通知する。
+      });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushWhenLeaving();
+    };
+    const handleBeforeUnload = event => {
+      if (getPendingSaveCount() < 1 && !hasUnresolvedSaveErrors()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const handleStorage = async event => {
+      if (event.key !== LOCAL_PROJECTS_KEY) return;
+      try {
+        const list = await base44.entities.PublishingProject.list('-created_date', 50);
+        setProjects(list);
+        setCurrentProject(current => list.find(project => project.id === current?.id) || list[0] || null);
+        toast.info('別のタブでの変更を反映しました');
+      } catch (error) {
+        toast.error(error?.message || '別タブの変更を読み込めませんでした');
+      }
+    };
+    window.addEventListener('kindle-save-error', handleSaveError);
+    window.addEventListener('kindle-save-pending', handleSavePending);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', flushWhenLeaving);
+    window.addEventListener('storage', handleStorage);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('kindle-save-error', handleSaveError);
+      window.removeEventListener('kindle-save-pending', handleSavePending);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', flushWhenLeaving);
+      window.removeEventListener('storage', handleStorage);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  const handleRetrySaves = async () => {
+    if (retryingSaves) return;
+    setRetryingSaves(true);
+    try {
+      await retryFailedSaves();
+      setSaveErrorMessage('');
+      toast.success('未保存の変更を保存しました');
+    } catch (error) {
+      const message = error?.message || '再保存できませんでした。空き容量やブラウザ設定を確認してください。';
+      setSaveErrorMessage(message);
+      toast.error(message);
+    } finally {
+      setRetryingSaves(false);
+    }
+  };
+
   const handleProjectUpdate = async (updated) => {
     setSaving(true);
-    setCurrentProject(updated);
+    setCurrentProject(current => current?.id === updated.id ? updated : current);
     setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     setTimeout(() => setSaving(false), 500);
+  };
+
+  const handleTabChange = async (tabId) => {
+    if (tabId === activeTab || switchingTab) return;
+    setSwitchingTab(true);
+    try {
+      await flushPendingSaves();
+      setActiveTab(tabId);
+    } catch (error) {
+      toast.error(error?.message || '保存を完了できなかったため、タブを切り替えませんでした');
+    } finally {
+      setSwitchingTab(false);
+    }
   };
 
   const tabProps = { project: currentProject, onProjectUpdate: handleProjectUpdate, saving, saved };
@@ -57,11 +187,51 @@ export default function Home() {
       <AppHeader
         projects={projects}
         currentProject={currentProject}
-        onSelectProject={setCurrentProject}
+        onSelectProject={handleSelectProject}
         onRefresh={loadProjects}
         saving={saving}
         saved={saved}
       />
+
+      <LegacyMigrationNotice
+        beforeMigrate={prepareLegacyMigration}
+        onMigrated={() => window.location.reload()}
+        onError={handleLegacyMigrationError}
+      />
+
+      <ReleaseScheduleCard
+        project={currentProject}
+        onProjectUpdate={handleProjectUpdate}
+      />
+
+      <BrowserStorageNotice />
+
+      {saveErrorMessage && (
+        <aside
+          className="relative z-40 mx-auto mt-3 flex max-w-7xl flex-col gap-3 border-y border-red-500/40 bg-red-950/80 px-4 py-3 text-sm text-red-100 sm:flex-row sm:items-center sm:justify-between sm:rounded-lg sm:border"
+          role="alert"
+          aria-live="assertive"
+        >
+          <div className="flex min-w-0 items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-400" />
+            <div>
+              <p className="font-bold">変更をまだ保存できていません</p>
+              <p className="mt-0.5 break-words text-xs text-red-200/90">{saveErrorMessage}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRetrySaves}
+            disabled={retryingSaves}
+            className="inline-flex min-h-10 flex-shrink-0 items-center justify-center gap-2 rounded-md border border-red-400/50 bg-red-500/15 px-4 py-2 font-bold text-red-100 transition hover:bg-red-500/25 disabled:cursor-wait disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${retryingSaves ? 'animate-spin' : ''}`} />
+            {retryingSaves ? '再保存中…' : '保存を再試行'}
+          </button>
+        </aside>
+      )}
+
+      <AppUpdateBanner beforeReload={flushPendingSaves} />
 
       {/* タブナビゲーション */}
       <div className="sticky top-0 z-30 border-b" style={{ background: 'rgba(13,13,26,0.97)', borderColor: '#2a2a4a', backdropFilter: 'blur(8px)' }}>
@@ -70,7 +240,8 @@ export default function Home() {
             {TABS.map(tab => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => handleTabChange(tab.id)}
+                disabled={switchingTab}
                 className={`flex-shrink-0 px-3 md:px-4 py-2 text-xs md:text-sm font-bold rounded-lg transition-all duration-200 whitespace-nowrap ${
                   activeTab === tab.id
                     ? 'text-neon-pink neon-pink-glow'
