@@ -15,7 +15,7 @@ const PHASE_COLORS = {
 
 function TaskRow({ task, state, onChange }) {
   const [open, setOpen] = useState(false);
-  const s = state || { is_done: false, due_date: '', note: '' };
+  const s = state || { is_done: false, due_date: '', note: task.note_default || '' };
   const dueDateInputId = `task-due-date-${task.id}`;
 
   return (
@@ -41,6 +41,11 @@ function TaskRow({ task, state, onChange }) {
           <div className="mt-0.5 flex items-center gap-2 flex-wrap">
             <span className="text-[10px] text-muted-foreground">{task.tool}</span>
           </div>
+          {task.note_default && (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+              <span className="font-bold text-neon-amber">手順のポイント：</span>{task.note_default}
+            </p>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <label htmlFor={dueDateInputId} className="text-[10px] font-bold text-muted-foreground whitespace-nowrap">目標日</label>
             <input

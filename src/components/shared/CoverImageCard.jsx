@@ -1,7 +1,8 @@
 import React, { useEffect, useId, useState } from 'react';
-import { Download, ImageIcon, LoaderCircle, Upload } from 'lucide-react';
+import { CheckCircle2, Download, ExternalLink, ImageIcon, Info, LoaderCircle, TriangleAlert, Upload } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
+import { assessKindleCoverDimensions, KINDLE_COVER_LINKS } from '@/lib/coverImageGuidance';
 import { downloadImage, getImageDataUrl } from '@/lib/localImageStore';
 import { mutatePublishingProject } from '@/lib/projectMutation';
 import { flushPendingSaves } from '@/lib/saveCoordinator';
@@ -12,16 +13,33 @@ const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 export default function CoverImageCard({ project, onProjectUpdate }) {
   const inputId = useId();
   const [previewUrl, setPreviewUrl] = useState('');
+  const [imageDimensions, setImageDimensions] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
 
   useEffect(() => {
     let active = true;
+    setImageDimensions(null);
     getImageDataUrl(project?.cover_image_url)
       .then(url => { if (active) setPreviewUrl(url || ''); })
       .catch(() => { if (active) setPreviewUrl(''); });
     return () => { active = false; };
   }, [project?.cover_image_url]);
+
+  const dimensionAssessment = assessKindleCoverDimensions(
+    imageDimensions?.width,
+    imageDimensions?.height,
+  );
+  const DimensionIcon = dimensionAssessment.level === 'success'
+    ? CheckCircle2
+    : dimensionAssessment.level === 'warning'
+      ? TriangleAlert
+      : Info;
+  const dimensionTone = dimensionAssessment.level === 'success'
+    ? 'border-emerald-500/25 bg-emerald-500/[0.05] text-emerald-300'
+    : dimensionAssessment.level === 'warning'
+      ? 'border-neon-amber/30 bg-neon-amber/[0.05] text-neon-amber'
+      : 'border-neon-cyan/20 bg-neon-cyan/[0.035] text-neon-cyan';
 
   const handleUpload = async file => {
     if (!project || !file) return;
@@ -65,7 +83,15 @@ export default function CoverImageCard({ project, onProjectUpdate }) {
       <div className="mt-4 grid items-start gap-4 sm:grid-cols-[160px_minmax(0,1fr)]">
         <div className="mx-auto flex aspect-[5/8] w-full max-w-[160px] items-center justify-center overflow-hidden rounded-lg border border-neon-pink/30 bg-black/30">
           {project?.cover_image_url && previewUrl ? (
-            <img src={previewUrl} alt="保存済みの表紙画像" className="h-full w-full object-contain" />
+            <img
+              src={previewUrl}
+              alt="保存済みの表紙画像"
+              className="h-full w-full object-contain"
+              onLoad={event => setImageDimensions({
+                width: event.currentTarget.naturalWidth,
+                height: event.currentTarget.naturalHeight,
+              })}
+            />
           ) : (
             <div className="px-4 text-center text-muted-foreground">
               <ImageIcon className="mx-auto h-9 w-9 opacity-25" />
@@ -75,8 +101,53 @@ export default function CoverImageCard({ project, onProjectUpdate }) {
         </div>
 
         <div className="min-w-0 space-y-3">
-          <div className="rounded-lg border border-neon-pink/20 bg-neon-pink/[0.035] p-3 text-[10px] leading-relaxed text-muted-foreground">
-            JPG・PNGなどの画像を選択できます。画像はこのブラウザ内へ保存され、データ管理のバックアップにも含まれます。
+          <div className="rounded-lg border border-neon-pink/25 bg-neon-pink/[0.045] p-3">
+            <p className="text-xs font-bold text-neon-pink">Kindle電子書籍用（幅 × 高さ）</p>
+            <p className="mt-1 text-[11px] font-bold text-foreground">推奨 1,600 × 2,560px（高さ:幅＝1.6:1）</p>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+              最小 625 × 1,000px／各辺最大 10,000px。KDP入稿用はJPEGまたはTIFF・RGB・50MB未満で書き出してください。
+            </p>
+            <a
+              href={KINDLE_COVER_LINKS.ebookRequirements}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex items-center gap-1 text-[10px] font-bold text-neon-cyan hover:text-neon-pink"
+            >
+              <ExternalLink className="h-3 w-3" />KDP公式の表紙仕様
+            </a>
+          </div>
+
+          <div className={`rounded-lg border p-3 ${dimensionTone}`} aria-live="polite">
+            <div className="flex items-start gap-2">
+              <DimensionIcon className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <div>
+                <p className="text-[11px] font-bold">
+                  {imageDimensions
+                    ? `登録画像：${imageDimensions.width.toLocaleString()} × ${imageDimensions.height.toLocaleString()}px`
+                    : '登録画像の寸法チェック'}
+                </p>
+                <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{dimensionAssessment.message}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-neon-cyan/20 bg-neon-cyan/[0.03] p-3">
+            <p className="text-xs font-bold text-neon-cyan">将来、A5・A6などの紙版も作るなら</p>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+              A5・A6へ最初から固定せず、文字・人物・背景を直せる元データを保存するのがおすすめです。紙版は判型だけでなく、ページ数・用紙・塗り足しで背幅を含む表紙全体の寸法が変わります。本文確定後に、入稿先の最新テンプレートを使い、画像は300dpi以上を目安に別ファイルを書き出してください。
+            </p>
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+              <a href={KINDLE_COVER_LINKS.paperbackCalculator} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] font-bold text-neon-cyan hover:text-neon-pink">
+                <ExternalLink className="h-3 w-3" />KDP表紙計算ツール
+              </a>
+              <a href={KINDLE_COVER_LINKS.shimaumaTemplates} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] font-bold text-neon-cyan hover:text-neon-pink">
+                <ExternalLink className="h-3 w-3" />しまうま出版のA5・A6テンプレート
+              </a>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border bg-white/[0.025] p-3 text-[10px] leading-relaxed text-muted-foreground">
+            このツールへの保管はJPG・PNGなどを選択できます。画像はこのブラウザ内へ保存され、データ管理のバックアップにも含まれます。
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
