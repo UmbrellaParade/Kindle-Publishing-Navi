@@ -1,7 +1,14 @@
 import { listLocalImages, replaceLocalImages } from './localImageStore.js';
 import { withProjectWriteLock } from './projectWriteLock.js';
+import {
+  mergeCritiqueHistoryValues,
+  readCritiqueHistory,
+  serializeCritiqueHistory,
+} from './critiqueHistory.js';
 
 export const BACKUP_SCHEMA_VERSION = 1;
+export const CRITIQUE_RECOVERY_SCHEMA_VERSION = 1;
+export const CRITIQUE_RECOVERY_KIND = 'kindle-navi-critique-recovery';
 export const PROJECTS_STORAGE_KEY = 'kindle_publishing_navi_local_projects';
 export const SELECTED_PROJECT_STORAGE_KEY = 'kindle_publishing_navi_selected_project_id';
 export const FORMAT_GUIDE_STORAGE_PREFIX = 'format_guide_state_';
@@ -31,6 +38,7 @@ export const PROJECT_FIELD_ALLOWLIST = Object.freeze([
   'sns_memo2_title',
   'promotion_notes',
   'manuscript',
+  'critique_history',
   'cover_image_url',
   'aplus_image_url',
   'kdp_meta',
@@ -61,6 +69,19 @@ const FORMAT_STATE_FIELDS = new Set(['projectId', 'value']);
 const FORMAT_VALUE_FIELDS = new Set(['sharedText']);
 const PROJECT_RUBY_FIELDS = new Set(['projectId', 'value']);
 const IMAGE_FIELDS = new Set(['id', 'name', 'type', 'dataUrl', 'createdAt']);
+const CRITIQUE_RECOVERY_FIELDS = new Set([
+  'kind',
+  'schemaVersion',
+  'appVersion',
+  'exportedAt',
+  'entries',
+]);
+const CRITIQUE_RECOVERY_ENTRY_FIELDS = new Set([
+  'projectId',
+  'projectName',
+  'error',
+  'raw',
+]);
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const MAX_BACKUP_TEXT_LENGTH = 350 * 1024 * 1024;
 
@@ -82,8 +103,11 @@ export class BackupImportError extends Error {
     super(message, options.cause ? { cause: options.cause } : undefined);
     this.name = 'BackupImportError';
     this.beforeSnapshot = options.beforeSnapshot;
+    this.beforeCritiqueRecovery = options.beforeCritiqueRecovery || null;
     this.rollbackSucceeded = options.rollbackSucceeded;
     this.rollbackErrors = options.rollbackErrors || [];
+    this.preflightFailed = options.preflightFailed === true;
+    this.writeStarted = options.writeStarted === true;
   }
 }
 
@@ -120,6 +144,42 @@ function assertIsoDate(value, path) {
   return value;
 }
 
+function normalizeCritiqueHistoryField(value, path) {
+  if (typeof value !== 'string') fail(path, '文字列ではありません');
+  if (!value.trim()) return '';
+
+  let result;
+  try {
+    result = readCritiqueHistory(value);
+  } catch (cause) {
+    fail(path, cause?.message || '辛口論評履歴を読み込めません');
+  }
+
+  if (result?.error) {
+    fail(path, result.error.message || '辛口論評履歴の形式が正しくありません');
+  }
+  if (!Array.isArray(result?.entries)) {
+    fail(path, '辛口論評履歴の形式が正しくありません');
+  }
+
+  try {
+    return serializeCritiqueHistory(result.entries);
+  } catch (cause) {
+    fail(path, cause?.message || '辛口論評履歴を正規化できません');
+  }
+}
+
+export class BackupRecoveryRequiredError extends BackupValidationError {
+  constructor(critiqueRecovery) {
+    super(
+      '壊れた辛口論評履歴が見つかりました。原文を失わないよう createDataBackupBundle を使用してください',
+      'backup.data.projects.critique_history',
+    );
+    this.name = 'BackupRecoveryRequiredError';
+    this.critiqueRecovery = critiqueRecovery;
+  }
+}
+
 function normalizeProject(project, path, { ignoreUnknown = false } = {}) {
   assertPlainObject(project, path);
   if (!ignoreUnknown) assertExactKeys(project, PROJECT_FIELDS, path);
@@ -140,7 +200,9 @@ function normalizeProject(project, path, { ignoreUnknown = false } = {}) {
       fail(`${path}.${field}`, '文字列ではありません');
     }
 
-    normalized[field] = value;
+    normalized[field] = field === 'critique_history'
+      ? normalizeCritiqueHistoryField(value, `${path}.${field}`)
+      : value;
   }
 
   assertString(normalized.id, `${path}.id`, { allowEmpty: false });
@@ -307,6 +369,49 @@ export function validateDataBackup(value) {
   };
 }
 
+/** 壊れた辛口論評履歴の原文を、通常バックアップとは別に安全に保存する形式です。 */
+export function validateCritiqueRecovery(value) {
+  assertPlainObject(value, 'recovery');
+  assertExactKeys(value, CRITIQUE_RECOVERY_FIELDS, 'recovery');
+  if (value.kind !== CRITIQUE_RECOVERY_KIND) {
+    fail('recovery.kind', '辛口論評の復旧用ファイルではありません');
+  }
+  if (value.schemaVersion !== CRITIQUE_RECOVERY_SCHEMA_VERSION) {
+    fail(
+      'recovery.schemaVersion',
+      `対応していない形式です（対応: ${CRITIQUE_RECOVERY_SCHEMA_VERSION}）`,
+    );
+  }
+
+  const appVersion = assertString(value.appVersion, 'recovery.appVersion', { allowEmpty: false });
+  const exportedAt = assertIsoDate(value.exportedAt, 'recovery.exportedAt');
+  if (!Array.isArray(value.entries)) fail('recovery.entries', '配列ではありません');
+
+  const seenProjectIds = new Set();
+  const entries = value.entries.map((entry, index) => {
+    const path = `recovery.entries[${index}]`;
+    assertPlainObject(entry, path);
+    assertExactKeys(entry, CRITIQUE_RECOVERY_ENTRY_FIELDS, path);
+    const projectId = assertString(entry.projectId, `${path}.projectId`, { allowEmpty: false });
+    if (seenProjectIds.has(projectId)) fail(`${path}.projectId`, '同じプロジェクトIDが重複しています');
+    seenProjectIds.add(projectId);
+    return {
+      projectId,
+      projectName: assertString(entry.projectName, `${path}.projectName`, { allowEmpty: false }),
+      error: assertString(entry.error, `${path}.error`, { allowEmpty: false }),
+      raw: assertString(entry.raw, `${path}.raw`),
+    };
+  });
+
+  return {
+    kind: CRITIQUE_RECOVERY_KIND,
+    schemaVersion: CRITIQUE_RECOVERY_SCHEMA_VERSION,
+    appVersion,
+    exportedAt,
+    entries,
+  };
+}
+
 export function parseDataBackup(text) {
   if (typeof text !== 'string') fail('backup', 'JSON文字列ではありません');
   if (text.length > MAX_BACKUP_TEXT_LENGTH) fail('backup', 'ファイルサイズが大きすぎます');
@@ -346,15 +451,23 @@ function toIsoString(now) {
   return date.toISOString();
 }
 
-/** 現在の許可済みデータだけを収集します。AI設定やAPIキーの保存キーは読みません。 */
-export async function createDataBackup({
+/**
+ * 現在の許可済みデータだけを収集します。AI設定やAPIキーの保存キーは読みません。
+ * 壊れた辛口論評履歴は通常バックアップから分離し、原文を復旧用ファイルへ残します。
+ */
+export async function createDataBackupBundle({
   appVersion = 'unknown',
   storage = getBrowserStorage(),
   imageStore = defaultImageStore,
   now = () => new Date(),
 } = {}) {
+  const exportedAt = toIsoString(now);
   const rawProjects = readJsonStorage(storage, PROJECTS_STORAGE_KEY, [], PROJECTS_STORAGE_KEY);
-  const projects = normalizeProjects(rawProjects, 'backup.data.projects', { ignoreUnknown: true });
+  const { projects, recoveryEntries } = normalizeProjectsForBackup(
+    rawProjects,
+    'backup.data.projects',
+    { ignoreUnknown: true },
+  );
   const rawSelectedProjectId = storage.getItem(SELECTED_PROJECT_STORAGE_KEY);
   const selectedProjectId = typeof rawSelectedProjectId === 'string'
     && projects.some(project => project.id === rawSelectedProjectId)
@@ -395,10 +508,10 @@ export async function createDataBackup({
   const rawImages = await imageStore.listLocalImages();
   const images = normalizeImages(rawImages, 'backup.data.images', { ignoreUnknown: true });
 
-  return validateDataBackup({
+  const backup = validateDataBackup({
     schemaVersion: BACKUP_SCHEMA_VERSION,
     appVersion: String(appVersion || 'unknown'),
-    exportedAt: toIsoString(now),
+    exportedAt,
     data: {
       projects,
       selectedProjectId,
@@ -408,6 +521,27 @@ export async function createDataBackup({
       images,
     },
   });
+
+  const critiqueRecovery = recoveryEntries.length > 0
+    ? validateCritiqueRecovery({
+      kind: CRITIQUE_RECOVERY_KIND,
+      schemaVersion: CRITIQUE_RECOVERY_SCHEMA_VERSION,
+      appVersion: String(appVersion || 'unknown'),
+      exportedAt,
+      entries: recoveryEntries,
+    })
+    : null;
+
+  return { backup, critiqueRecovery };
+}
+
+/** 従来API。通常復元できる検証済みバックアップだけを返します。 */
+export async function createDataBackup(options) {
+  const { backup, critiqueRecovery } = await createDataBackupBundle(options);
+  if (critiqueRecovery) {
+    throw new BackupRecoveryRequiredError(critiqueRecovery);
+  }
+  return backup;
 }
 
 function mergeById(currentItems, incomingItems, mergeValue) {
@@ -455,7 +589,58 @@ function mergeProject(left, right) {
   if (Object.prototype.hasOwnProperty.call(right, 'kdp_meta')) {
     merged.kdp_meta = mergeProjectKdpMeta(left.kdp_meta, right.kdp_meta);
   }
+  if (Object.prototype.hasOwnProperty.call(right, 'critique_history')) {
+    merged.critique_history = mergeCritiqueHistoryValues(
+      left.critique_history,
+      right.critique_history,
+    );
+  }
   return merged;
+}
+
+function recoveryRawText(value) {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizeProjectsForBackup(projects, path, options) {
+  if (!Array.isArray(projects)) fail(path, '配列ではありません');
+  const recoveryEntries = [];
+  const safeProjects = projects.map((project) => {
+    if (!isPlainObject(project)) return project;
+    if (!Object.prototype.hasOwnProperty.call(project, 'critique_history')) return project;
+    const rawValue = project.critique_history;
+    if (rawValue === null || rawValue === undefined || rawValue === '') return project;
+    if (typeof rawValue === 'string' && !rawValue.trim()) return project;
+
+    let errorMessage = '';
+    try {
+      const result = readCritiqueHistory(rawValue);
+      if (!result.error) return project;
+      errorMessage = result.error.message;
+    } catch (cause) {
+      errorMessage = cause?.message || '';
+    }
+
+    recoveryEntries.push({
+      projectId: typeof project.id === 'string' ? project.id : '',
+      projectName: typeof project.name === 'string' ? project.name : '',
+      error: errorMessage || '辛口論評履歴を読み込めません',
+      raw: recoveryRawText(rawValue),
+    });
+    const safeProject = { ...project };
+    delete safeProject.critique_history;
+    return safeProject;
+  });
+
+  return {
+    projects: normalizeProjects(safeProjects, path, options),
+    recoveryEntries,
+  };
 }
 
 /** 検証済みスナップショット同士から、merge / replace 後のデータを純粋関数で計算します。 */
@@ -494,6 +679,37 @@ export function buildDataRestorePlan(currentBackup, incomingBackup, mode = 'merg
     projectRubyDictionaries,
     images,
   };
+}
+
+function preserveCorruptCritiqueHistories(plan, incoming, critiqueRecovery) {
+  if (!critiqueRecovery) return plan;
+  const incomingById = new Map(incoming.data.projects.map(project => [project.id, project]));
+  const recoveryById = new Map(critiqueRecovery.entries.map(entry => [entry.projectId, entry]));
+
+  return {
+    ...plan,
+    projects: plan.projects.map((project) => {
+      const recovery = recoveryById.get(project.id);
+      if (!recovery) return project;
+      const incomingProject = incomingById.get(project.id);
+      const explicitlyRepairs = incomingProject
+        && Object.prototype.hasOwnProperty.call(incomingProject, 'critique_history');
+      return explicitlyRepairs
+        ? project
+        : { ...project, critique_history: recovery.raw };
+    }),
+  };
+}
+
+function listCorruptCritiqueRepairProjectIds(incoming, critiqueRecovery) {
+  if (!critiqueRecovery) return [];
+  const corruptProjectIds = new Set(
+    critiqueRecovery.entries.map(entry => entry.projectId),
+  );
+  return incoming.data.projects
+    .filter(project => corruptProjectIds.has(project.id)
+      && Object.prototype.hasOwnProperty.call(project, 'critique_history'))
+    .map(project => project.id);
 }
 
 function captureRawStorage(storage, keys) {
@@ -544,6 +760,17 @@ function applyStoragePlan(storage, plan, affectedProjectIds, affectedFormatGuide
 /**
  * バックアップを復元します。成功時は復元直前の完全なスナップショットを返します。
  * localStorage または IndexedDB の書き込みに失敗した場合は、両方を復元前へ戻します。
+ * beforeApply は書き込みロック内・データ変更前に実行し、例外時は変更せず停止します。
+ * 壊れた論評履歴を修復する場合は { critiqueRecoverySaved: true } の返却も必須です。
+ * @param {*} input
+ * @param {{
+ *   mode?: string,
+ *   appVersion?: string,
+ *   storage?: Storage,
+ *   imageStore?: {listLocalImages: () => Promise<any[]>, replaceLocalImages: (records: any[]) => Promise<void>},
+ *   now?: () => Date,
+ *   beforeApply?: (context: any) => any,
+ * }} [options]
  */
 async function importDataBackupUnlocked(input, {
   mode = 'merge',
@@ -551,10 +778,61 @@ async function importDataBackupUnlocked(input, {
   storage = getBrowserStorage(),
   imageStore = defaultImageStore,
   now = () => new Date(),
+  beforeApply,
 } = {}) {
   const incoming = typeof input === 'string' ? parseDataBackup(input) : validateDataBackup(input);
-  const beforeSnapshot = await createDataBackup({ appVersion, storage, imageStore, now });
-  const plan = buildDataRestorePlan(beforeSnapshot, incoming, mode);
+  const beforeBundle = await createDataBackupBundle({ appVersion, storage, imageStore, now });
+  const { backup: beforeSnapshot, critiqueRecovery: beforeCritiqueRecovery } = beforeBundle;
+  const basePlan = buildDataRestorePlan(beforeSnapshot, incoming, mode);
+  const plan = mode === 'merge'
+    ? preserveCorruptCritiqueHistories(basePlan, incoming, beforeCritiqueRecovery)
+    : basePlan;
+  const critiqueRepairProjectIds = mode === 'merge'
+    ? listCorruptCritiqueRepairProjectIds(incoming, beforeCritiqueRecovery)
+    : [];
+
+  if (critiqueRepairProjectIds.length > 0 && typeof beforeApply !== 'function') {
+    throw new BackupImportError(
+      '壊れた辛口論評履歴を置き換える前に、復旧用JSONを保存する処理が必要です。データは変更していません',
+      {
+        beforeSnapshot,
+        beforeCritiqueRecovery,
+        rollbackSucceeded: true,
+        preflightFailed: true,
+        writeStarted: false,
+      },
+    );
+  }
+  if (beforeApply !== undefined && typeof beforeApply !== 'function') {
+    throw new TypeError('beforeApply は関数で指定してください');
+  }
+  if (typeof beforeApply === 'function') {
+    try {
+      const preflightResult = await beforeApply({
+        mode,
+        beforeSnapshot,
+        beforeCritiqueRecovery,
+        incomingSnapshot: incoming,
+        critiqueRepairProjectIds,
+      });
+      if (critiqueRepairProjectIds.length > 0
+        && preflightResult?.critiqueRecoverySaved !== true) {
+        throw new Error('辛口論評履歴の復旧用JSONを保存できたことを確認できませんでした');
+      }
+    } catch (cause) {
+      throw new BackupImportError(
+        '復元前の安全バックアップを保存できなかったため、データを変更せず停止しました',
+        {
+          cause,
+          beforeSnapshot,
+          beforeCritiqueRecovery,
+          rollbackSucceeded: true,
+          preflightFailed: true,
+          writeStarted: false,
+        },
+      );
+    }
+  }
 
   const affectedProjectIds = new Set([
     ...beforeSnapshot.data.projects.map(project => project.id),
@@ -603,8 +881,10 @@ async function importDataBackupUnlocked(input, {
       {
         cause,
         beforeSnapshot,
+        beforeCritiqueRecovery,
         rollbackSucceeded: rollbackErrors.length === 0,
         rollbackErrors,
+        writeStarted: true,
       },
     );
   }
@@ -612,6 +892,7 @@ async function importDataBackupUnlocked(input, {
   return {
     mode,
     beforeSnapshot,
+    beforeCritiqueRecovery,
     restoredSnapshot: {
       schemaVersion: BACKUP_SCHEMA_VERSION,
       appVersion: String(appVersion || 'unknown'),
@@ -635,12 +916,23 @@ export function serializeDataBackup(backup) {
   return JSON.stringify(validateDataBackup(backup), null, 2);
 }
 
+export function serializeCritiqueRecovery(recovery) {
+  return JSON.stringify(validateCritiqueRecovery(recovery), null, 2);
+}
+
 export function createBackupFileName(prefix = 'kindle-navi-backup', date = new Date()) {
   const timestamp = toIsoString(date).replace(/[:.]/g, '-');
   return `${prefix}-${timestamp}.json`;
 }
 
-export function downloadDataBackup(backup, { filename } = {}) {
+export function createCritiqueRecoveryFileName(
+  prefix = 'kindle-navi-critique-recovery',
+  date = new Date(),
+) {
+  return createBackupFileName(prefix, date);
+}
+
+export function downloadDataBackup(backup, { filename = '' } = { filename: '' }) {
   if (typeof document === 'undefined' || typeof URL === 'undefined') {
     throw new Error('この環境ではバックアップをダウンロードできません');
   }
@@ -650,6 +942,23 @@ export function downloadDataBackup(backup, { filename } = {}) {
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename || createBackupFileName();
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export function downloadCritiqueRecovery(recovery, { filename = '' } = { filename: '' }) {
+  if (typeof document === 'undefined' || typeof URL === 'undefined') {
+    throw new Error('この環境では辛口論評の復旧用ファイルをダウンロードできません');
+  }
+  const json = serializeCritiqueRecovery(recovery);
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename || createCritiqueRecoveryFileName();
   anchor.style.display = 'none';
   document.body.appendChild(anchor);
   anchor.click();
