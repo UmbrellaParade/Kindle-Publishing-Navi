@@ -3,7 +3,6 @@ import { Progress } from '@/components/ui/progress';
 import { ExternalLink, Zap, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import KdpDescriptionEditor from '@/components/kdp/KdpDescriptionEditor';
 import { readChecklistEnvelope, writeChecklistEnvelope } from '@/lib/releaseSchedule';
 import { scheduleCoordinatedSave } from '@/lib/saveCoordinator';
 import { DEFAULT_RELEASE_METHOD, getReleaseMethod } from '@/lib/releaseMethods';
@@ -174,12 +173,11 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
   const [checklistData, setChecklistData] = useState({});
   const [fieldData, setFieldData] = useState({});
   const [customTasks, setCustomTasks] = useState([]);
-  const [description, setDescription] = useState('');
   const [addingTask, setAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   // プロジェクト選択時にデータを読み込み
   useEffect(() => {
-    if (!project) { setChecklistData({}); setFieldData({}); setCustomTasks([]); setDescription(''); return; }
+    if (!project) { setChecklistData({}); setFieldData({}); setCustomTasks([]); return; }
 
     try {
       const parsed = project.checklist_data ? JSON.parse(project.checklist_data) : {};
@@ -187,14 +185,7 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
       setCustomTasks(parsed._kdp_custom || parsed._custom || []);
       setFieldData(parsed._kdp_fields || {});
     } catch { setChecklistData({}); setFieldData({}); setCustomTasks([]); }
-    
-    try {
-      const kdpMeta = project.kdp_meta ? JSON.parse(project.kdp_meta) : {};
-      setDescription(project.kdp_description || kdpMeta.description || '');
-    } catch {
-      setDescription(project.kdp_description || '');
-    }
-  }, [project?.id, project?.checklist_data, project?.kdp_meta, project?.kdp_description]);
+  }, [project?.id, project?.checklist_data]);
 
   // 自動保存（checklist_data）
   const scheduleSave = useCallback(({ taskId, taskState, custom, fieldKey, fieldValue }) => {
@@ -223,31 +214,6 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
       }, project);
       onProjectUpdate(updated);
     }, 1000);
-  }, [project, onProjectUpdate]);
-
-  // KDP 説明文の保存（kdp_description フィールドを使用）
-  const saveDescription = useCallback((val, immediate = false) => {
-    if (!project) return;
-    const persist = async () => {
-      const updated = await mutatePublishingProject(project.id, latest => {
-        try {
-          const currentMeta = latest?.kdp_meta ? JSON.parse(latest.kdp_meta) : {};
-          if (!currentMeta || typeof currentMeta !== 'object' || Array.isArray(currentMeta)) {
-            throw new Error('KDPメタデータ形式エラー');
-          }
-          return {
-            kdp_description: val,
-            kdp_meta: JSON.stringify({ ...currentMeta, description: val }),
-          };
-        } catch {
-          // 壊れたメタデータは上書きせず、独立した説明文フィールドだけ更新する。
-          return { kdp_description: val };
-        }
-      }, project);
-      onProjectUpdate(updated);
-    };
-
-    scheduleCoordinatedSave(`kdp-description:${project.id}`, persist, immediate ? 0 : 1000);
   }, [project, onProjectUpdate]);
 
   const handleTaskChange = (taskId, newState) => {
@@ -367,15 +333,6 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
             </button>
           )}
         </div>
-      </div>
-
-      {/* KDP 書籍説明文 */}
-      <div className="rounded-xl p-4" style={CARD_STYLE}>
-        <KdpDescriptionEditor
-          description={description}
-          onSave={val => { setDescription(val); saveDescription(val); }}
-          onFlush={val => { setDescription(val); saveDescription(val, true); }}
-        />
       </div>
     </div>
   );

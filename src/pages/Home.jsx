@@ -5,6 +5,7 @@ import PublishingChecklistTab from '../components/tabs/PublishingChecklistTab';
 import KdpChecklistTab from '../components/tabs/KdpChecklistTab';
 import CategoryCheckTab from '../components/tabs/CategoryCheckTab';
 import PromoChecklistTab from '../components/tabs/PromoChecklistTab';
+import KdpDescriptionTab from '../components/tabs/KdpDescriptionTab';
 import AplusContentTab from '../components/tabs/AplusContentTab';
 import FormatGuideTab from '../components/tabs/FormatGuideTab';
 import ReleaseScheduleCard from '../components/ReleaseScheduleCard';
@@ -31,6 +32,7 @@ const TABS = [
   { id: 'kdp',       label: 'KDP登録進捗' },
   { id: 'category',  label: 'カテゴリーチェック' },
   { id: 'promo',     label: 'プロモーション戦略メモ' },
+  { id: 'description', label: 'KDP書籍説明文' },
   { id: 'aplus',     label: '表紙＆A+コンテンツ' },
   { id: 'format',    label: '原稿Kindle調整ツール' },
 ];
@@ -296,6 +298,7 @@ export default function Home() {
             {activeTab === 'kdp'       && <KdpChecklistTab {...tabProps} />}
             {activeTab === 'category'  && <CategoryCheckTab {...tabProps} />}
             {activeTab === 'promo'     && <PromoChecklistTab {...tabProps} />}
+            {activeTab === 'description' && <KdpDescriptionTab {...tabProps} />}
             {activeTab === 'aplus'     && <AplusContentTab {...tabProps} />}
             {activeTab === 'format'    && <FormatGuideTab project={currentProject} />}
           </motion.div>
