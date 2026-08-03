@@ -41,7 +41,7 @@ const TABS = [
   { id: 'promo',     label: 'プロモーション戦略メモ' },
   { id: 'description', label: 'KDP書籍説明文' },
   { id: 'aplus',     label: '表紙＆A+コンテンツ' },
-  { id: 'format',    label: '原稿Kindle調整ツール' },
+  { id: 'format',    label: 'Kindle原稿作成ガイド' },
   { id: 'critique',  label: '辛口論評' },
 ];
 
@@ -318,7 +318,7 @@ export default function Home() {
             {activeTab === 'promo'     && <PromoChecklistTab {...tabProps} />}
             {activeTab === 'description' && <KdpDescriptionTab {...tabProps} />}
             {activeTab === 'aplus'     && <AplusContentTab {...tabProps} />}
-            {activeTab === 'format'    && <FormatGuideTab project={currentProject} />}
+            {activeTab === 'format'    && <FormatGuideTab {...tabProps} />}
             {activeTab === 'critique'  && <ReviewGuideTab {...tabProps} />}
           </motion.div>
         </AnimatePresence>

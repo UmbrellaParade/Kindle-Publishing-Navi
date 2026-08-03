@@ -280,7 +280,7 @@ function readProjectManuscript(project) {
   try {
     raw = localStorage.getItem(`format_guide_state_${project?.id || 'global'}`);
   } catch (cause) {
-    throw new Error('原稿調整データを確認できないため、相談文のコピーを停止しました', { cause });
+    throw new Error('旧版で保存した原稿データを確認できないため、相談文のコピーを停止しました', { cause });
   }
   return readCritiqueManuscriptState(raw, project?.manuscript);
 }
@@ -974,7 +974,7 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
     try {
       manuscript = readProjectManuscript(project);
     } catch (error) {
-      toast.error(error?.message || '原稿調整データを読み込めないため、相談文のコピーを停止しました');
+      toast.error(error?.message || '旧版で保存した原稿データを読み込めないため、相談文のコピーを停止しました');
       return;
     }
     const bookTitle = project.book_title
@@ -1104,7 +1104,7 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
           </div>
         </div>
         <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">
-          相談文には、現在の書名・説明文・対象読者の手掛かり・原稿調整ツールの本文・直近の論評をまとめます。このボタンでは外部送信しません。
+          相談文には、現在の書名・説明文・対象読者の手掛かり・旧版で保存済みの原稿本文（ある場合）・直近の論評をまとめます。新しい原稿はCodexの相談時にファイルで添付してください。このボタンでは外部送信しません。
         </p>
       </section>
 

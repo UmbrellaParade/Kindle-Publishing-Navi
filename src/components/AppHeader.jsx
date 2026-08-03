@@ -34,7 +34,7 @@ export default function AppHeader({ projects, currentProject, onSelectProject, o
 
   const handleDelete = async (proj, e) => {
     e.stopPropagation();
-    if (!window.confirm(`「${proj.name}」を削除しますか？\nプロジェクトと原稿調整データ・ルビ辞書は元に戻せません。保存画像は他の本で使っている可能性があるためブラウザ内に残します。必要なら先に「データ管理」からバックアップしてください。`)) return;
+    if (!window.confirm(`「${proj.name}」を削除しますか？\nプロジェクトと旧版で保存した原稿調整データ・ルビ辞書は元に戻せません。保存画像は他の本で使っている可能性があるためブラウザ内に残します。必要なら先に「データ管理」からバックアップしてください。`)) return;
 
     try {
       await flushPendingSaves();

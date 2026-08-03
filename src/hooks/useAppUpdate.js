@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export const FALLBACK_APP_VERSION = '1.7.0';
+export const FALLBACK_APP_VERSION = '1.8.0';
 export const APP_UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000;
 
 const DISMISSED_VERSION_KEY = 'kindle_navi_dismissed_update_version';

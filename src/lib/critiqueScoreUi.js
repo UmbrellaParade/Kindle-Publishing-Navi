@@ -49,16 +49,16 @@ export function readCritiqueManuscriptState(rawFormatGuideState, projectManuscri
     return resolveCritiqueManuscript(null, projectManuscript);
   }
   if (typeof rawFormatGuideState !== 'string') {
-    throw new Error('原稿調整データがJSON文字列ではありません');
+    throw new Error('旧版で保存した原稿データがJSON文字列ではありません');
   }
   let parsed;
   try {
     parsed = JSON.parse(rawFormatGuideState);
   } catch (cause) {
-    throw new Error('原稿調整データが壊れているため、相談文のコピーを停止しました', { cause });
+    throw new Error('旧版で保存した原稿データが壊れているため、相談文のコピーを停止しました', { cause });
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.sharedText !== 'string') {
-    throw new Error('原稿調整データの保存形式が正しくないため、相談文のコピーを停止しました');
+    throw new Error('旧版で保存した原稿データの保存形式が正しくないため、相談文のコピーを停止しました');
   }
   return parsed.sharedText;
 }

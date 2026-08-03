@@ -241,7 +241,7 @@ export default function CategoryCheckTab({ project, onProjectUpdate }) {
         )}
         {['絵本・児童書', 'マンガ', '写真・作品集'].includes(bookType) && (
           <p className="text-[10px] text-neon-amber leading-relaxed">
-            このナビの標準工程と原稿調整は文章中心のKindle本向けです。画像主体・固定レイアウトの本では、日程と出力ガイドを参考として使い、KDP公式要件も確認してください。
+            このナビの標準工程と原稿作成ガイドは文章中心のKindle本向けです。画像主体・固定レイアウトの本では、日程と形式ガイドを参考として使い、KDP公式要件も確認してください。
           </p>
         )}
       </div>
