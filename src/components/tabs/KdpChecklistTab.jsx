@@ -230,14 +230,19 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
     if (!project) return;
     const persist = async () => {
       const updated = await mutatePublishingProject(project.id, latest => {
-        const currentMeta = (() => {
-          try { return latest?.kdp_meta ? JSON.parse(latest.kdp_meta) : {}; }
-          catch { return {}; }
-        })();
-        return {
-          kdp_description: val,
-          kdp_meta: JSON.stringify({ ...currentMeta, description: val }),
-        };
+        try {
+          const currentMeta = latest?.kdp_meta ? JSON.parse(latest.kdp_meta) : {};
+          if (!currentMeta || typeof currentMeta !== 'object' || Array.isArray(currentMeta)) {
+            throw new Error('KDPメタデータ形式エラー');
+          }
+          return {
+            kdp_description: val,
+            kdp_meta: JSON.stringify({ ...currentMeta, description: val }),
+          };
+        } catch {
+          // 壊れたメタデータは上書きせず、独立した説明文フィールドだけ更新する。
+          return { kdp_description: val };
+        }
       }, project);
       onProjectUpdate(updated);
     };

@@ -432,6 +432,32 @@ function mergeRubyDictionaries(current, incoming) {
   return merged;
 }
 
+function parsePlainJsonObject(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergeProjectKdpMeta(currentValue, incomingValue) {
+  const current = parsePlainJsonObject(currentValue);
+  const incoming = parsePlainJsonObject(incomingValue);
+  if (!incoming) return current ? currentValue : incomingValue;
+  if (!current) return incomingValue;
+  return JSON.stringify({ ...current, ...incoming });
+}
+
+function mergeProject(left, right) {
+  const merged = { ...left, ...right };
+  if (Object.prototype.hasOwnProperty.call(right, 'kdp_meta')) {
+    merged.kdp_meta = mergeProjectKdpMeta(left.kdp_meta, right.kdp_meta);
+  }
+  return merged;
+}
+
 /** 検証済みスナップショット同士から、merge / replace 後のデータを純粋関数で計算します。 */
 export function buildDataRestorePlan(currentBackup, incomingBackup, mode = 'merge') {
   if (mode !== 'merge' && mode !== 'replace') {
@@ -444,7 +470,7 @@ export function buildDataRestorePlan(currentBackup, incomingBackup, mode = 'merg
   const projects = mergeById(
     current.data.projects,
     incoming.data.projects,
-    (left, right) => ({ ...left, ...right }),
+    mergeProject,
   );
   const formatGuideStates = mergeById(
     current.data.formatGuideStates.map(item => ({ ...item, id: item.projectId })),
