@@ -249,18 +249,23 @@ function ModuleEditor({
 
       <div className="grid gap-5 p-4 lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.25fr)]">
         <div className="min-w-0 space-y-4">
-          <div className="relative mx-auto flex aspect-square w-full max-w-[430px] items-center justify-center overflow-hidden rounded-lg border border-neon-cyan/25 bg-black/30">
-            {activeImage.image_url ? (
-              <AplusImage imageRef={activeImage.image_url} alt={activeImage.alt_text || `A+画像${activeIndex + 1}`} className="h-full w-full object-contain" />
-            ) : (
-              <label htmlFor={fileInputId} className="flex h-full w-full cursor-pointer flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground transition hover:bg-neon-cyan/5 hover:text-neon-cyan">
-                <span className="flex h-14 w-14 items-center justify-center rounded-full border border-dashed border-neon-cyan/35 bg-neon-cyan/5">
-                  <Upload className="h-6 w-6" />
-                </span>
-                <span className="text-xs font-bold">画像 {activeIndex + 1} を選択</span>
-                <span className="text-[10px] leading-relaxed">JPG / PNG / BMP・300×300px以上<br />大きい画像はKDP用に自動軽量化</span>
-              </label>
-            )}
+          <div className="space-y-2">
+            <p className="text-xs font-bold text-foreground">
+              画像 <span className="text-neon-cyan">[300px x300px min]</span>
+            </p>
+            <div className="relative mx-auto flex aspect-square w-full max-w-[430px] items-center justify-center overflow-hidden rounded-lg border border-neon-cyan/25 bg-black/30">
+              {activeImage.image_url ? (
+                <AplusImage imageRef={activeImage.image_url} alt={activeImage.alt_text || `A+画像${activeIndex + 1}`} className="h-full w-full object-contain" />
+              ) : (
+                <label htmlFor={fileInputId} className="flex h-full w-full cursor-pointer flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground transition hover:bg-neon-cyan/5 hover:text-neon-cyan">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-full border border-dashed border-neon-cyan/35 bg-neon-cyan/5">
+                    <Upload className="h-6 w-6" />
+                  </span>
+                  <span className="text-xs font-bold">画像 {activeIndex + 1} を選択</span>
+                  <span className="text-[10px] leading-relaxed">JPG / PNG / BMP<br />大きい画像はKDP用に自動軽量化</span>
+                </label>
+              )}
+            </div>
           </div>
 
           <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.055] p-3">
