@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   Accessibility,
   AlertTriangle,
@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
+import CoverImageCard from '@/components/shared/CoverImageCard';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { downloadImage, getImageDataUrl } from '@/lib/localImageStore';
@@ -40,6 +41,7 @@ import {
   getAplusReadiness,
   normalizeAplusContent,
   readAplusContent,
+  selectAplusUploadBaseContent,
   validateAplusAsinText,
   validateAplusImageMetadata,
   writeAplusContent,
@@ -202,9 +204,10 @@ function ModuleEditor({
   onMoveImage,
   onMoveModule,
   onDeleteModule,
+  uploadError,
 }) {
   const [activeIndex, setActiveIndex] = useState(0);
-  const fileRef = useRef(null);
+  const fileInputId = useId();
   const activeImage = module.images[activeIndex] || module.images[0];
   const uploadKey = `${module.id}:${activeImage.id}`;
 
@@ -250,13 +253,13 @@ function ModuleEditor({
             {activeImage.image_url ? (
               <AplusImage imageRef={activeImage.image_url} alt={activeImage.alt_text || `A+画像${activeIndex + 1}`} className="h-full w-full object-contain" />
             ) : (
-              <button type="button" onClick={() => fileRef.current?.click()} className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground transition hover:bg-neon-cyan/5 hover:text-neon-cyan">
+              <label htmlFor={fileInputId} className="flex h-full w-full cursor-pointer flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground transition hover:bg-neon-cyan/5 hover:text-neon-cyan">
                 <span className="flex h-14 w-14 items-center justify-center rounded-full border border-dashed border-neon-cyan/35 bg-neon-cyan/5">
                   <Upload className="h-6 w-6" />
                 </span>
                 <span className="text-xs font-bold">画像 {activeIndex + 1} を選択</span>
                 <span className="text-[10px] leading-relaxed">JPG / PNG / BMP・300×300px以上<br />大きい画像はKDP用に自動軽量化</span>
-              </button>
+              </label>
             )}
           </div>
 
@@ -311,10 +314,10 @@ function ModuleEditor({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" onClick={() => fileRef.current?.click()} disabled={uploadingKey === uploadKey} className="min-h-10 w-full border border-neon-cyan/35 bg-neon-cyan/15 text-xs text-neon-cyan hover:bg-neon-cyan/25 sm:w-auto sm:flex-1">
+            <label htmlFor={fileInputId} aria-disabled={uploadingKey === uploadKey} className={`inline-flex min-h-10 w-full cursor-pointer items-center justify-center rounded-md border border-neon-cyan/35 bg-neon-cyan/15 px-4 text-xs font-bold text-neon-cyan transition hover:bg-neon-cyan/25 sm:w-auto sm:flex-1 ${uploadingKey === uploadKey ? 'pointer-events-none opacity-60' : ''}`}>
               {uploadingKey === uploadKey ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-1.5 h-3.5 w-3.5" />}
               {activeImage.image_url ? '選択中の画像を差し替え' : '選択中の枠へ画像を追加'}
-            </Button>
+            </label>
             <button type="button" onClick={() => moveActiveImage(-1)} disabled={activeIndex === 0} className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-secondary/60 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="選択中の画像を左へ移動">
               <ArrowLeft className="h-4 w-4" />
             </button>
@@ -332,17 +335,18 @@ function ModuleEditor({
               </>
             )}
             <input
-              ref={fileRef}
+              id={fileInputId}
               type="file"
               accept="image/jpeg,image/png,image/bmp"
-              className="hidden"
+              className="sr-only"
               onChange={event => {
                 const file = event.target.files?.[0];
-                if (file) onUpload(module.id, activeImage.id, file);
+                if (file) void onUpload(module.id, activeImage.id, file);
                 event.target.value = '';
               }}
             />
           </div>
+          {uploadError && <p className="text-xs leading-relaxed text-red-300" role="alert">{uploadError}</p>}
           {activeImage.image_url && (activeImage.width > 0 || activeImage.file_size > 0) && (
             <div className="space-y-1 text-[10px] text-muted-foreground">
               <p>
@@ -440,8 +444,10 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
   const [loadError, setLoadError] = useState(null);
   const [migratedLegacyImage, setMigratedLegacyImage] = useState(false);
   const [uploadingKey, setUploadingKey] = useState('');
+  const [uploadError, setUploadError] = useState(null);
 
   useEffect(() => {
+    setUploadError(null);
     if (!project) {
       const empty = normalizeAplusContent(null);
       contentRef.current = empty;
@@ -501,8 +507,10 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
       return;
     }
     const targetProject = project;
+    const displayedContentAtUploadStart = contentRef.current;
     const key = `${moduleId}:${imageId}`;
     setUploadingKey(key);
+    setUploadError(null);
     try {
       const prepared = await prepareAplusImageForUpload(file);
       const validation = validateAplusImageMetadata({
@@ -524,10 +532,11 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
         });
         if (result.error) throw result.error;
 
+        const uploadBaseContent = selectAplusUploadBaseContent(result, displayedContentAtUploadStart);
         let foundImage = false;
         const nextContent = normalizeAplusContent({
-          ...result.content,
-          modules: result.content.modules.map(module => module.id === moduleId
+          ...uploadBaseContent,
+          modules: uploadBaseContent.modules.map(module => module.id === moduleId
             ? {
               ...module,
               images: module.images.map(image => {
@@ -569,7 +578,9 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
         ? `${projectLabel}${(prepared.originalSize / 1_000_000).toFixed(2)}MB → ${(prepared.file.size / 1_000_000).toFixed(2)}MBへ自動軽量化して保存しました`
         : `${projectLabel}A+画像を保存しました`);
     } catch (error) {
-      toast.error(error?.message || 'A+画像を保存できませんでした');
+      const message = error?.message || 'A+画像を保存できませんでした';
+      setUploadError({ key, message });
+      toast.error(message);
     } finally {
       setUploadingKey('');
     }
@@ -636,7 +647,7 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Images className="h-5 w-5 text-neon-cyan" />
-              <h2 className="text-base font-black text-neon-cyan neon-cyan-glow sm:text-lg">A+コンテンツ管理</h2>
+              <h2 className="text-base font-black text-neon-cyan neon-cyan-glow sm:text-lg">表紙＆A+コンテンツ</h2>
               <span className={`rounded-full border px-2 py-1 text-[10px] font-bold ${STATUS_COLORS[content.status] || STATUS_COLORS.draft}`}>{statusOption.label}</span>
             </div>
             <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted-foreground">
@@ -654,6 +665,8 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
         </div>
         <div className="mt-4"><ProcessSteps /></div>
       </section>
+
+      <CoverImageCard project={project} onProjectUpdate={onProjectUpdate} />
 
       <KdpAplusSetupGuide />
 
@@ -788,6 +801,9 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
             onMoveImage={handleMoveImage}
             onMoveModule={handleMoveModule}
             onDeleteModule={handleDeleteModule}
+            uploadError={module.images.some(image => uploadError?.key === `${module.id}:${image.id}`)
+              ? uploadError.message
+              : ''}
           />
         ))}
       </div>

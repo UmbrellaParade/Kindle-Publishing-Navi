@@ -170,8 +170,21 @@ export function readAplusContent(kdpMetaRaw, { legacyImageUrl = '', projectName 
   return {
     content,
     error: error || shapeError,
+    hasSavedAplus,
     migratedLegacyImage: !hasAplusKey && Boolean(legacyImageUrl),
   };
+}
+
+/**
+ * The first unsaved A+ screen already has stable module/image IDs in memory.
+ * Re-reading an empty kdp_meta would create new IDs and make the selected slot
+ * impossible to find. Once A+ has been saved, the latest stored content wins
+ * so edits made in another tab are not overwritten.
+ */
+export function selectAplusUploadBaseContent(latestReadResult, displayedContent) {
+  return normalizeAplusContent(
+    latestReadResult?.hasSavedAplus ? latestReadResult.content : displayedContent,
+  );
 }
 
 export function writeAplusContent(kdpMetaRaw, content) {
