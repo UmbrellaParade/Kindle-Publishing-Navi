@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kindle SNS投稿アドバイザー"
+  short_description: "Kindle本のSNS投稿を企画・執筆・検品する相談役"
+  default_prompt: "Use $kindle-sns-promotion-advisor to plan, draft, and review social posts for my Kindle book."
