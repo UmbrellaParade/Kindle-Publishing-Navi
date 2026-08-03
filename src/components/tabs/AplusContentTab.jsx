@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { downloadImage, getImageDataUrl } from '@/lib/localImageStore';
+import { prepareAplusImageForUpload } from '@/lib/aplusImageOptimization';
 import { mutatePublishingProject } from '@/lib/projectMutation';
 import { flushPendingSaves, scheduleCoordinatedSave } from '@/lib/saveCoordinator';
 import {
@@ -48,6 +49,8 @@ const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const INPUT_STYLE = { background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' };
 const KDP_APLUS_URL = 'https://kdp.amazon.co.jp/ja_JP/help/topic/G8EP5W6H9CY7T8GS';
 const KDP_GUIDELINES_URL = 'https://kdp.amazon.co.jp/ja_JP/help/topic/G4WB7VPPEAREHAAD';
+const KDP_MARKETING_URL = 'https://kdp.amazon.co.jp/ja_JP/marketing/manager';
+const KDP_APLUS_MANAGER_URL = 'https://kdp.amazon.co.jp/aplus/content-manager';
 
 const STATUS_COLORS = {
   draft: 'border-slate-500/40 bg-slate-500/10 text-slate-300',
@@ -107,23 +110,6 @@ function AplusImage({ imageRef, alt, className = '' }) {
   return <img src={src} alt={alt} className={className} />;
 }
 
-function loadImageDimensions(file) {
-  return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const image = new window.Image();
-    image.onload = () => {
-      const dimensions = { width: image.naturalWidth, height: image.naturalHeight };
-      URL.revokeObjectURL(objectUrl);
-      resolve(dimensions);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error('画像の大きさを確認できませんでした'));
-    };
-    image.src = objectUrl;
-  });
-}
-
 function ProcessSteps() {
   const steps = [
     { icon: FilePenLine, label: '基本情報' },
@@ -150,6 +136,58 @@ function ProcessSteps() {
         );
       })}
     </div>
+  );
+}
+
+function KdpAplusSetupGuide() {
+  const steps = [
+    'KDPにログイン',
+    '上部の「マーケティング」',
+    '「A+コンテンツ」までスクロール',
+    '「A+コンテンツの管理」から作成開始',
+    '「モジュールの追加」で標準複数画像モジュール A',
+  ];
+
+  return (
+    <section className="rounded-xl border border-neon-cyan/25 p-4 sm:p-5" style={CARD_STYLE}>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4 text-neon-cyan" />
+            <h3 className="text-sm font-bold text-neon-cyan">KDPではどこから設定する？</h3>
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            下の順番で進むと「標準複数画像モジュール A」を選べます。
+          </p>
+        </div>
+        <div className="grid w-full gap-2 sm:grid-cols-2 lg:w-auto lg:min-w-[440px]">
+          <a href={KDP_MARKETING_URL} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-neon-pink/35 bg-neon-pink/15 px-3 text-xs font-bold text-neon-pink transition hover:bg-neon-pink/25">
+            <ExternalLink className="h-3.5 w-3.5" />KDPマーケティングを開く
+          </a>
+          <a href={KDP_APLUS_MANAGER_URL} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-neon-cyan/35 bg-neon-cyan/15 px-3 text-xs font-bold text-neon-cyan transition hover:bg-neon-cyan/25">
+            <ExternalLink className="h-3.5 w-3.5" />A+管理画面を直接開く
+          </a>
+        </div>
+      </div>
+
+      <ol className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        {steps.map((step, index) => (
+          <li key={step} className="flex min-h-16 items-start gap-2 rounded-lg border border-border/70 bg-white/[0.025] p-3">
+            <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-neon-cyan/15 text-[10px] font-black text-neon-cyan">{index + 1}</span>
+            <span className="text-[10px] font-bold leading-relaxed text-foreground/90">{step}</span>
+          </li>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-2 border-t border-border/60 pt-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[10px] leading-relaxed text-muted-foreground">
+          直接画面が開かない場合は、左の「KDPマーケティング」から進んでください。作成後は「次へ: ASINの適用」→プレビュー→「承認用に提出」です。
+        </p>
+        <a href={KDP_APLUS_URL} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 flex-shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-secondary/50 px-3 text-[10px] font-bold text-neon-cyan transition hover:border-neon-cyan/40">
+          <ExternalLink className="h-3 w-3" />KDP公式の作成手順
+        </a>
+      </div>
+    </section>
   );
 }
 
@@ -217,9 +255,16 @@ function ModuleEditor({
                   <Upload className="h-6 w-6" />
                 </span>
                 <span className="text-xs font-bold">画像 {activeIndex + 1} を選択</span>
-                <span className="text-[10px] leading-relaxed">300×300px以上・2MB未満<br />RGBのJPG / PNG / BMP</span>
+                <span className="text-[10px] leading-relaxed">JPG / PNG / BMP・300×300px以上<br />大きい画像はKDP用に自動軽量化</span>
               </button>
             )}
+          </div>
+
+          <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.055] p-3">
+            <p className="text-xs font-bold text-emerald-300">2MBを超える画像も、そのまま選択できます</p>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+              KDPへ登録しやすい1.8MB以下を目標に、必要な画像だけJPGへ自動変換・軽量化します。透過部分は白背景になります。
+            </p>
           </div>
 
           <div className="grid grid-cols-4 gap-2" role="tablist" aria-label={`モジュール${moduleIndex + 1}の画像`}>
@@ -278,8 +323,8 @@ function ModuleEditor({
             </button>
             {activeImage.image_url && (
               <>
-                <button type="button" onClick={() => downloadImage(activeImage.image_url, activeImage.file_name || `Aplus_${moduleIndex + 1}_${activeIndex + 1}.png`).catch(error => toast.error(error?.message || '画像をダウンロードできませんでした'))} className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-secondary/60 text-muted-foreground hover:text-neon-cyan" aria-label="選択中の画像をダウンロード">
-                  <Download className="h-4 w-4" />
+                <button type="button" onClick={() => downloadImage(activeImage.image_url, activeImage.file_name || `Aplus_${moduleIndex + 1}_${activeIndex + 1}.png`).catch(error => toast.error(error?.message || '画像をダウンロードできませんでした'))} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-border bg-secondary/60 px-3 text-[10px] font-bold text-muted-foreground hover:text-neon-cyan" aria-label="KDP登録用の画像をダウンロード">
+                  <Download className="h-4 w-4" />KDP用を保存
                 </button>
                 <button type="button" onClick={() => onDeleteImage(module.id, activeImage.id)} className="flex h-10 w-10 items-center justify-center rounded-md border border-red-500/25 bg-red-500/5 text-red-300 hover:bg-red-500/15" aria-label="選択中の画像を削除">
                   <Trash2 className="h-4 w-4" />
@@ -299,11 +344,18 @@ function ModuleEditor({
             />
           </div>
           {activeImage.image_url && (activeImage.width > 0 || activeImage.file_size > 0) && (
-            <p className="text-[10px] text-muted-foreground">
-              {activeImage.file_name || '保存済み画像'}
-              {activeImage.width > 0 ? `・${activeImage.width}×${activeImage.height}px` : ''}
-              {activeImage.file_size > 0 ? `・${(activeImage.file_size / 1024 / 1024).toFixed(2)}MB` : ''}
-            </p>
+            <div className="space-y-1 text-[10px] text-muted-foreground">
+              <p>
+                {activeImage.file_name || '保存済み画像'}
+                {activeImage.width > 0 ? `・${activeImage.width}×${activeImage.height}px` : ''}
+                {activeImage.file_size > 0 ? `・${(activeImage.file_size / 1_000_000).toFixed(2)}MB` : ''}
+              </p>
+              {activeImage.optimized && activeImage.original_file_size > 0 && (
+                <p className="font-bold text-emerald-300">
+                  自動軽量化済み：{(activeImage.original_file_size / 1_000_000).toFixed(2)}MB → {(activeImage.file_size / 1_000_000).toFixed(2)}MB
+                </p>
+              )}
+            </div>
           )}
         </div>
 
@@ -452,16 +504,17 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
     const key = `${moduleId}:${imageId}`;
     setUploadingKey(key);
     try {
-      const dimensions = await loadImageDimensions(file);
+      const prepared = await prepareAplusImageForUpload(file);
       const validation = validateAplusImageMetadata({
-        type: file.type,
-        size: file.size,
-        ...dimensions,
+        type: prepared.file.type,
+        size: prepared.file.size,
+        width: prepared.width,
+        height: prepared.height,
       });
       if (!validation.valid) throw new Error(validation.errors.join('／'));
       validation.warnings.forEach(message => toast.warning(message));
 
-      const { file_url: imageUrl } = await base44.integrations.Core.UploadFile({ file });
+      const { file_url: imageUrl } = await base44.integrations.Core.UploadFile({ file: prepared.file });
       await flushPendingSaves();
       const updatedProject = await mutatePublishingProject(targetProject.id, latest => {
         const sourceProject = latest || targetProject;
@@ -483,10 +536,13 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
                 return {
                   ...image,
                   image_url: imageUrl,
-                  file_name: file.name || '',
-                  file_size: file.size || 0,
-                  width: dimensions.width,
-                  height: dimensions.height,
+                  file_name: prepared.file.name || '',
+                  file_size: prepared.file.size || 0,
+                  original_file_name: prepared.originalName || '',
+                  original_file_size: prepared.originalSize || 0,
+                  optimized: prepared.optimized,
+                  width: prepared.width,
+                  height: prepared.height,
                 };
               }),
             }
@@ -508,9 +564,10 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
         contentRef.current = saved.content;
         setContent(saved.content);
       }
-      toast.success(activeProjectIdRef.current === targetProject.id
-        ? 'A+画像を保存しました'
-        : `「${targetProject.name}」のA+画像を保存しました`);
+      const projectLabel = activeProjectIdRef.current === targetProject.id ? '' : `「${targetProject.name}」へ`;
+      toast.success(prepared.optimized
+        ? `${projectLabel}${(prepared.originalSize / 1_000_000).toFixed(2)}MB → ${(prepared.file.size / 1_000_000).toFixed(2)}MBへ自動軽量化して保存しました`
+        : `${projectLabel}A+画像を保存しました`);
     } catch (error) {
       toast.error(error?.message || 'A+画像を保存できませんでした');
     } finally {
@@ -522,6 +579,7 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
     if (!window.confirm('この枠の画像と入力文をクリアしますか？')) return;
     updateImage(moduleId, imageId, {
       image_url: '', file_name: '', file_size: 0, width: 0, height: 0,
+      original_file_name: '', original_file_size: 0, optimized: false,
       alt_text: '', headline: '', body: '', caption: '',
     }, 0);
   }, [updateImage]);
@@ -596,6 +654,23 @@ export default function AplusContentTab({ project, onProjectUpdate }) {
         </div>
         <div className="mt-4"><ProcessSteps /></div>
       </section>
+
+      <KdpAplusSetupGuide />
+
+      <aside className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.045] p-4" aria-label="A+画像の容量について">
+        <div className="flex items-start gap-2">
+          <Download className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-300" />
+          <div>
+            <p className="text-sm font-bold text-emerald-300">画像容量はツールが自動で整えます</p>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+              「2MB未満」はKDPへ提出する1ファイルごとの条件で、ブラウザの保存上限とは別です。このツールは必要な画像だけ1.8MB以下を目標に軽量化し、加工後の画像だけをブラウザ内へ保存するため、両方の負担を減らせます。
+            </p>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+              公式ページ間で容量表記に差があるため、安全側の2MB未満で確認します。現在のKDP画面で表示される300×300px以上も確認しますが、PPIは自動保証できないため提出前チェックで確認してください。
+            </p>
+          </div>
+        </div>
+      </aside>
 
       {loadError && (
         <aside className="rounded-xl border border-red-500/40 bg-red-950/50 p-4 text-sm text-red-100" role="alert">

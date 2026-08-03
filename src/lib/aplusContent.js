@@ -14,7 +14,8 @@ export const APLUS_FIELD_LIMITS = Object.freeze({
 export const APLUS_IMAGE_SPEC = Object.freeze({
   minWidth: 300,
   minHeight: 300,
-  maxBytes: 2 * 1024 * 1024,
+  // KDPの「2MB未満」を安全側で判定するため、10進表記の2,000,000 bytesを使う。
+  maxBytes: 2_000_000,
   acceptedTypes: Object.freeze(['image/jpeg', 'image/png', 'image/bmp']),
 });
 
@@ -84,6 +85,9 @@ export function createEmptyAplusImage(slot = 0, overrides = {}) {
     image_url: asString(overrides.image_url),
     file_name: asString(overrides.file_name),
     file_size: Number.isFinite(overrides.file_size) ? overrides.file_size : 0,
+    original_file_name: asString(overrides.original_file_name),
+    original_file_size: Number.isFinite(overrides.original_file_size) ? overrides.original_file_size : 0,
+    optimized: asBoolean(overrides.optimized),
     width: Number.isFinite(overrides.width) ? overrides.width : 0,
     height: Number.isFinite(overrides.height) ? overrides.height : 0,
     alt_text: asString(overrides.alt_text).slice(0, APLUS_FIELD_LIMITS.altText),

@@ -153,7 +153,7 @@ test('A+画像の形式・容量・寸法を安全側の条件で検証する', 
   });
   const invalid = validateAplusImageMetadata({
     type: 'image/gif',
-    size: 2 * 1024 * 1024,
+    size: 2_000_000,
     width: 299,
     height: 300,
   });
@@ -162,6 +162,28 @@ test('A+画像の形式・容量・寸法を安全側の条件で検証する', 
   assert.equal(valid.warnings.length, 0);
   assert.equal(invalid.valid, false);
   assert.equal(invalid.errors.length, 3);
+});
+
+test('自動軽量化したA+画像の元容量と加工後情報を保持する', () => {
+  const content = createDefaultAplusContent();
+  Object.assign(content.modules[0].images[0], {
+    image_url: 'local-image:optimized',
+    file_name: 'large_kdp.jpg',
+    file_size: 1_750_000,
+    original_file_name: 'large.png',
+    original_file_size: 5_200_000,
+    optimized: true,
+    width: 1200,
+    height: 1200,
+  });
+
+  const normalized = normalizeAplusContent(content);
+  const image = normalized.modules[0].images[0];
+
+  assert.equal(image.optimized, true);
+  assert.equal(image.original_file_name, 'large.png');
+  assert.equal(image.original_file_size, 5_200_000);
+  assert.equal(image.file_size, 1_750_000);
 });
 
 test('対象ASINは10文字英数字・重複なしの場合だけ有効にする', () => {
