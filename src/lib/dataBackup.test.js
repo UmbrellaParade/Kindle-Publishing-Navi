@@ -3,17 +3,21 @@ import assert from 'node:assert/strict';
 
 import {
   BackupImportError,
+  BackupRecoveryRequiredError,
   BackupValidationError,
   buildDataRestorePlan,
   createDataBackup,
+  createDataBackupBundle,
   importDataBackup,
   parseDataBackup,
   PROJECTS_STORAGE_KEY,
   PROJECT_RUBY_DICTIONARY_STORAGE_PREFIX,
   RUBY_DICTIONARY_STORAGE_KEY,
   SELECTED_PROJECT_STORAGE_KEY,
+  serializeCritiqueRecovery,
   validateDataBackup,
 } from './dataBackup.js';
+import { readCritiqueHistory, serializeCritiqueHistory } from './critiqueHistory.js';
 
 const FIXED_DATE = '2026-08-03T00:00:00.000Z';
 const now = () => new Date(FIXED_DATE);
@@ -48,6 +52,22 @@ function image(id) {
     dataUrl: 'data:image/png;base64,AA==',
     createdAt: FIXED_DATE,
   };
+}
+
+function critiqueEntry(id, overrides = {}) {
+  return {
+    id,
+    createdAt: FIXED_DATE,
+    updatedAt: FIXED_DATE,
+    reviewedAt: FIXED_DATE,
+    manuscriptLabel: `draft-${id}`,
+    summary: `review-${id}`,
+    ...overrides,
+  };
+}
+
+function critiqueHistory(entries) {
+  return serializeCritiqueHistory(entries);
 }
 
 function backup({
@@ -327,4 +347,452 @@ test('replaceでは現在だけにある許可済みデータを削除する', a
   assert.equal(storage.getItem(`${PROJECT_RUBY_DICTIONARY_STORAGE_PREFIX}p1`), null);
   assert.equal(JSON.parse(storage.getItem('kindle_navi_ai_settings')).apiKey, 'touch-no-secret');
   assert.deepEqual(storedImages.map(record => record.id), ['img-import']);
+});
+
+test('辛口論評履歴を正規化して書き出し、旧バックアップも引き続き検証できる', async () => {
+  const rawHistory = JSON.stringify({
+    version: 1,
+    entries: [{
+      ...critiqueEntry('critique-1'),
+      unknown_nested_field: 'drop-me',
+    }],
+    unknown_envelope_field: 'drop-me-too',
+  });
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'p1',
+      name: '監査対象',
+      critique_history: rawHistory,
+    }]),
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+
+  const exported = await createDataBackup({ storage, imageStore, now });
+  const parsedHistory = readCritiqueHistory(exported.data.projects[0].critique_history);
+
+  assert.equal(parsedHistory.error, null);
+  assert.equal(parsedHistory.entries.length, 1);
+  assert.equal(parsedHistory.entries[0].id, 'critique-1');
+  assert.equal(parsedHistory.entries[0].summary, 'review-critique-1');
+  assert.equal(Object.hasOwn(parsedHistory.entries[0], 'unknown_nested_field'), false);
+  assert.doesNotMatch(exported.data.projects[0].critique_history, /unknown_envelope_field/);
+
+  const oldBackup = backup({ projects: [{ id: 'old', name: '旧版の本' }] });
+  assert.equal(validateDataBackup(oldBackup).data.projects[0].critique_history, undefined);
+});
+
+test('壊れた辛口論評履歴と未対応の将来バージョンを復元前に拒否する', () => {
+  assert.throws(
+    () => validateDataBackup(backup({
+      projects: [{ id: 'p1', name: '本', critique_history: '{broken' }],
+    })),
+    BackupValidationError,
+  );
+  assert.throws(
+    () => validateDataBackup(backup({
+      projects: [{
+        id: 'p1',
+        name: '本',
+        critique_history: JSON.stringify({ version: 999, entries: [] }),
+      }],
+    })),
+    BackupValidationError,
+  );
+});
+
+test('mergeでは辛口論評履歴をID単位で結合し、同じIDは入力側を優先する', () => {
+  const current = backup({
+    projects: [{
+      id: 'p1',
+      name: '現在の本',
+      critique_history: critiqueHistory([
+        critiqueEntry('keep-current'),
+        critiqueEntry('shared', { summary: '現在の総評' }),
+      ]),
+    }],
+  });
+  const incoming = backup({
+    projects: [{
+      id: 'p1',
+      name: '復元後の本',
+      critique_history: critiqueHistory([
+        critiqueEntry('shared', { summary: '入力側の総評' }),
+        critiqueEntry('add-incoming'),
+      ]),
+    }],
+  });
+
+  const plan = buildDataRestorePlan(current, incoming, 'merge');
+  const parsed = readCritiqueHistory(plan.projects[0].critique_history);
+
+  assert.equal(parsed.error, null);
+  assert.deepEqual(
+    new Set(parsed.entries.map(entry => entry.id)),
+    new Set(['keep-current', 'shared', 'add-incoming']),
+  );
+  assert.equal(
+    parsed.entries.find(entry => entry.id === 'shared').summary,
+    '入力側の総評',
+  );
+});
+
+test('旧バックアップのmergeでは現在の辛口論評履歴を失わない', () => {
+  const current = backup({
+    projects: [{
+      id: 'p1',
+      name: '現在の本',
+      critique_history: critiqueHistory([critiqueEntry('keep-current')]),
+    }],
+  });
+  const incoming = backup({ projects: [{ id: 'p1', name: '旧バックアップの本' }] });
+
+  const plan = buildDataRestorePlan(current, incoming, 'merge');
+  const parsed = readCritiqueHistory(plan.projects[0].critique_history);
+
+  assert.equal(parsed.error, null);
+  assert.deepEqual(parsed.entries.map(entry => entry.id), ['keep-current']);
+});
+
+test('replaceと再書き出しで大きな総評・原稿・KDP情報・画像参照を保つ', async () => {
+  const largeOverallReview = '大きな総評。'.repeat(40_000);
+  const incomingImage = image('critique-roundtrip-image');
+  const incoming = backup({
+    projects: [{
+      id: 'p2',
+      name: '復元する本',
+      manuscript: '失ってはいけない原稿本文',
+      aplus_image_url: 'local-image:critique-roundtrip-image',
+      kdp_meta: JSON.stringify({
+        description: '保持するKDP説明',
+        aplus: { version: 1, modules: [{ images: [{ image_url: 'local-image:critique-roundtrip-image' }] }] },
+      }),
+      critique_history: critiqueHistory([
+        critiqueEntry('large-review', { summary: largeOverallReview }),
+      ]),
+    }],
+    images: [incomingImage],
+  });
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{ id: 'p1', name: '置換前の本' }]),
+    [SELECTED_PROJECT_STORAGE_KEY]: 'p1',
+  });
+  let storedImages = [image('old-image')];
+  const imageStore = {
+    listLocalImages: async () => clone(storedImages),
+    replaceLocalImages: async records => { storedImages = clone(records); },
+  };
+
+  await importDataBackup(incoming, {
+    mode: 'replace', storage, imageStore, now, appVersion: '2.0.0',
+  });
+  const roundTrip = await createDataBackup({ storage, imageStore, now, appVersion: '2.0.0' });
+  const restoredProject = roundTrip.data.projects[0];
+  const parsed = readCritiqueHistory(restoredProject.critique_history);
+
+  assert.equal(roundTrip.schemaVersion, 1);
+  assert.equal(restoredProject.id, 'p2');
+  assert.equal(restoredProject.manuscript, '失ってはいけない原稿本文');
+  assert.equal(restoredProject.aplus_image_url, 'local-image:critique-roundtrip-image');
+  assert.equal(JSON.parse(restoredProject.kdp_meta).description, '保持するKDP説明');
+  assert.equal(
+    JSON.parse(restoredProject.kdp_meta).aplus.modules[0].images[0].image_url,
+    'local-image:critique-roundtrip-image',
+  );
+  assert.equal(parsed.error, null);
+  assert.equal(parsed.entries[0].summary, largeOverallReview);
+  assert.deepEqual(roundTrip.data.images.map(record => record.id), ['critique-roundtrip-image']);
+});
+
+test('壊れた辛口論評履歴を通常バックアップから分離し、原文を復旧用JSONへ完全保持する', async () => {
+  const corruptRaw = ' {\r\n  "version": 999,\r\n  "entries": [{"memo":"消さない"}]\r\n} ';
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'p1',
+      name: '復旧対象の本',
+      manuscript: '有効な原稿本文',
+      critique_history: corruptRaw,
+    }]),
+    [SELECTED_PROJECT_STORAGE_KEY]: 'p1',
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+
+  const bundle = await createDataBackupBundle({
+    appVersion: '2.0.0', storage, imageStore, now,
+  });
+  const safeProject = bundle.backup.data.projects[0];
+
+  assert.equal(validateDataBackup(bundle.backup).data.projects[0].manuscript, '有効な原稿本文');
+  assert.equal(Object.hasOwn(safeProject, 'critique_history'), false);
+  assert.equal(bundle.critiqueRecovery.entries.length, 1);
+  assert.equal(bundle.critiqueRecovery.entries[0].projectId, 'p1');
+  assert.equal(bundle.critiqueRecovery.entries[0].projectName, '復旧対象の本');
+  assert.match(bundle.critiqueRecovery.entries[0].error, /バージョン999/);
+  assert.equal(bundle.critiqueRecovery.entries[0].raw, corruptRaw);
+  assert.equal(
+    JSON.parse(serializeCritiqueRecovery(bundle.critiqueRecovery)).entries[0].raw,
+    corruptRaw,
+  );
+
+  await assert.rejects(
+    createDataBackup({ appVersion: '2.0.0', storage, imageStore, now }),
+    error => error instanceof BackupRecoveryRequiredError
+      && error.critiqueRecovery?.entries[0].raw === corruptRaw,
+  );
+
+  const targetStorage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{ id: 'old', name: '置換前' }]),
+  });
+  await importDataBackup(bundle.backup, {
+    mode: 'replace', storage: targetStorage, imageStore, now,
+  });
+  const restoredProject = JSON.parse(targetStorage.getItem(PROJECTS_STORAGE_KEY))[0];
+  assert.equal(restoredProject.id, 'p1');
+  assert.equal(restoredProject.manuscript, '有効な原稿本文');
+  assert.equal(Object.hasOwn(restoredProject, 'critique_history'), false);
+});
+
+test('mergeは未修復の壊れた原文を保ち、入力側に有効な履歴がある時だけ修復する', async () => {
+  const corruptRaw = '{ "version": 999, "entries": [], "future": "そのまま" }';
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  const storageWithoutRepair = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'p1', name: '現在の本', critique_history: corruptRaw,
+    }]),
+  });
+
+  const preservedResult = await importDataBackup(backup({
+    projects: [{ id: 'p1', name: '旧バックアップからの更新', manuscript: '更新原稿' }],
+  }), {
+    mode: 'merge', storage: storageWithoutRepair, imageStore, now,
+  });
+  const preservedProject = JSON.parse(storageWithoutRepair.getItem(PROJECTS_STORAGE_KEY))[0];
+
+  assert.equal(preservedProject.critique_history, corruptRaw);
+  assert.equal(preservedProject.manuscript, '更新原稿');
+  assert.equal(preservedResult.beforeCritiqueRecovery.entries[0].raw, corruptRaw);
+
+  const storageWithRepair = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'p1', name: '現在の本', critique_history: corruptRaw,
+    }]),
+  });
+  let repairImageWrites = 0;
+  let repairPreflightCalled = false;
+  const repairImageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => { repairImageWrites += 1; },
+  };
+  const validIncomingHistory = critiqueHistory([critiqueEntry('repaired')]);
+  const repairedResult = await importDataBackup(backup({
+    projects: [{
+      id: 'p1',
+      name: '修復済みの本',
+      critique_history: validIncomingHistory,
+    }],
+  }), {
+    mode: 'merge',
+    storage: storageWithRepair,
+    imageStore: repairImageStore,
+    now,
+    beforeApply: ({ beforeCritiqueRecovery, critiqueRepairProjectIds }) => {
+      repairPreflightCalled = true;
+      assert.equal(
+        JSON.parse(storageWithRepair.getItem(PROJECTS_STORAGE_KEY))[0].critique_history,
+        corruptRaw,
+      );
+      assert.equal(repairImageWrites, 0);
+      assert.equal(beforeCritiqueRecovery.entries[0].raw, corruptRaw);
+      assert.deepEqual(critiqueRepairProjectIds, ['p1']);
+      return { critiqueRecoverySaved: true };
+    },
+  });
+  const repairedProject = JSON.parse(storageWithRepair.getItem(PROJECTS_STORAGE_KEY))[0];
+  const repairedHistory = readCritiqueHistory(repairedProject.critique_history);
+
+  assert.equal(repairedResult.beforeCritiqueRecovery.entries[0].raw, corruptRaw);
+  assert.equal(repairPreflightCalled, true);
+  assert.equal(repairImageWrites, 1);
+  assert.equal(repairedHistory.error, null);
+  assert.deepEqual(repairedHistory.entries.map(entry => entry.id), ['repaired']);
+  assert.notEqual(repairedProject.critique_history, corruptRaw);
+});
+
+test('壊れた履歴を修復するmergeは適用前保存なしでは停止し、現在データへ触れない', async () => {
+  const corruptRaw = '{"version":999,"entries":[]}';
+  const originalProjectsRaw = JSON.stringify([{
+    id: 'p1', name: '現在の本', critique_history: corruptRaw,
+  }]);
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: originalProjectsRaw,
+  });
+  let imageWrites = 0;
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => { imageWrites += 1; },
+  };
+  const incoming = backup({
+    projects: [{
+      id: 'p1',
+      name: '修復する本',
+      critique_history: critiqueHistory([critiqueEntry('repair-required')]),
+    }],
+  });
+
+  await assert.rejects(
+    importDataBackup(incoming, { mode: 'merge', storage, imageStore, now }),
+    error => error instanceof BackupImportError
+      && error.preflightFailed === true
+      && error.writeStarted === false
+      && error.beforeCritiqueRecovery?.entries[0].raw === corruptRaw,
+  );
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
+  assert.equal(imageWrites, 0);
+
+  await assert.rejects(
+    importDataBackup(incoming, {
+      mode: 'merge',
+      storage,
+      imageStore,
+      now,
+      beforeApply: () => ({ critiqueRecoverySaved: false }),
+    }),
+    error => error instanceof BackupImportError
+      && error.preflightFailed === true
+      && error.writeStarted === false,
+  );
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
+  assert.equal(imageWrites, 0);
+});
+
+test('merge適用前の復旧用JSON保存に失敗したらlocalStorageと画像を一切変更しない', async () => {
+  const corruptRaw = '{broken-history\r\n原文';
+  const originalProjectsRaw = JSON.stringify([{
+    id: 'p1',
+    name: '現在の本',
+    manuscript: '変更前原稿',
+    critique_history: corruptRaw,
+  }]);
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: originalProjectsRaw,
+    untouched_key: '変更しない',
+  });
+  let imageWrites = 0;
+  const imageStore = {
+    listLocalImages: async () => [image('current-image')],
+    replaceLocalImages: async () => { imageWrites += 1; },
+  };
+  const incoming = backup({
+    projects: [{
+      id: 'p1',
+      name: '修復する本',
+      manuscript: '変更後原稿',
+      critique_history: critiqueHistory([critiqueEntry('repair-after-save')]),
+    }],
+    images: [image('incoming-image')],
+  });
+  let callbackObservedRaw = '';
+
+  await assert.rejects(
+    importDataBackup(incoming, {
+      mode: 'merge',
+      storage,
+      imageStore,
+      now,
+      beforeApply: ({ beforeCritiqueRecovery }) => {
+        callbackObservedRaw = beforeCritiqueRecovery.entries[0].raw;
+        throw new Error('download blocked');
+      },
+    }),
+    error => error instanceof BackupImportError
+      && error.preflightFailed === true
+      && error.writeStarted === false
+      && error.rollbackSucceeded === true,
+  );
+
+  assert.equal(callbackObservedRaw, corruptRaw);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
+  assert.equal(storage.getItem('untouched_key'), '変更しない');
+  assert.equal(imageWrites, 0);
+});
+
+test('現在の論評履歴が壊れていても、正常バックアップから全置換復元できる', async () => {
+  const corruptRaw = '{"version":999,"entries":[],"raw":"保持"}';
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'broken-current',
+      name: '壊れた現行データ',
+      manuscript: '復元前原稿',
+      critique_history: corruptRaw,
+    }]),
+    [SELECTED_PROJECT_STORAGE_KEY]: 'broken-current',
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  const incoming = backup({
+    projects: [{ id: 'restored', name: '正常バックアップ', manuscript: '復元後原稿' }],
+    selectedProjectId: 'restored',
+  });
+
+  const result = await importDataBackup(incoming, {
+    mode: 'replace', storage, imageStore, now,
+  });
+  const restoredProjects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY));
+
+  assert.deepEqual(restoredProjects.map(project => project.id), ['restored']);
+  assert.equal(restoredProjects[0].manuscript, '復元後原稿');
+  assert.equal(result.beforeCritiqueRecovery.entries[0].raw, corruptRaw);
+  assert.equal(Object.hasOwn(result.beforeSnapshot.data.projects[0], 'critique_history'), false);
+});
+
+test('復元失敗時は壊れた辛口論評原文を含むlocalStorageを完全に戻し、呼出元へ復旧情報を返す', async () => {
+  const corruptRaw = '{not-json\r\n元の文字列を維持する';
+  const originalProjectsRaw = JSON.stringify([{
+    id: 'p1',
+    name: '現在の本',
+    manuscript: '現在の原稿',
+    critique_history: corruptRaw,
+    future_field: '未知の項目も含む元保存値',
+  }]);
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: originalProjectsRaw,
+  });
+  let storedImages = [image('current-image')];
+  let replaceCalls = 0;
+  const imageStore = {
+    listLocalImages: async () => clone(storedImages),
+    replaceLocalImages: async (records) => {
+      replaceCalls += 1;
+      if (replaceCalls === 1) throw new Error('quota error');
+      storedImages = clone(records);
+    },
+  };
+  const incoming = backup({
+    projects: [{ id: 'p2', name: '追加する本' }],
+    images: [image('incoming-image')],
+  });
+
+  let caught;
+  try {
+    await importDataBackup(incoming, { mode: 'merge', storage, imageStore, now });
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.ok(caught instanceof BackupImportError);
+  assert.equal(caught.rollbackSucceeded, true);
+  assert.equal(caught.beforeCritiqueRecovery.entries[0].raw, corruptRaw);
+  assert.equal(Object.hasOwn(caught.beforeSnapshot.data.projects[0], 'critique_history'), false);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
+  assert.deepEqual(storedImages.map(record => record.id), ['current-image']);
 });

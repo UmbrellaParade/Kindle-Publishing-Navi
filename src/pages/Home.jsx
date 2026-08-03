@@ -8,6 +8,7 @@ import PromoChecklistTab from '../components/tabs/PromoChecklistTab';
 import KdpDescriptionTab from '../components/tabs/KdpDescriptionTab';
 import AplusContentTab from '../components/tabs/AplusContentTab';
 import FormatGuideTab from '../components/tabs/FormatGuideTab';
+import ReviewGuideTab from '../components/tabs/ReviewGuideTab';
 import ReleaseScheduleCard from '../components/ReleaseScheduleCard';
 import AppUpdateBanner from '../components/AppUpdateBanner';
 import BrowserStorageNotice from '../components/BrowserStorageNotice';
@@ -23,7 +24,13 @@ import {
 } from '@/lib/saveCoordinator';
 import { toast } from 'sonner';
 import { CURRENT_APP_VERSION } from '@/hooks/useAppUpdate';
-import { createBackupFileName, createDataBackup, downloadDataBackup } from '@/lib/dataBackup';
+import {
+  createBackupFileName,
+  createCritiqueRecoveryFileName,
+  createDataBackupBundle,
+  downloadCritiqueRecovery,
+  downloadDataBackup,
+} from '@/lib/dataBackup';
 
 const SELECTED_PROJECT_KEY = 'kindle_publishing_navi_selected_project_id';
 
@@ -35,6 +42,7 @@ const TABS = [
   { id: 'description', label: 'KDP書籍説明文' },
   { id: 'aplus',     label: '表紙＆A+コンテンツ' },
   { id: 'format',    label: '原稿Kindle調整ツール' },
+  { id: 'critique',  label: '辛口論評' },
 ];
 
 export default function Home() {
@@ -78,10 +86,20 @@ export default function Home() {
 
   const prepareLegacyMigration = useCallback(async () => {
     await flushPendingSaves();
-    const backup = await createDataBackup({ appVersion: CURRENT_APP_VERSION });
+    const { backup, critiqueRecovery } = await createDataBackupBundle({
+      appVersion: CURRENT_APP_VERSION,
+    });
     downloadDataBackup(backup, {
       filename: createBackupFileName('kindle-navi-before-legacy-import'),
     });
+    if (critiqueRecovery) {
+      downloadCritiqueRecovery(critiqueRecovery, {
+        filename: createCritiqueRecoveryFileName(
+          'kindle-navi-before-legacy-import-critique-recovery',
+        ),
+      });
+      toast.warning('旧版データ取込前のバックアップに加え、壊れた辛口論評履歴の原文を復旧用JSONとして保存しました。両方を保管してください');
+    }
   }, []);
 
   const handleLegacyMigrationError = useCallback(error => {
@@ -301,6 +319,7 @@ export default function Home() {
             {activeTab === 'description' && <KdpDescriptionTab {...tabProps} />}
             {activeTab === 'aplus'     && <AplusContentTab {...tabProps} />}
             {activeTab === 'format'    && <FormatGuideTab project={currentProject} />}
+            {activeTab === 'critique'  && <ReviewGuideTab {...tabProps} />}
           </motion.div>
         </AnimatePresence>
       </main>

@@ -74,6 +74,10 @@
       "type": "string",
       "description": "\u539f\u7a3f\u672c\u6587"
     },
+    "critique_history": {
+      "type": "string",
+      "description": "\u8f9b\u53e3\u8ad6\u8a55\u5c65\u6b74\uff08JSON\uff09"
+    },
     "cover_image_url": {
       "type": "string",
       "description": "\u8868\u7d19\u753b\u50cf URL"

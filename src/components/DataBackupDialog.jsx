@@ -32,13 +32,23 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   createBackupFileName,
-  createDataBackup,
+  createCritiqueRecoveryFileName,
+  createDataBackupBundle,
+  downloadCritiqueRecovery,
   downloadDataBackup,
   importDataBackup,
   readDataBackupFile,
 } from '@/lib/dataBackup';
 
 const DEFAULT_APP_VERSION = packageInfo.version || 'unknown';
+
+function downloadRecoveryIfNeeded(recovery, prefix = 'kindle-navi-critique-recovery') {
+  if (!recovery) return false;
+  downloadCritiqueRecovery(recovery, {
+    filename: createCritiqueRecoveryFileName(prefix),
+  });
+  return true;
+}
 
 function BackupSummary({ backup }) {
   const exportedAt = new Date(backup.exportedAt).toLocaleString('ja-JP');
@@ -103,9 +113,14 @@ export default function DataBackupDialog({
     setErrorMessage('');
     try {
       if (beforeAction) await beforeAction();
-      const backup = await createDataBackup({ appVersion });
+      const { backup, critiqueRecovery } = await createDataBackupBundle({ appVersion });
       downloadDataBackup(backup, { filename: createBackupFileName() });
-      toast.success('バックアップをダウンロードしました');
+      const recoveryDownloaded = downloadRecoveryIfNeeded(critiqueRecovery);
+      if (recoveryDownloaded) {
+        toast.warning('通常バックアップに加え、壊れた辛口論評履歴の原文を復旧用JSONとして保存しました。両方を保管してください');
+      } else {
+        toast.success('バックアップをダウンロードしました');
+      }
     } catch (error) {
       const message = error?.message || 'バックアップを作成できませんでした';
       setErrorMessage(message);
@@ -147,12 +162,20 @@ export default function DataBackupDialog({
 
     try {
       if (beforeAction) await beforeAction();
-      const backup = await createDataBackup({ appVersion });
+      const { backup, critiqueRecovery } = await createDataBackupBundle({ appVersion });
       downloadDataBackup(backup, {
         filename: createBackupFileName('kindle-navi-before-restore'),
       });
+      const recoveryDownloaded = downloadRecoveryIfNeeded(
+        critiqueRecovery,
+        'kindle-navi-before-restore-critique-recovery',
+      );
       setReplaceSafetyReady(true);
-      toast.success('復元前バックアップのダウンロードを開始しました');
+      if (recoveryDownloaded) {
+        toast.warning('復元前バックアップと、壊れた辛口論評履歴の復旧用JSONを保存しました。両方を保管してください');
+      } else {
+        toast.success('復元前バックアップのダウンロードを開始しました');
+      }
     } catch (error) {
       const message = error?.message || '復元前バックアップを保存できないため、全置換を停止しました';
       setErrorMessage(message);
@@ -169,6 +192,8 @@ export default function DataBackupDialog({
     setErrorMessage('');
 
     let result;
+    let preflightSnapshotDownloaded = false;
+    let preflightCritiqueRecoveryDownloaded = false;
     try {
       if (beforeAction) await beforeAction();
     } catch (error) {
@@ -180,10 +205,30 @@ export default function DataBackupDialog({
     }
 
     try {
-      result = await importDataBackup(pendingBackup, { mode, appVersion });
+      const beforeApply = mode === 'merge'
+        ? ({ beforeSnapshot, beforeCritiqueRecovery }) => {
+          downloadDataBackup(beforeSnapshot, {
+            filename: createBackupFileName('kindle-navi-before-restore'),
+          });
+          preflightSnapshotDownloaded = true;
+          if (beforeCritiqueRecovery) {
+            preflightCritiqueRecoveryDownloaded = downloadRecoveryIfNeeded(
+              beforeCritiqueRecovery,
+              'kindle-navi-before-restore-critique-recovery',
+            );
+          }
+          return {
+            snapshotSaved: preflightSnapshotDownloaded,
+            critiqueRecoverySaved: !beforeCritiqueRecovery
+              || preflightCritiqueRecoveryDownloaded,
+          };
+        }
+        : undefined;
+      result = await importDataBackup(pendingBackup, { mode, appVersion, beforeApply });
     } catch (error) {
-      let recoverySnapshotDownloaded = false;
-      if (error?.beforeSnapshot) {
+      let recoverySnapshotDownloaded = preflightSnapshotDownloaded;
+      let critiqueRecoveryDownloaded = preflightCritiqueRecoveryDownloaded;
+      if (!error?.preflightFailed && !recoverySnapshotDownloaded && error?.beforeSnapshot) {
         try {
           downloadDataBackup(error.beforeSnapshot, {
             filename: createBackupFileName('kindle-navi-before-failed-restore'),
@@ -193,28 +238,42 @@ export default function DataBackupDialog({
           // 画面のエラーを優先し、ダウンロード失敗は下のメッセージにまとめます。
         }
       }
+      if (!error?.preflightFailed
+        && !critiqueRecoveryDownloaded
+        && error?.beforeCritiqueRecovery) {
+        try {
+          critiqueRecoveryDownloaded = downloadRecoveryIfNeeded(
+            error.beforeCritiqueRecovery,
+            'kindle-navi-before-failed-restore-critique-recovery',
+          );
+        } catch {
+          // 画面のエラーを優先し、ダウンロード失敗は下のメッセージにまとめます。
+        }
+      }
       const rollbackNote = error?.rollbackSucceeded === false
         ? recoverySnapshotDownloaded
           ? ' 元データの自動復旧も完了していません。自動保存された復元前バックアップをご確認ください。'
           : ' 元データの自動復旧と復元前バックアップの保存を完了できませんでした。'
         : '';
-      const message = `${error?.message || '復元できませんでした'}${rollbackNote}`;
+      const preflightNote = error?.preflightFailed
+        ? ' 復元処理を始める前に停止したため、保存データは変更していません。'
+        : '';
+      const critiqueRecoveryNote = critiqueRecoveryDownloaded
+        ? ' 壊れた辛口論評履歴の原文は、別の復旧用JSONにも保存しました。'
+        : error?.beforeCritiqueRecovery
+          ? ' 壊れた辛口論評履歴の復旧用JSONはダウンロードできませんでした。'
+          : '';
+      const message = `${error?.message || '復元できませんでした'}${rollbackNote}${preflightNote}${critiqueRecoveryNote}`;
       setErrorMessage(message);
       toast.error(message);
       setBusy(false);
       return;
     }
 
-    // 結合は非破壊なので、成功後に直前の状態も戻せるよう保存します。
+    // 結合前スナップショットは、書き込み前のbeforeApplyで保存済みです。
     // 全置換は、書き込み前に明示保存できた場合だけ runImport へ到達します。
-    if (mode !== 'replace') {
-      try {
-        downloadDataBackup(result.beforeSnapshot, {
-          filename: createBackupFileName('kindle-navi-before-restore'),
-        });
-      } catch {
-        toast.warning('復元前スナップショットをダウンロードできませんでした');
-      }
+    if (mode === 'merge' && preflightCritiqueRecoveryDownloaded) {
+      toast.warning('結合前にあった壊れた辛口論評履歴の原文を、別の復旧用JSONへ保存しました');
     }
 
     if (onRestored) {
@@ -267,6 +326,9 @@ export default function DataBackupDialog({
             </div>
             バックアップには原稿・メモ・画像が含まれます。AI接続設定、APIキー、トークンは含めません。
             原稿を含む機密ファイルとして、安全な場所に保管してください。
+            <p className="mt-2">
+              壊れた辛口論評履歴を検出した場合は、復元できる通常バックアップと、履歴の原文だけを残す復旧用JSONを別々に保存します。通常の復元には通常バックアップを選び、復旧用JSONも修復が済むまで保管してください。
+            </p>
           </div>
 
           <section className="rounded-xl border border-border/70 p-4 space-y-3">
