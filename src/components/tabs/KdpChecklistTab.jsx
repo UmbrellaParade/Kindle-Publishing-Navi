@@ -1,16 +1,26 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Progress } from '@/components/ui/progress';
-import { Zap, Plus, X } from 'lucide-react';
+import { ExternalLink, Zap, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import KdpDescriptionEditor from '@/components/kdp/KdpDescriptionEditor';
+import { readChecklistEnvelope, writeChecklistEnvelope } from '@/lib/releaseSchedule';
+import { scheduleCoordinatedSave } from '@/lib/saveCoordinator';
+import { DEFAULT_RELEASE_METHOD, getReleaseMethod } from '@/lib/releaseMethods';
+import { mutatePublishingProject } from '@/lib/projectMutation';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const INPUT_STYLE = { background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' };
 
 // KDP 専用タスク定義（カスタムフィールドあり）
 const KDP_TASKS = [
+  {
+    id: 't40', important: true,
+    title: 'KDP アカウントの本人情報・税務・支払設定と、配信方法を確認する',
+    tool: 'KDP アカウント / 配信日オプション',
+    inlineFields: [],
+    note_default: '初出版の場合は早めに準備。発売日を指定する電子書籍は予約注文を確認',
+  },
   {
     id: 't41', important: false,
     title: 'KDP にログインし「タイトルの新規作成」',
@@ -20,7 +30,7 @@ const KDP_TASKS = [
   {
     id: 't42', important: false,
     title: '本の詳細（タイトル、著者名、内容紹介など）を入力',
-    tool: 'Gem1 の出力をコピペ',
+    tool: '企画メモ / 原稿から入力',
     inlineFields: [
       { key: 'book_title2', label: 'タイトル', type: 'text', placeholder: '本のタイトル' },
       { key: 'author_name', label: '著者名', type: 'text', placeholder: '著者名' },
@@ -29,7 +39,7 @@ const KDP_TASKS = [
   {
     id: 't43a', important: false,
     title: 'カテゴリーを設定（最大 3 つ）',
-    tool: 'Gem1 の出力をコピペ',
+    tool: 'カテゴリーチェック / KDP 公式画面',
     inlineFields: [
       { key: 'category1', label: 'カテゴリー 1', type: 'text', placeholder: 'カテゴリー 1' },
       { key: 'category2', label: 'カテゴリー 2', type: 'text', placeholder: 'カテゴリー 2' },
@@ -39,7 +49,7 @@ const KDP_TASKS = [
   {
     id: 't43b', important: false,
     title: 'キーワード（7 つ）を設定',
-    tool: 'Gem1 の出力をコピペ',
+    tool: '企画メモ / KDP 公式画面',
     inlineFields: [
       { key: 'kw1', label: 'KW1', type: 'text', placeholder: 'キーワード 1' },
       { key: 'kw2', label: 'KW2', type: 'text', placeholder: 'キーワード 2' },
@@ -52,11 +62,11 @@ const KDP_TASKS = [
     inlineGrid: true,
   },
   { id: 't44', important: false, title: '原稿と表紙ファイルをアップロードする', tool: 'KDP 編集画面', inlineFields: [] },
-  { id: 't45', important: false, title: 'AI 生成コンテンツの申告（「はい」→「Gemini」と入力）', tool: 'KDP 編集画面', inlineFields: [] },
+  { id: 't45', important: false, title: 'AI 生成コンテンツを使用した場合は、KDP の質問に正確に回答する', tool: 'KDP 編集画面', inlineFields: [], note_default: '使用ツールと該当範囲を確認。未使用なら画面の案内に従う' },
   { id: 't46', important: false, title: 'プレビューアーで表示崩れがないか確認', tool: 'KDP 編集画面', inlineFields: [] },
-  { id: 't47', important: true,  title: 'KDP セレクトに登録する', tool: 'KDP 価格設定画面', inlineFields: [], note_default: '必ずチェック' },
-  { id: 't48', important: false, title: 'ロイヤリティ「70%」を選択し、決定した価格を入力', tool: 'KDP 価格設定画面', inlineFields: [] },
-  { id: 't49', important: false, title: '「Kindle 本を出版」ボタンを押す', tool: 'KDP', inlineFields: [], note_default: '審査待ち（約 48 時間）' },
+  { id: 't47', important: false, title: 'KDP セレクトへ登録するか判断する（任意）', tool: 'KDP 価格設定画面', inlineFields: [], note_default: '90 日間の電子書籍独占など、最新の参加条件を確認' },
+  { id: 't48', important: false, title: '35% / 70% の適用条件を確認し、ロイヤリティと価格を設定する', tool: 'KDP 価格設定画面', inlineFields: [], note_default: '価格帯・販売地域・KDP セレクト等の最新条件を確認' },
+  { id: 't49', important: true, title: '内容を最終確認し、選んだ配信方法に合わせて審査へ提出する', tool: 'KDP', inlineFields: [], note_default: '予約注文は「予約注文用に提出」、今すぐ配信は「Kindle 本を出版」。期限より余裕を持って提出' },
 ];
 
 const ALL_KDP_IDS = KDP_TASKS.map(t => t.id);
@@ -70,30 +80,40 @@ function KdpTaskRow({ task, state, onChange, fieldData, onFieldChange }) {
     <div className={`rounded-lg border transition-all ${s.is_done ? 'opacity-50' : task.important ? 'border-neon-pink/30' : 'border-border/60'}`}
       style={{ background: s.is_done ? 'rgba(255,255,255,0.02)' : task.important ? 'rgba(255,45,120,0.04)' : 'rgba(255,255,255,0.03)' }}>
       {/* 行 */}
-      <div className="flex items-start gap-2 px-3 py-2.5">
+      <div className="flex flex-wrap sm:flex-nowrap items-start gap-2 px-3 py-2.5">
         {/* チェック */}
         <button
+          type="button"
           onClick={() => onChange({ ...s, is_done: !s.is_done })}
-          className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border-2 transition-all flex items-center justify-center ${s.is_done ? 'bg-neon-cyan border-neon-cyan' : 'border-muted-foreground/40 hover:border-neon-cyan'}`}
+          aria-label={`「${task.title}」を${s.is_done ? '未完了' : '完了'}にする`}
+          aria-pressed={s.is_done}
+          className={`flex-shrink-0 w-7 h-7 rounded-md border-2 transition-all flex items-center justify-center ${s.is_done ? 'bg-neon-cyan border-neon-cyan' : 'border-muted-foreground/40 hover:border-neon-cyan'}`}
         >
           {s.is_done && <span className="text-black text-[10px] font-black leading-none">✓</span>}
         </button>
 
         {/* タスク名 */}
-        <div className="flex-shrink-0 min-w-0" style={{ width: hasInline ? '30%' : 'auto', flex: hasInline ? 'none' : '1' }}>
+        <div className={`min-w-0 flex-1 ${hasInline ? 'sm:w-[30%] sm:flex-none' : ''}`}>
           <div className="flex items-center gap-1 flex-wrap">
             {task.important && <Zap className="w-3 h-3 text-neon-pink flex-shrink-0" />}
             <span className={`text-xs leading-relaxed ${s.is_done ? 'line-through text-muted-foreground' : task.important ? 'font-bold text-neon-pink' : 'text-foreground'}`}>
               {task.title}
             </span>
           </div>
-          <span className="text-[10px] text-muted-foreground">{task.tool}</span>
+          <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] text-muted-foreground">{task.tool}</span>
+            {s.due_date && (
+              <span className={`text-[10px] rounded px-1.5 py-0.5 ${s.due_date_source === 'auto' ? 'bg-neon-cyan/10 text-neon-cyan' : 'bg-neon-amber/10 text-neon-amber'}`}>
+                目標 {s.due_date}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* インラインフィールド */}
         {hasInline && (
           task.inlineGrid ? (
-            <div className="flex-1 min-w-0 grid grid-cols-4 gap-1">
+            <div className="order-last w-full pl-9 pt-2 sm:order-none sm:w-auto sm:pl-0 sm:pt-0 sm:flex-1 min-w-0 grid grid-cols-1 sm:grid-cols-4 gap-1">
               {task.inlineFields.map(f => (
                 <input
                   key={f.key}
@@ -106,7 +126,7 @@ function KdpTaskRow({ task, state, onChange, fieldData, onFieldChange }) {
               ))}
             </div>
           ) : (
-            <div className={`flex-1 min-w-0 flex gap-2`}>
+            <div className="order-last w-full pl-9 pt-2 sm:order-none sm:w-auto sm:pl-0 sm:pt-0 sm:flex-1 min-w-0 flex flex-col sm:flex-row gap-2">
               {task.inlineFields.map(f => (
                 <input
                   key={f.key}
@@ -122,7 +142,7 @@ function KdpTaskRow({ task, state, onChange, fieldData, onFieldChange }) {
         )}
 
         {/* 展開ボタン */}
-        <button onClick={() => setOpen(v => !v)} className="flex-shrink-0 text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded transition-colors" style={{ background: 'rgba(255,255,255,0.05)' }}>
+        <button type="button" aria-label={`「${task.title}」の詳細を${open ? '閉じる' : '開く'}`} aria-expanded={open} onClick={() => setOpen(v => !v)} className="flex-shrink-0 text-[10px] text-muted-foreground hover:text-foreground px-2 py-1.5 rounded transition-colors" style={{ background: 'rgba(255,255,255,0.05)' }}>
           {open ? '▲' : '▼'}
         </button>
       </div>
@@ -132,8 +152,13 @@ function KdpTaskRow({ task, state, onChange, fieldData, onFieldChange }) {
         <div className="px-3 pb-3 space-y-2 border-t border-border/40 pt-2">
           <div className="flex items-center gap-2">
             <label className="text-[10px] text-muted-foreground whitespace-nowrap">完了目標日</label>
-            <input type="date" value={s.due_date || ''} onChange={e => onChange({ ...s, due_date: e.target.value })}
+            <input type="date" value={s.due_date || ''} onChange={e => onChange({ ...s, due_date: e.target.value, due_date_source: 'manual' })}
               className="text-xs rounded px-2 py-1 text-foreground focus:outline-none flex-1" style={INPUT_STYLE} />
+            {s.due_date && (
+              <span className={`text-[9px] whitespace-nowrap ${s.due_date_source === 'auto' ? 'text-neon-cyan' : 'text-neon-amber'}`}>
+                {s.due_date_source === 'auto' ? '自動' : '手動'}
+              </span>
+            )}
           </div>
           <textarea value={s.note || ''} onChange={e => onChange({ ...s, note: e.target.value })} rows={2}
             placeholder="メモ・備考..."
@@ -152,9 +177,6 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
   const [description, setDescription] = useState('');
   const [addingTask, setAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
-  const checklistSaveTimer = useRef(null);
-  const descriptionSaveTimer = useRef(null);
-
   // プロジェクト選択時にデータを読み込み
   useEffect(() => {
     if (!project) { setChecklistData({}); setFieldData({}); setCustomTasks([]); setDescription(''); return; }
@@ -162,7 +184,7 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
     try {
       const parsed = project.checklist_data ? JSON.parse(project.checklist_data) : {};
       setChecklistData(parsed._data || {});
-      setCustomTasks(parsed._custom || []);
+      setCustomTasks(parsed._kdp_custom || parsed._custom || []);
       setFieldData(parsed._kdp_fields || {});
     } catch { setChecklistData({}); setFieldData({}); setCustomTasks([]); }
     
@@ -172,20 +194,33 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
     } catch {
       setDescription(project.kdp_description || '');
     }
-  }, [project?.id]);
+  }, [project?.id, project?.checklist_data, project?.kdp_meta, project?.kdp_description]);
 
   // 自動保存（checklist_data）
-  const scheduleSave = useCallback((data, custom, fields) => {
+  const scheduleSave = useCallback(({ taskId, taskState, custom, fieldKey, fieldValue }) => {
     if (!project) return;
-    clearTimeout(checklistSaveTimer.current);
-    checklistSaveTimer.current = setTimeout(async () => {
-      const existing = (() => {
-        try { return project.checklist_data ? JSON.parse(project.checklist_data) : {}; }
-        catch { return {}; }
-      })();
-      const updated = await base44.entities.PublishingProject.update(project.id, {
-        checklist_data: JSON.stringify({ ...existing, _data: data, _custom: custom, _kdp_fields: fields }),
-      });
+    const hasCustom = Array.isArray(custom);
+    const section = taskId ? `task:${taskId}` : hasCustom ? 'custom' : `field:${fieldKey}`;
+    const key = hasCustom ? `kdp-custom-checklist:${project.id}` : `kdp-checklist:${project.id}:${section}`;
+    scheduleCoordinatedSave(key, async () => {
+      const updated = await mutatePublishingProject(project.id, latest => {
+        const { envelope, data: latestData } = readChecklistEnvelope(latest?.checklist_data);
+        const nextData = { ...latestData };
+        if (taskId) nextData[taskId] = taskState;
+        const nextFields = fieldKey
+          ? { ...(envelope._kdp_fields || {}), [fieldKey]: fieldValue }
+          : null;
+        return {
+          checklist_data: writeChecklistEnvelope(
+            latest?.checklist_data,
+            nextData,
+            {
+              ...(hasCustom ? { _kdp_custom: custom } : {}),
+              ...(nextFields ? { _kdp_fields: nextFields } : {}),
+            },
+          ),
+        };
+      }, project);
       onProjectUpdate(updated);
     }, 1000);
   }, [project, onProjectUpdate]);
@@ -193,44 +228,41 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
   // KDP 説明文の保存（kdp_description フィールドを使用）
   const saveDescription = useCallback((val, immediate = false) => {
     if (!project) return;
-    clearTimeout(descriptionSaveTimer.current);
     const persist = async () => {
-      const currentMeta = (() => {
-        try { return project.kdp_meta ? JSON.parse(project.kdp_meta) : {}; }
-        catch { return {}; }
-      })();
-      const updated = await base44.entities.PublishingProject.update(project.id, {
-        kdp_description: val,
-        kdp_meta: JSON.stringify({ ...currentMeta, description: val }),
-      });
+      const updated = await mutatePublishingProject(project.id, latest => {
+        const currentMeta = (() => {
+          try { return latest?.kdp_meta ? JSON.parse(latest.kdp_meta) : {}; }
+          catch { return {}; }
+        })();
+        return {
+          kdp_description: val,
+          kdp_meta: JSON.stringify({ ...currentMeta, description: val }),
+        };
+      }, project);
       onProjectUpdate(updated);
     };
 
-    if (immediate) {
-      persist();
-      return;
-    }
-
-    descriptionSaveTimer.current = setTimeout(persist, 1000);
+    scheduleCoordinatedSave(`kdp-description:${project.id}`, persist, immediate ? 0 : 1000);
   }, [project, onProjectUpdate]);
 
   const handleTaskChange = (taskId, newState) => {
     const next = { ...checklistData, [taskId]: newState };
     setChecklistData(next);
-    scheduleSave(next, customTasks, fieldData);
+    scheduleSave({ taskId, taskState: newState });
   };
 
   const handleFieldChange = (taskId, key, val) => {
-    const next = { ...fieldData, [`${taskId}_${key}`]: val };
+    const fieldKey = `${taskId}_${key}`;
+    const next = { ...fieldData, [fieldKey]: val };
     setFieldData(next);
-    scheduleSave(checklistData, customTasks, next);
+    scheduleSave({ fieldKey, fieldValue: val });
   };
 
   const handleAddCustomTask = () => {
     if (!newTaskTitle.trim()) return;
     const next = [...customTasks, { id: `c_${Date.now()}`, title: newTaskTitle.trim(), state: { is_done: false, due_date: '', note: '' } }];
     setCustomTasks(next);
-    scheduleSave(checklistData, next, fieldData);
+    scheduleSave({ custom: next });
     setNewTaskTitle(''); setAddingTask(false);
     toast.success('タスクを追加しました');
   };
@@ -238,13 +270,14 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
   const handleDeleteCustomTask = (idx) => {
     const next = customTasks.filter((_, i) => i !== idx);
     setCustomTasks(next);
-    scheduleSave(checklistData, next, fieldData);
+    scheduleSave({ custom: next });
   };
 
   const allCustomDone = customTasks.filter(t => t.state?.is_done).length;
   const totalTasks = ALL_KDP_IDS.length + customTasks.length;
   const doneTasks = ALL_KDP_IDS.filter(id => checklistData[id]?.is_done).length + allCustomDone;
   const pct = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+  const releaseMethod = getReleaseMethod(project?.release_method || DEFAULT_RELEASE_METHOD);
 
   if (!project) {
     return <div className="text-center py-20 text-muted-foreground"><span className="text-4xl">📝</span><p className="mt-3 text-sm">プロジェクトを選択してください</p></div>;
@@ -252,6 +285,18 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
 
   return (
     <div className="space-y-6">
+      <div className="rounded-xl p-4 text-xs leading-relaxed" style={CARD_STYLE}>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <p className="font-bold text-neon-cyan">配信方法：{releaseMethod.shortLabel}</p>
+            <p className="mt-1 text-muted-foreground">{releaseMethod.guidance}</p>
+          </div>
+          <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/GZUV7SNV728WT4QE" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-neon-cyan hover:text-neon-pink">
+            <ExternalLink className="w-3.5 h-3.5" />KDP公式の配信日オプション
+          </a>
+        </div>
+      </div>
+
       {/* 進捗バー */}
       <div className="rounded-xl p-4 space-y-2" style={CARD_STYLE}>
         <div className="flex items-center justify-between text-xs">
@@ -287,7 +332,7 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
                 onChange={s => {
                   const next = customTasks.map((ct, i) => i === idx ? { ...ct, state: s } : ct);
                   setCustomTasks(next);
-                  scheduleSave(checklistData, next, fieldData);
+                  scheduleSave({ custom: next });
                 }}
                 fieldData={{}}
                 onFieldChange={() => {}}

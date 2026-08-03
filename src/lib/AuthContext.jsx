@@ -22,6 +22,19 @@ export const AuthProvider = ({ children }) => {
     try {
       setIsLoadingPublicSettings(true);
       setAuthError(null);
+
+      // GitHub Pages 配布版はブラウザ内だけで動作し、Base44 の認証や
+      // public-settings API を利用しない。存在しない /api への通信を待たず、
+      // そのままローカル利用を開始する。
+      if (base44.__isLocalFallback) {
+        setAppPublicSettings({ id: 'local', public_settings: {} });
+        setUser({ id: 'local-user', full_name: 'Local User' });
+        setIsAuthenticated(true);
+        setAuthChecked(true);
+        setIsLoadingAuth(false);
+        setIsLoadingPublicSettings(false);
+        return;
+      }
       
       // First, check app public settings (with token if available)
       // This will tell us if auth is required, user not registered, etc.

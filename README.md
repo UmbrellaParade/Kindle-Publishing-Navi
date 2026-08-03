@@ -1,39 +1,52 @@
-**Welcome to your Base44 project** 
+# Umbrella Parade Kindle 出版ナビ
 
-**About**
+Kindle 本の企画・執筆・表紙・KDP 登録・カテゴリー選定・告知・原稿調整を、1 つのプロジェクトで管理するブラウザツールです。
 
-View and Edit  your app on [Base44.com](http://Base44.com) 
+公開版: https://umbrellaparade.github.io/Kindle-Publishing-Navi/
 
-This project contains everything you need to run your app locally.
+## 主な機能
 
-**Edit the code in your local development environment**
+- 発売目標日から標準 8 週間の工程日を逆算
+- 自動設定後の個別日付変更と、手動日を守った再計算
+- 制作・KDP 登録・プロモーションのチェックリスト
+- 本の種類で絞り込めるカテゴリー候補管理
+- 原稿調整、ルビ辞書、DOCX / EPUB 出力
+- プロジェクト・原稿・画像をまとめたバックアップ／復元
+- 旧 Pages 版からのプロジェクトコピー移行
+- 新版を検出したときの「更新する／あとで」通知
 
-Any change pushed to the repo will also be reflected in the Base44 Builder.
+## データ保存について
 
-**Prerequisites:** 
+GitHub Pages 版は `VITE_STORAGE_MODE=local` で動作し、プロジェクトはブラウザの localStorage、画像は IndexedDB に保存します。同じ URL・ブラウザでアプリを更新しても、通常はデータを維持します。
 
-1. Clone the repository using the project's Git URL 
-2. Navigate to the project directory
-3. Install dependencies: `npm install`
-4. Create an `.env.local` file and set the right environment variables
+別端末・別ブラウザへの移動、ブラウザのサイトデータ削除、ドメイン変更には引き継がれません。画面上部の「データ管理」から定期的にバックアップしてください。バックアップには原稿・メモ・画像が含まれますが、AI 接続設定、API キー、トークンは含めません。
 
+複数タブからの同時書き込みは可能な範囲で直列化していますが、編集中の画面状態まで完全には同期されません。同じプロジェクトは 1 タブで編集してください。
+
+## ローカル開発
+
+```bash
+npm ci
+npm run dev
 ```
-VITE_BASE44_APP_ID=your_app_id
-VITE_BASE44_APP_BASE_URL=your_backend_url
 
-e.g.
-VITE_BASE44_APP_ID=cbef744a8545c389ef439ea6
-VITE_BASE44_APP_BASE_URL=https://my-to-do-list-81bfaad7.base44.app
+検証:
+
+```bash
+npm test
+npm run lint
+npm run build
 ```
 
-Run the app: `npm run dev`
+## リリース手順
 
-**Publish your changes**
+1. `package.json` と `package-lock.json` の version を同じ SemVer に更新する。
+2. `public/version.json` の version を同じ値に更新する（CI が一致を検証し、ビルドへ反映します）。
+3. テスト、lint、build を通して `main` へマージする。
+4. GitHub Actions の `Deploy GitHub Pages` 完了後、公開画面を確認する。
 
-Open [Base44.com](http://Base44.com) and click on Publish.
+すでに開いている利用者の画面は `version.json` を定期確認し、新版があれば選択式で通知します。Service Worker は使っていないため、新しく開いた画面や通常の再読み込みでは最新版が配信されます。
 
-**Docs & Support**
+## 注意
 
-Documentation: [https://docs.base44.com/Integrations/Using-GitHub](https://docs.base44.com/Integrations/Using-GitHub)
-
-Support: [https://app.base44.com/support](https://app.base44.com/support)
+KDP のカテゴリー、価格、ロイヤリティ、審査期間、KDP セレクト等の条件は変更されることがあります。ツール内の候補や目安だけで確定せず、出版前に KDP 公式画面・公式ヘルプで最新情報を確認してください。

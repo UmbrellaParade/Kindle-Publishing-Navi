@@ -1,12 +1,9 @@
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
-import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
-import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import Home from './pages/Home';
-// Add page imports here
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -31,26 +28,15 @@ const AuthenticatedApp = () => {
     }
   }
 
-  // Render the main app
-  return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/umbrella-parade-kindle-navi" replace />} />
-      <Route path="/umbrella-parade-kindle-navi" element={<Home />} />
-      <Route path="*" element={<PageNotFound />} />
-    </Routes>
-  );
+  return <Home />;
 };
 
 
 function App() {
-  const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, '') || undefined;
-
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
-        <Router basename={routerBasename}>
-          <AuthenticatedApp />
-        </Router>
+        <AuthenticatedApp />
         <Toaster />
       </QueryClientProvider>
     </AuthProvider>

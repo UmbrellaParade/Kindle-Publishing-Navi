@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: npm
@@ -29,13 +29,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify release version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          public_version="$(node -p "require('./public/version.json').version")"
+          if [ "$package_version" != "$public_version" ]; then
+            echo "package.json ($package_version) and version.json ($public_version) must match"
+            exit 1
+          fi
+          echo "VITE_APP_VERSION=$package_version" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
       - name: Build
         run: npm run build
         env:
           GITHUB_PAGES: 'true'
+          VITE_STORAGE_MODE: 'local'
 
       - name: Publish
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages

@@ -9,24 +9,22 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { loadExternalAiSettings, callExternalAi, PROVIDER_LABELS } from '../../lib/externalAi';
 
-const DEFAULT_DICT = {
-  'ヴェル13世': 'ヴェルじゅうさんせい',
-  '雨守': 'あまもり', 'アマモリ': 'あまもり',
-  '雨詠': 'あまよみ', 'アマヨミ': 'あまよみ',
-  'ネスト13': 'ネストじゅうさん',
-  '天律': 'てんりつ',
-  'パレードマスター': 'ぱれーどますたー',
-  'グランドパレード': 'ぐらんどぱれーど',
-  'ラザロ・ストール': 'らざろすとーる',
-};
+// 作品固有の語は利用者が登録します。配布版には特定作品の辞書を含めません。
+const DEFAULT_DICT = {};
 // 辞書値がこの定数のとき「ルビなし（スキップ）」
 const NO_RUBY = '__no_ruby__';
-const STORAGE_KEY = 'ruby_custom_dict';
+const LEGACY_STORAGE_KEY = 'ruby_custom_dict';
 const HIDDEN_DEFAULTS_KEY = '__hiddenDefaults';
 
-function parseStoredDict() {
+function getStorageKey(projectId) {
+  return projectId ? `${LEGACY_STORAGE_KEY}_${projectId}` : LEGACY_STORAGE_KEY;
+}
+
+function parseStoredDict(storageKey) {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    // 旧版の共通辞書は、各プロジェクトの初期値として引き継ぎます。
+    const saved = localStorage.getItem(storageKey)
+      ?? (storageKey !== LEGACY_STORAGE_KEY ? localStorage.getItem(LEGACY_STORAGE_KEY) : null);
     if (!saved) return { custom: {}, hiddenDefaults: [] };
 
     const parsed = JSON.parse(saved);
@@ -53,12 +51,12 @@ function buildDict(custom, hiddenDefaults) {
   return dict;
 }
 
-function loadDictState() {
-  const { custom, hiddenDefaults } = parseStoredDict();
+function loadDictState(storageKey) {
+  const { custom, hiddenDefaults } = parseStoredDict(storageKey);
   return { dict: buildDict(custom, hiddenDefaults), hiddenDefaults };
 }
 
-function saveCustomDict(dict, hiddenDefaults = []) {
+function saveCustomDict(storageKey, dict, hiddenDefaults = []) {
   const hidden = new Set(hiddenDefaults);
   const custom = {};
 
@@ -70,7 +68,7 @@ function saveCustomDict(dict, hiddenDefaults = []) {
   const persistedHiddenDefaults = [...hidden].filter(k => k in DEFAULT_DICT);
   if (persistedHiddenDefaults.length > 0) custom[HIDDEN_DEFAULTS_KEY] = persistedHiddenDefaults;
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(custom));
+  localStorage.setItem(storageKey, JSON.stringify(custom));
 }
 
 function applyRubyDictionary(text, dict, rubyMode) {
@@ -113,7 +111,7 @@ function applyRubyDictionary(text, dict, rubyMode) {
 
     flushPlain();
     const id = `t${tokenIndex++}`;
-    tokens.push({ id, base, ruby, needsCheck: !(base in DEFAULT_DICT) });
+    tokens.push({ id, base, ruby, needsCheck: false });
     segments.push({ type: 'ruby', tokenId: id });
     index += base.length;
   }
@@ -160,12 +158,13 @@ function RubyEditPopover({ token, onSave, onClose }) {
   );
 }
 
-export default function RubyEditorConnected({ sharedText, onVersionChange }) {
+export default function RubyEditorConnected({ projectId, sharedText, onVersionChange }) {
+  const storageKey = getStorageKey(projectId);
   const [loading, setLoading] = useState(false);
   const [tokens, setTokens] = useState(null);
   const [plainSegments, setPlainSegments] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [dictState, setDictState] = useState(loadDictState);
+  const [dictState, setDictState] = useState(() => loadDictState(storageKey));
   const [showDict, setShowDict] = useState(false);
   const [showInteractivePreview, setShowInteractivePreview] = useState(true);
   const [copyFormat, setCopyFormat] = useState('epub');
@@ -183,16 +182,25 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
 
   useEffect(() => { setTokens(null); setPlainSegments(null); }, [sharedText]);
 
+  useEffect(() => {
+    setDictState(loadDictState(storageKey));
+    setTokens(null);
+    setPlainSegments(null);
+    setEditingId(null);
+    setEditingDictBase(null);
+    setEditingDictRuby('');
+  }, [storageKey]);
+
   const updateDictAndPreview = useCallback((nextDict, nextHiddenDefaults = hiddenDefaults) => {
     setDictState({ dict: nextDict, hiddenDefaults: nextHiddenDefaults });
-    saveCustomDict(nextDict, nextHiddenDefaults);
+    saveCustomDict(storageKey, nextDict, nextHiddenDefaults);
 
     if (sharedText.trim().length >= 5) {
       const result = applyRubyDictionary(sharedText.trim(), nextDict, rubyMode);
       setTokens(result.tokens);
       setPlainSegments(result.segments);
     }
-  }, [hiddenDefaults, rubyMode, sharedText]);
+  }, [hiddenDefaults, rubyMode, sharedText, storageKey]);
 
   const runRuby = async () => {
     const text = sharedText.trim();
@@ -224,7 +232,7 @@ export default function RubyEditorConnected({ sharedText, onVersionChange }) {
     const prompt = `あなたはKindle出版の編集者です。以下の本文に、固有名詞・難読語・作品独自語を中心にルビを付けてください。
 
 ルビの記法：青空文庫風 ｜漢字《かな》 形式を使ってください。
-例：｜天律《てんりつ》の｜加護《かご》も、今夜は薄い。
+例：秋には｜紅葉《こうよう》の名所を訪れます。
 
 注意点：
 - 一般的な常用漢字（行く・見る・時・人 など）には過剰にルビを振らない
@@ -377,7 +385,7 @@ ${text}`;
             <div className="mt-1.5 inline-flex items-center gap-2 px-2.5 py-1.5 rounded" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(0,245,255,0.2)' }}>
               <span className="text-[10px] text-muted-foreground">表示例：</span>
               <span className="text-sm text-foreground" style={{ fontFamily: 'serif', lineHeight: 2.2 }}>
-                <ruby>天律<rt style={{ fontSize: '0.6em', color: '#aaaaaa' }}>てんりつ</rt></ruby>の<ruby>加護<rt style={{ fontSize: '0.6em', color: '#aaaaaa' }}>かご</rt></ruby>も、今夜は薄い。
+                秋には<ruby>紅葉<rt style={{ fontSize: '0.6em', color: '#aaaaaa' }}>こうよう</rt></ruby>の名所を訪れます。
               </span>
             </div>
           </div>
@@ -421,13 +429,13 @@ ${text}`;
                   <input
                     value={newDictBase}
                     onChange={(e) => setNewDictBase(e.target.value)}
-                    placeholder="語句（例：天律）"
+                    placeholder="語句（例：紅葉）"
                     className="h-8 px-2 text-xs rounded bg-secondary border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-neon-pink/50"
                   />
                   <input
                     value={newDictRuby}
                     onChange={(e) => setNewDictRuby(e.target.value)}
-                    placeholder="ふりがな（例：てんりつ）"
+                    placeholder="ふりがな（例：こうよう）"
                     className="h-8 px-2 text-xs rounded bg-secondary border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-neon-pink/50"
                   />
                   <Button onClick={handleAddDictEntry} className="h-8 text-xs bg-neon-pink/20 text-neon-pink border border-neon-pink/40 hover:bg-neon-pink/30">

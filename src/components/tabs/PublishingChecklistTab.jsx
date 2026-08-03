@@ -89,7 +89,7 @@ export default function PublishingChecklistTab({ project, onProjectUpdate, savin
       {/* 画像エリア */}
       <div className="grid grid-cols-2 gap-4">
         <ImageSlot label="表紙画像" imageUrl={project.cover_image_url} onUpload={f => uploadImage(f, 'cover_image_url', setUploadingCover)} uploading={uploadingCover} color="pink" />
-        <ImageSlot label="Amazon A+ 画像" imageUrl={project.aplus_image_url} onUpload={f => uploadImage(f, 'aplus_image_url', setUploadingAplus)} uploading={uploadingAplus} color="cyan" />
+        <ImageSlot label="Amazon A+ 用画像（任意・発売後でも可）" imageUrl={project.aplus_image_url} onUpload={f => uploadImage(f, 'aplus_image_url', setUploadingAplus)} uploading={uploadingAplus} color="cyan" />
       </div>
 
       {/* チェックリスト（フェーズ 0〜3） */}
