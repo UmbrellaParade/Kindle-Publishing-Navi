@@ -10,6 +10,7 @@ import AplusContentTab from '../components/tabs/AplusContentTab';
 import FormatGuideTab from '../components/tabs/FormatGuideTab';
 import ManuscriptFormatterTab from '../components/tabs/ManuscriptFormatterTab';
 import ReviewGuideTab from '../components/tabs/ReviewGuideTab';
+import KindleNaviManualTab from '../components/tabs/KindleNaviManualTab';
 import ReleaseScheduleCard from '../components/ReleaseScheduleCard';
 import AppUpdateBanner from '../components/AppUpdateBanner';
 import BrowserStorageNotice from '../components/BrowserStorageNotice';
@@ -36,6 +37,7 @@ import {
 const SELECTED_PROJECT_KEY = 'kindle_publishing_navi_selected_project_id';
 
 const TABS = [
+  { id: 'manual',    label: '使い方マニュアル' },
   { id: 'creation',  label: 'Kindle本制作進捗' },
   { id: 'kdp',       label: 'KDP登録進捗' },
   { id: 'category',  label: 'カテゴリーチェック' },
@@ -56,6 +58,7 @@ export default function Home() {
   const [switchingTab, setSwitchingTab] = useState(false);
   const [saveErrorMessage, setSaveErrorMessage] = useState('');
   const [retryingSaves, setRetryingSaves] = useState(false);
+  const [createRequestToken, setCreateRequestToken] = useState(0);
   const tabButtonRefs = useRef({});
 
   const loadProjects = async () => {
@@ -82,7 +85,11 @@ export default function Home() {
       } catch {
         // 保存領域を読めない場合は先頭のプロジェクトを表示する。
       }
-      if (list.length > 0) handleSelectProject(list.find(project => project.id === selectedId) || list[0]);
+      if (list.length > 0) {
+        handleSelectProject(list.find(project => project.id === selectedId) || list[0]);
+      } else {
+        setActiveTab('manual');
+      }
     }).catch(error => toast.error(error?.message || 'プロジェクトを読み込めませんでした'));
   }, []);
 
@@ -200,6 +207,24 @@ export default function Home() {
     }
   };
 
+  const handleOpenManual = async () => {
+    await handleTabChange('manual');
+    window.setTimeout(() => {
+      const title = document.getElementById('kindle-navi-manual-title');
+      title?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      title?.focus({ preventScroll: true });
+    }, 220);
+  };
+
+  const handleOpenSchedule = async () => {
+    await handleTabChange('creation');
+    window.setTimeout(() => {
+      const schedule = document.getElementById('release-schedule-card');
+      schedule?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      schedule?.focus({ preventScroll: true });
+    }, 50);
+  };
+
   useEffect(() => {
     tabButtonRefs.current[activeTab]?.scrollIntoView({
       behavior: 'smooth',
@@ -230,6 +255,8 @@ export default function Home() {
         onRefresh={loadProjects}
         saving={saving}
         saved={saved}
+        createRequestToken={createRequestToken}
+        onOpenManual={handleOpenManual}
       />
 
       <LegacyMigrationNotice
@@ -287,6 +314,7 @@ export default function Home() {
                 onClick={() => handleTabChange(tab.id)}
                 disabled={switchingTab}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
+                data-main-tab={tab.id}
                 className={`flex-shrink-0 px-3 md:px-4 py-2 text-xs md:text-sm font-bold rounded-lg transition-all duration-200 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 ${
                   activeTab === tab.id
                     ? 'text-neon-pink neon-pink-glow'
@@ -314,6 +342,14 @@ export default function Home() {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.15 }}
           >
+            {activeTab === 'manual'    && (
+              <KindleNaviManualTab
+                hasProject={Boolean(currentProject)}
+                onCreateProject={() => setCreateRequestToken(token => token + 1)}
+                onNavigateTab={handleTabChange}
+                onOpenSchedule={handleOpenSchedule}
+              />
+            )}
             {activeTab === 'creation'  && <PublishingChecklistTab {...tabProps} />}
             {activeTab === 'kdp'       && <KdpChecklistTab {...tabProps} />}
             {activeTab === 'category'  && <CategoryCheckTab {...tabProps} />}

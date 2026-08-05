@@ -40,7 +40,7 @@ const EXPECTED_TITLES = [
 test('利用マニュアル原文を2026年8月6日版のまま保持する', () => {
   assert.equal(MANUSCRIPT_FORMATTER_MANUAL_UPDATED_AT, '2026年8月6日');
   assert.equal(
-    createHash('sha256').update(manual).digest('hex'),
+    createHash('sha256').update(manual.replace(/\r\n/g, '\n')).digest('hex'),
     'b7186a7723a651d5facdb1db3b8343c7d9386aa8b2ee4a0cc0e73f5f70797469',
   );
 });
