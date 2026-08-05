@@ -1,6 +1,18 @@
-import React from 'react';
-import { AlertTriangle, Clock, ExternalLink, FileText, Monitor, ShieldCheck } from 'lucide-react';
-import { KINDLE_MANUSCRIPT_FORMATTER_URL } from '@/lib/externalTools';
+import React, { useState } from 'react';
+import {
+  AlertTriangle,
+  BookOpen,
+  ChevronRight,
+  ExternalLink,
+  FileText,
+  Monitor,
+  ShieldCheck,
+} from 'lucide-react';
+import {
+  KINDLE_MANUSCRIPT_FORMATTER_MANUAL_URL,
+  KINDLE_MANUSCRIPT_FORMATTER_URL,
+} from '@/lib/externalTools';
+import ManuscriptFormatterManual from './ManuscriptFormatterManual';
 
 const CARD_STYLE = {
   background: '#1a1a2e',
@@ -8,8 +20,28 @@ const CARD_STYLE = {
 };
 
 export default function ManuscriptFormatterTab() {
+  const [showManual, setShowManual] = useState(false);
+
+  const changeView = nextView => {
+    setShowManual(nextView === 'manual');
+    window.setTimeout(() => {
+      const root = document.getElementById(
+        nextView === 'manual' ? 'manuscript-formatter-manual' : 'manuscript-formatter-overview',
+      );
+      const focusTarget = document.getElementById(
+        nextView === 'manual' ? 'formatter-manual-page-title' : 'open-formatter-manual-button',
+      );
+      root?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      focusTarget?.focus({ preventScroll: true });
+    }, 0);
+  };
+
+  if (showManual) {
+    return <ManuscriptFormatterManual onBack={() => changeView('overview')} />;
+  }
+
   return (
-    <div className="mx-auto max-w-4xl space-y-5">
+    <div id="manuscript-formatter-overview" className="mx-auto max-w-4xl scroll-mt-24 space-y-5">
       <section
         aria-labelledby="manuscript-formatter-heading"
         className="overflow-hidden rounded-2xl"
@@ -64,9 +96,9 @@ export default function ManuscriptFormatterTab() {
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-neon-amber" aria-hidden="true" />
             <div>
-              <h3 className="font-black text-neon-amber">現段階では横書きでご利用ください</h3>
+              <h3 className="font-black text-neon-amber">初めてのテスト利用は横書きがおすすめです</h3>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                今は「横書き」の原稿だけを使うようにしてください。縦書きは、現段階では利用案内の対象外です。
+                ツール自体は縦書きにも対応していますが、このナビではまず「横書き」での利用を案内します。縦書きは最終PDFとKindle Previewerで必ず確認してください。
               </p>
             </div>
           </div>
@@ -86,14 +118,37 @@ export default function ManuscriptFormatterTab() {
       </div>
 
       <section className="rounded-xl p-4 sm:p-5" style={CARD_STYLE}>
-        <div className="flex items-start gap-3">
-          <Clock className="mt-0.5 h-5 w-5 flex-shrink-0 text-neon-cyan" aria-hidden="true" />
-          <div>
-            <h3 className="font-black text-foreground">詳しいマニュアルは準備中です</h3>
-            <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-              マニュアルが完成したら、この欄から読めるように追加します。今はツール内の案内を確認しながら、横書き原稿でお試しください。
-            </p>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <BookOpen className="mt-0.5 h-5 w-5 flex-shrink-0 text-neon-cyan" aria-hidden="true" />
+            <div>
+              <h3 className="font-black text-foreground">利用マニュアルが完成しました</h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                基本操作、A5・A6、縦書き、画像、目次、QR、保存、PDF・DOCX・EPUB、スマホ、FAQ、最終チェックをまとめています。
+              </p>
+            </div>
           </div>
+          <button
+            id="open-formatter-manual-button"
+            type="button"
+            onClick={() => changeView('manual')}
+            className="inline-flex min-h-12 w-full flex-shrink-0 items-center justify-center gap-2 rounded-xl border border-neon-cyan/50 bg-neon-cyan/15 px-4 py-3 text-sm font-black text-neon-cyan transition hover:bg-neon-cyan/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 sm:w-auto"
+          >
+            利用マニュアルを読む
+            <ChevronRight className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="mt-4 border-t border-[#2a2a4a] pt-3">
+          <a
+            href={KINDLE_MANUSCRIPT_FORMATTER_MANUAL_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="GitHubで公開マニュアルを新しいタブで開く"
+            className="inline-flex min-h-10 items-center gap-2 text-xs font-bold text-muted-foreground underline decoration-slate-600 underline-offset-4 transition hover:text-neon-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70"
+          >
+            GitHubで公開マニュアルを見る
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+          </a>
         </div>
       </section>
     </div>
