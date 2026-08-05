@@ -2,17 +2,27 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   ArrowLeft,
   BookOpen,
   CalendarDays,
+  Columns2,
   ExternalLink,
+  Focus,
+  Heading1,
+  ImagePlus,
   ListTree,
+  QrCode,
+  Redo2,
+  Rows3,
+  Scan,
+  ScissorsLineDashed,
+  Undo2,
 } from 'lucide-react';
 import manualMarkdown from '@/content/manuscriptFormatterManual.md?raw';
-import {
-  KINDLE_MANUSCRIPT_FORMATTER_MANUAL_SOURCE_URL,
-  KINDLE_MANUSCRIPT_FORMATTER_URL,
-} from '@/lib/externalTools';
+import { KINDLE_MANUSCRIPT_FORMATTER_URL } from '@/lib/externalTools';
 import {
   getManuscriptFormatterManualSectionId,
   MANUSCRIPT_FORMATTER_MANUAL_GROUPS,
@@ -23,6 +33,23 @@ const CARD_STYLE = {
   background: '#1a1a2e',
   border: '1px solid #2a2a4a',
 };
+
+const TOOL_ICON_GUIDE = [
+  { label: '戻す', icon: Undo2 },
+  { label: '進む', icon: Redo2 },
+  { label: '見出し1', icon: Heading1 },
+  { label: 'ルビ', text: 'ルビ' },
+  { label: '左揃え', icon: AlignLeft },
+  { label: '中央揃え', icon: AlignCenter },
+  { label: '右揃え', icon: AlignRight },
+  { label: '選択ブロックをページ中央', icon: Focus },
+  { label: '選択段落を横組み', icon: Rows3 },
+  { label: 'ページ内カラム', icon: Columns2 },
+  { label: '画像', icon: ImagePlus },
+  { label: '全画像をページ内最大', icon: Scan },
+  { label: 'QRリンク', icon: QrCode },
+  { label: '改ページ', icon: ScissorsLineDashed },
+];
 
 const MANUAL_BODY_MARKDOWN = manualMarkdown.replace(
   /^# Umbrella Parade 原稿制作ツール 利用マニュアル\r?\n\r?\n更新日: 2026年8月6日\r?\n\r?\n公開版: \[Umbrella Parade 原稿制作ツール\]\(https:\/\/umbrellaparade\.github\.io\/novel-drafting-tool\/\)\r?\n\r?\n/,
@@ -66,6 +93,32 @@ function ManualTableOfContents({ compact = false }) {
         ))}
       </div>
     </nav>
+  );
+}
+
+function ToolIconGuide() {
+  return (
+    <section aria-labelledby="manual-tool-icon-heading" className="rounded-2xl p-4 sm:p-5" style={CARD_STYLE}>
+      <h2 id="manual-tool-icon-heading" className="text-base font-black text-foreground sm:text-lg">
+        本文ツールバーの記号
+      </h2>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        原稿制作ツールに表示される記号と操作名です。詳しい使い方は第8章で確認できます。
+      </p>
+      <ul className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 xl:grid-cols-4">
+        {TOOL_ICON_GUIDE.map(item => {
+          const Icon = item.icon;
+          return (
+            <li key={item.label} className="flex min-w-0 items-center gap-2 py-1 text-xs leading-snug text-slate-300">
+              <span className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border border-neon-cyan/30 bg-[#111122] font-black text-neon-cyan">
+                {Icon ? <Icon className="h-4 w-4" aria-hidden="true" /> : item.text}
+              </span>
+              <span>{item.label}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -171,7 +224,7 @@ export default function ManuscriptFormatterManual({ onBack }) {
                 Umbrella Parade 原稿制作ツール 利用マニュアル
               </h1>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                基本操作から書き出し、スマホ利用、FAQ、最終確認まで、このページで続けて確認できます。
+                PCでKindle原稿を作り、DOCXで書き出す流れを中心に案内します。後半では、しまうま出版用PDFも説明します。
               </p>
             </div>
           </div>
@@ -199,6 +252,8 @@ export default function ManuscriptFormatterManual({ onBack }) {
         </div>
       </header>
 
+      <ToolIconGuide />
+
       <details className="rounded-xl p-4 lg:hidden" style={CARD_STYLE}>
         <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 font-black text-neon-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70">
           <ListTree className="h-5 w-5" aria-hidden="true" />
@@ -224,17 +279,7 @@ export default function ManuscriptFormatterManual({ onBack }) {
           </div>
 
           <footer className="mt-10 border-t border-neon-cyan/20 pt-5 text-sm text-muted-foreground">
-            <p>このページは、2026年8月6日公開のマニュアル本文を掲載しています。</p>
-            <a
-              href={KINDLE_MANUSCRIPT_FORMATTER_MANUAL_SOURCE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="GitHubでマニュアル原文を新しいタブで開く"
-              className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border border-[#3a3a5f] px-3 py-2 font-bold text-neon-cyan transition hover:border-neon-cyan/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70"
-            >
-              GitHubでマニュアル原文を見る
-              <ExternalLink className="h-4 w-4" aria-hidden="true" />
-            </a>
+            <p>このページは、2026年8月6日更新の利用マニュアルです。</p>
           </footer>
         </article>
       </div>
