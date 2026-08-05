@@ -8,6 +8,7 @@ import PromoChecklistTab from '../components/tabs/PromoChecklistTab';
 import KdpDescriptionTab from '../components/tabs/KdpDescriptionTab';
 import AplusContentTab from '../components/tabs/AplusContentTab';
 import FormatGuideTab from '../components/tabs/FormatGuideTab';
+import ManuscriptFormatterTab from '../components/tabs/ManuscriptFormatterTab';
 import ReviewGuideTab from '../components/tabs/ReviewGuideTab';
 import ReleaseScheduleCard from '../components/ReleaseScheduleCard';
 import AppUpdateBanner from '../components/AppUpdateBanner';
@@ -42,6 +43,7 @@ const TABS = [
   { id: 'description', label: 'KDP書籍説明文' },
   { id: 'aplus',     label: '表紙＆A+コンテンツ' },
   { id: 'format',    label: 'Kindle原稿作成ガイド' },
+  { id: 'formatter', label: 'Kindle原稿整形ツール（テスト版）' },
   { id: 'critique',  label: '辛口論評' },
 ];
 
@@ -319,6 +321,7 @@ export default function Home() {
             {activeTab === 'description' && <KdpDescriptionTab {...tabProps} />}
             {activeTab === 'aplus'     && <AplusContentTab {...tabProps} />}
             {activeTab === 'format'    && <FormatGuideTab {...tabProps} />}
+            {activeTab === 'formatter' && <ManuscriptFormatterTab />}
             {activeTab === 'critique'  && <ReviewGuideTab {...tabProps} />}
           </motion.div>
         </AnimatePresence>
