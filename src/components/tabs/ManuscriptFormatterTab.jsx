@@ -8,10 +8,7 @@ import {
   Monitor,
   ShieldCheck,
 } from 'lucide-react';
-import {
-  KINDLE_MANUSCRIPT_FORMATTER_MANUAL_URL,
-  KINDLE_MANUSCRIPT_FORMATTER_URL,
-} from '@/lib/externalTools';
+import { KINDLE_MANUSCRIPT_FORMATTER_URL } from '@/lib/externalTools';
 import ManuscriptFormatterManual from './ManuscriptFormatterManual';
 
 const CARD_STYLE = {
@@ -55,7 +52,7 @@ export default function ManuscriptFormatterTab() {
             </span>
             <span className="inline-flex items-center gap-1 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-2.5 py-1 text-[11px] font-bold text-neon-cyan">
               <Monitor className="h-3.5 w-3.5" aria-hidden="true" />
-              現在は横書きのみ推奨
+              PC専用
             </span>
           </div>
 
@@ -68,7 +65,7 @@ export default function ManuscriptFormatterTab() {
                 Kindle原稿整形ツール（テスト版）
               </h2>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                原稿整形ツールが使える状態になってきたため、テスト版としてご案内します。Kindle用原稿の整形を別画面で試せます。
+                Kindle電子書籍向けの原稿を整え、DOCXで書き出せます。しまうま出版向けのA5・A6印刷用PDFにも対応しています。
               </p>
             </div>
           </div>
@@ -86,7 +83,7 @@ export default function ManuscriptFormatterTab() {
             <ExternalLink className="h-4 w-4" aria-hidden="true" />
           </a>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            新しいタブで開きます。細かな整形作業はPCでの利用がおすすめです。このナビに保存したプロジェクトとは自動同期されません。
+            新しいタブで開きます。スマートフォンでは表示が崩れるため、必ずPCで使用してください。このナビに保存したプロジェクトとは自動同期されません。
           </p>
         </div>
       </section>
@@ -124,7 +121,7 @@ export default function ManuscriptFormatterTab() {
             <div>
               <h3 className="font-black text-foreground">利用マニュアルが完成しました</h3>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                基本操作、A5・A6、縦書き、画像、目次、QR、保存、PDF・DOCX・EPUB、スマホ、FAQ、最終チェックをまとめています。
+                PCでKindle原稿を作りDOCXで書き出す手順を先に、しまうま出版用PDFの手順を後半にまとめています。画面と同じツール記号も確認できます。
               </p>
             </div>
           </div>
@@ -137,18 +134,6 @@ export default function ManuscriptFormatterTab() {
             利用マニュアルを読む
             <ChevronRight className="h-4 w-4" aria-hidden="true" />
           </button>
-        </div>
-        <div className="mt-4 border-t border-[#2a2a4a] pt-3">
-          <a
-            href={KINDLE_MANUSCRIPT_FORMATTER_MANUAL_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="GitHubで公開マニュアルを新しいタブで開く"
-            className="inline-flex min-h-10 items-center gap-2 text-xs font-bold text-muted-foreground underline decoration-slate-600 underline-offset-4 transition hover:text-neon-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70"
-          >
-            GitHubで公開マニュアルを見る
-            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-          </a>
         </div>
       </section>
     </div>
