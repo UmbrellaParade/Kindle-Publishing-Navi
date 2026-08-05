@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
-import { Plus, ChevronDown, BookOpen, Trash2 } from 'lucide-react';
+import { Plus, ChevronDown, BookOpen, Trash2, CircleHelp } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -11,9 +11,22 @@ import { toast } from 'sonner';
 import DataBackupDialog from '@/components/DataBackupDialog';
 import { flushPendingSaves } from '@/lib/saveCoordinator';
 
-export default function AppHeader({ projects, currentProject, onSelectProject, onRefresh, saving, saved }) {
+export default function AppHeader({
+  projects,
+  currentProject,
+  onSelectProject,
+  onRefresh,
+  saving,
+  saved,
+  createRequestToken = 0,
+  onOpenManual,
+}) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
+
+  useEffect(() => {
+    if (createRequestToken > 0) setCreating(true);
+  }, [createRequestToken]);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -116,8 +129,20 @@ export default function AppHeader({ projects, currentProject, onSelectProject, o
           className="h-8 w-8 p-0 bg-neon-pink/15 text-neon-pink border border-neon-pink/35 hover:bg-neon-pink/25"
           onClick={() => setCreating(true)}
           title="新規プロジェクト作成"
+          aria-label="新規プロジェクト作成"
         >
           <Plus className="w-4 h-4" />
+        </Button>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onOpenManual}
+          className="h-8 border-neon-pink/30 bg-neon-pink/5 text-neon-pink hover:bg-neon-pink/15"
+        >
+          <CircleHelp className="w-3.5 h-3.5" />
+          使い方
         </Button>
 
         <DataBackupDialog

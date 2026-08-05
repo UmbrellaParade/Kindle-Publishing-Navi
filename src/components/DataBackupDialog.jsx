@@ -297,6 +297,7 @@ export default function DataBackupDialog({
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogTrigger asChild>
           <Button
+            id="data-management-trigger"
             type="button"
             variant="outline"
             size="sm"

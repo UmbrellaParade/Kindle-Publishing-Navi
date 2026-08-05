@@ -109,7 +109,12 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
   };
 
   return (
-    <section className="relative z-20 px-2 py-3 border-b border-border/50" style={{ background: 'rgba(13,13,26,0.96)' }}>
+    <section
+      id="release-schedule-card"
+      tabIndex={-1}
+      className="relative z-20 scroll-mt-4 px-2 py-3 border-b border-border/50 outline-none"
+      style={{ background: 'rgba(13,13,26,0.96)' }}
+    >
       <div className="max-w-7xl mx-auto rounded-xl p-4" style={CARD_STYLE}>
         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
           <div className="flex items-start gap-2.5 lg:min-w-[245px]">
