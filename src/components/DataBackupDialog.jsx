@@ -117,7 +117,7 @@ export default function DataBackupDialog({
       downloadDataBackup(backup, { filename: createBackupFileName() });
       const recoveryDownloaded = downloadRecoveryIfNeeded(critiqueRecovery);
       if (recoveryDownloaded) {
-        toast.warning('通常バックアップに加え、壊れた辛口論評履歴の原文を復旧用JSONとして保存しました。両方を保管してください');
+        toast.warning('通常バックアップに加え、読み込めない辛口論評履歴／本の前提の原文を復旧用JSONとして保存しました。両方を保管してください');
       } else {
         toast.success('バックアップをダウンロードしました');
       }
@@ -172,7 +172,7 @@ export default function DataBackupDialog({
       );
       setReplaceSafetyReady(true);
       if (recoveryDownloaded) {
-        toast.warning('復元前バックアップと、壊れた辛口論評履歴の復旧用JSONを保存しました。両方を保管してください');
+        toast.warning('復元前バックアップと、読み込めない辛口論評履歴／本の前提の復旧用JSONを保存しました。両方を保管してください');
       } else {
         toast.success('復元前バックアップのダウンロードを開始しました');
       }
@@ -205,8 +205,7 @@ export default function DataBackupDialog({
     }
 
     try {
-      const beforeApply = mode === 'merge'
-        ? ({ beforeSnapshot, beforeCritiqueRecovery }) => {
+      const beforeApply = ({ beforeSnapshot, beforeCritiqueRecovery }) => {
           downloadDataBackup(beforeSnapshot, {
             filename: createBackupFileName('kindle-navi-before-restore'),
           });
@@ -222,8 +221,7 @@ export default function DataBackupDialog({
             critiqueRecoverySaved: !beforeCritiqueRecovery
               || preflightCritiqueRecoveryDownloaded,
           };
-        }
-        : undefined;
+        };
       result = await importDataBackup(pendingBackup, { mode, appVersion, beforeApply });
     } catch (error) {
       let recoverySnapshotDownloaded = preflightSnapshotDownloaded;
@@ -259,9 +257,9 @@ export default function DataBackupDialog({
         ? ' 復元処理を始める前に停止したため、保存データは変更していません。'
         : '';
       const critiqueRecoveryNote = critiqueRecoveryDownloaded
-        ? ' 壊れた辛口論評履歴の原文は、別の復旧用JSONにも保存しました。'
+        ? ' 読み込めない辛口論評履歴／本の前提の原文は、別の復旧用JSONにも保存しました。'
         : error?.beforeCritiqueRecovery
-          ? ' 壊れた辛口論評履歴の復旧用JSONはダウンロードできませんでした。'
+          ? ' 読み込めない辛口論評履歴／本の前提の復旧用JSONはダウンロードできませんでした。'
           : '';
       const message = `${error?.message || '復元できませんでした'}${rollbackNote}${preflightNote}${critiqueRecoveryNote}`;
       setErrorMessage(message);

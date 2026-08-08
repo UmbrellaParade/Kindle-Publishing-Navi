@@ -21,6 +21,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import CritiqueContextCard from '@/components/critique/CritiqueContextCard';
+import CritiqueFindingDialog from '@/components/critique/CritiqueFindingDialog';
 import {
   Dialog,
   DialogContent,
@@ -41,20 +43,33 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   CRITIQUE_AXES,
+  CRITIQUE_FINDING_CATEGORIES,
   CRITIQUE_JUDGMENTS,
   CRITIQUE_RESPONSE_STATUSES,
   buildCritiqueCodexPrompt,
-  buildCritiqueTaskPlan,
+  buildCritiqueDecisionPrompt,
+  buildLatestCritiqueTaskPlan,
   compareCritiqueEntries,
   createCritiqueDuplicateDraft,
   createCritiqueEntry,
-  deleteCritiqueEntry,
+  deleteCritiqueEntryIfUnchanged,
   hasCritiqueEntryEditConflict,
+  hasCritiqueManuscriptVersionMismatch,
   readCritiqueHistory,
   serializeCritiqueHistory,
   shouldApplyCritiqueMutationResult,
   upsertCritiqueEntry,
 } from '@/lib/critiqueHistory';
+import {
+  cacheCritiqueDraft,
+  clearCachedCritiqueDraftIfUnchanged,
+  createCritiqueBriefSnapshot,
+  createEmptyCritiqueContext,
+  hasCachedCritiqueDraftConflict,
+  readCachedCritiqueDraft,
+  readCritiqueContext,
+  upsertCritiqueContext,
+} from '@/lib/critiqueContext';
 import { mutatePublishingProject } from '@/lib/projectMutation';
 import { readChecklistEnvelope, writeChecklistEnvelope } from '@/lib/releaseSchedule';
 import {
@@ -68,10 +83,11 @@ import {
 } from '@/lib/critiqueScoreUi';
 import {
   LEGACY_CRITIQUE_STOPPING_CHECKS_KEY,
+  mergeCritiqueStoppingChecks,
+  patchCritiqueStoppingCheck,
   readCritiqueStoppingChecks,
   rollbackFailedCritiqueStoppingChecks,
   selectProjectCritiqueStoppingChecks,
-  writeCritiqueStoppingChecks,
 } from '@/lib/critiqueStoppingChecks';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
@@ -294,6 +310,71 @@ function extractTargetReader(project) {
   return strategyMatch?.[1]?.trim() || '';
 }
 
+function classificationDraftCacheKey(projectId, entryId) {
+  return projectId && entryId ? `${projectId}:${entryId}` : '';
+}
+
+function buildProjectPromptContext({ project, fields, entries, context, manuscript, judgments, statuses }) {
+  const bookTitle = project.book_title
+    || fields.t41_book_title
+    || fields.t42_book_title2
+    || project.name
+    || '';
+  const authorName = project.author_name || fields.t42_author_name || '';
+  const categories = [
+    project.category_main,
+    project.category_sub1,
+    project.category_sub2,
+    fields.t43a_category1,
+    fields.t43a_category2,
+    fields.t43a_category3,
+  ].filter(Boolean);
+  const keywords = [
+    fields.t43b_kw1,
+    fields.t43b_kw2,
+    fields.t43b_kw3,
+    fields.t43b_kw4,
+    fields.t43b_kw5,
+    fields.t43b_kw6,
+    fields.t43b_kw7,
+  ].filter(Boolean);
+  const latestEntry = entries[0] || null;
+  const previousEntry = entries[1] || null;
+
+  return {
+    bookTitle,
+    authorName,
+    bookDescription: stripHtml(project.kdp_description || ''),
+    targetReader: context.targetReader,
+    coreMessage: context.coreMessage,
+    readerOutcome: context.readerOutcome,
+    plannedPrice: context.plannedPrice,
+    publicationPurpose: context.publicationPurpose,
+    promotionGoal: project.promotion_goal || '',
+    strategyMemo: project.strategy_memo || '',
+    categories: project.categories || categories,
+    keywords: project.keywords || keywords,
+    releaseTargetDate: project.release_target_date || project.release_date || '',
+    manuscript,
+    manuscriptLabel: context.manuscriptCheck?.manuscriptLabel || '',
+    latestCritique: latestEntry ? JSON.stringify({
+      manuscriptLabel: latestEntry.manuscriptLabel,
+      reviewedAt: latestEntry.reviewedAt,
+      judgment: optionLabel(judgments, latestEntry.judgment),
+      scores: latestEntry.scores,
+      summary: latestEntry.summary,
+      hardGates: latestEntry.hardGates,
+      priorityFixes: latestEntry.priorityFixes,
+      findingCategories: latestEntry.findingCategories,
+      authorDecision: latestEntry.authorDecision,
+      responseStatus: optionLabel(statuses, latestEntry.responseStatus),
+    }, null, 2) : '',
+    latestEntry,
+    previousEntry,
+    critiqueEntries: entries,
+  };
+}
+
 function TextBlock({ label, value }) {
   if (!value) return null;
   return (
@@ -369,11 +450,19 @@ function HistoryCard({
   onDuplicate,
   onDelete,
   onAddTasks,
+  onClassify,
+  onCopyDecisionPrompt,
+  decisionPromptCopied,
   onNavigateCreation,
 }) {
   const [open, setOpen] = useState(latest);
   const comparison = previous ? compareCritiqueEntries(entry, previous) : null;
   const fixes = normalizePriorityFixes(entry.priorityFixes).filter(Boolean);
+  const findingBlocks = CRITIQUE_FINDING_CATEGORIES
+    .map(category => ({ ...category, value: entry.findingCategories?.[category.key] || '' }))
+    .filter(category => category.value);
+  const briefSnapshot = entry.briefSnapshot || {};
+  const hasBriefSnapshot = Object.values(briefSnapshot).some(Boolean);
 
   return (
     <article className="min-w-0 overflow-hidden rounded-xl" style={{ ...CARD_STYLE, borderLeft: latest ? '4px solid #ff2d78' : '4px solid #00f5ff' }}>
@@ -442,8 +531,51 @@ function HistoryCard({
             <TextBlock label="自由メモ" value={entry.notes} />
           </div>
 
+          {hasBriefSnapshot && (
+            <section className="rounded-xl border border-violet-400/20 bg-violet-500/[0.03] p-3 sm:p-4">
+              <h4 className="text-xs font-bold text-violet-200">この論評で使った本の前提</h4>
+              <p className="mt-1 text-[10px] text-muted-foreground">後から本の方向性が変わっても、当時どの前提で評価したかを確認できます。</p>
+              <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+                <TextBlock label="誰に向けた本か" value={briefSnapshot.targetReader} />
+                <TextBlock label="何を伝える本か" value={briefSnapshot.coreMessage} />
+                <TextBlock label="読後にどう変わってほしいか" value={briefSnapshot.readerOutcome} />
+                <TextBlock label="予定価格" value={briefSnapshot.plannedPrice} />
+                <TextBlock label="出版の目的" value={briefSnapshot.publicationPurpose} />
+                <TextBlock label="原稿版ラベル" value={briefSnapshot.manuscriptLabel} />
+              </div>
+            </section>
+          )}
+
+          <section className="rounded-xl border border-violet-400/20 bg-violet-500/[0.03] p-3 sm:p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h4 className="text-xs font-bold text-violet-200">指摘を4種類に整理</h4>
+                <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">AIの指摘をそのまま採用せず、「必ず直す・読者確認・著者判断・見送る」に分けて理由を残します。</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" disabled={mutationsBlocked} onClick={() => onClassify(entry)} className="min-h-9 gap-1.5 border-violet-400/35 bg-violet-500/10 text-[10px] text-violet-200 hover:bg-violet-500/20">
+                  <Pencil className="h-3.5 w-3.5" />{findingBlocks.length ? '分類を編集' : '4種類に整理'}
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => onCopyDecisionPrompt(entry)} className="min-h-9 gap-1.5 border-neon-cyan/35 bg-neon-cyan/10 text-[10px] text-neon-cyan hover:bg-neon-cyan/20">
+                  {decisionPromptCopied ? <Check className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                  {decisionPromptCopied ? '相談文をコピー済み' : '修正判断をCodexへ相談'}
+                </Button>
+              </div>
+            </div>
+            {findingBlocks.length > 0 ? (
+              <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+                {findingBlocks.map(category => (
+                  <TextBlock key={category.key} label={category.label} value={category.value} />
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-muted-foreground">まだ分類されていません。原文の論評を残したまま、採否の判断だけを追加できます。</p>
+            )}
+          </section>
+
           <section className="rounded-xl border border-neon-pink/20 bg-neon-pink/[0.03] p-3 sm:p-4">
             <h4 className="text-xs font-bold text-neon-pink">優先修正トップ3</h4>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">1位は、目次の重複や誤字脱字など、まず直せる修正を優先します（ある場合）。2位・3位は必要な修正だけで、無理に埋めません。</p>
             {fixes.length > 0 ? (
               <ol className="mt-2 space-y-2">
                 {fixes.map((fix, index) => (
@@ -581,12 +713,12 @@ function EntryForm({ open, editing, draft, axes, judgments, statuses, saving, on
 
           <section className="rounded-xl border border-neon-pink/20 bg-neon-pink/[0.03] p-3 sm:p-4">
             <h3 className="text-sm font-bold text-neon-pink">優先修正トップ3</h3>
-            <p className="mt-1 text-[10px] text-muted-foreground">ここに入力した項目は、保存後に制作進捗の追加タスクへ重複なく登録できます。</p>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">目次の重複、誤字脱字、明らかな表記ゆれ・見出しのズレがあれば1位へ。まず1件直して前進を実感し、内容面の修正は必要なものだけ選びます。無理に3件すべてを埋める必要はありません。権利・安全・重大な事実誤りは、上のハードゲートで別に必ず管理します。保存後は制作進捗の追加タスクへ重複なく登録できます。</p>
             <div className="mt-3 space-y-2">
               {draft.priorityFixes.map((fix, index) => (
                 <label key={`priority-fix-${index}`} className="grid min-w-0 grid-cols-[24px_minmax(0,1fr)] items-start gap-2">
                   <span className="mt-2 flex h-5 w-5 items-center justify-center rounded-full bg-neon-pink/15 text-[10px] font-black text-neon-pink">{index + 1}</span>
-                  <textarea aria-label={`優先修正 ${index + 1}`} value={fix} onChange={event => updateFix(index, event.target.value)} rows={2} placeholder={`優先修正 ${index + 1}`} className="min-w-0 resize-y rounded-md px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-neon-pink/70" style={INPUT_STYLE} />
+                  <textarea aria-label={`優先修正 ${index + 1}`} value={fix} onChange={event => updateFix(index, event.target.value)} rows={2} placeholder={index === 0 ? '例：重複した目次を削除する／誤字を修正する' : `優先修正 ${index + 1}`} className="min-w-0 resize-y rounded-md px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-neon-pink/70" style={INPUT_STYLE} />
                 </label>
               ))}
             </div>
@@ -639,6 +771,21 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
   const [taskBusyId, setTaskBusyId] = useState('');
   const [taskResults, setTaskResults] = useState({});
   const [promptCopied, setPromptCopied] = useState(false);
+  const [critiqueContext, setCritiqueContext] = useState(() => createEmptyCritiqueContext());
+  const [contextDraft, setContextDraft] = useState(() => createEmptyCritiqueContext());
+  const [contextHasSaved, setContextHasSaved] = useState(false);
+  const [contextError, setContextError] = useState('');
+  const [contextCorruptRaw, setContextCorruptRaw] = useState('');
+  const [contextDirty, setContextDirty] = useState(false);
+  const [contextConflict, setContextConflict] = useState(false);
+  const [contextOpen, setContextOpen] = useState(true);
+  const [contextSaving, setContextSaving] = useState(false);
+  const [classificationTarget, setClassificationTarget] = useState(null);
+  const [classificationDraft, setClassificationDraft] = useState(null);
+  const [classificationDirty, setClassificationDirty] = useState(false);
+  const [classificationConflict, setClassificationConflict] = useState(false);
+  const [classificationSaving, setClassificationSaving] = useState(false);
+  const [decisionPromptCopiedId, setDecisionPromptCopiedId] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
   const [stoppingChecks, setStoppingChecks] = useState({});
   const [stoppingChecksError, setStoppingChecksError] = useState('');
@@ -647,11 +794,33 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
   const activeProjectIdRef = useRef(project?.id || '');
   const onProjectUpdateRef = useRef(onProjectUpdate);
   const stoppingChecksRef = useRef({});
-  const formOpenRef = useRef(formOpen);
+  const formOpenRef = useRef(formOpen || Boolean(classificationTarget));
   const loadedHistoryRef = useRef({ projectId: '', raw: undefined });
-  activeProjectIdRef.current = project?.id || '';
+  const contextDirtyRef = useRef(false);
+  const classificationDirtyRef = useRef(false);
+  const contextDraftCacheRef = useRef(new Map());
+  const classificationDraftCacheRef = useRef(new Map());
+  const loadedContextRef = useRef({ projectId: '', raw: undefined });
+  const projectSelectionRef = useRef({ projectId: project?.id || '', generation: 0 });
+  const renderedProjectId = project?.id || '';
+  if (projectSelectionRef.current.projectId !== renderedProjectId) {
+    projectSelectionRef.current = {
+      projectId: renderedProjectId,
+      generation: projectSelectionRef.current.generation + 1,
+    };
+  }
+  activeProjectIdRef.current = renderedProjectId;
   onProjectUpdateRef.current = onProjectUpdate;
-  formOpenRef.current = formOpen;
+  formOpenRef.current = formOpen || Boolean(classificationTarget);
+
+  const canApplyMutationResult = (startedProjectId, startedGeneration) => (
+    shouldApplyCritiqueMutationResult(
+      startedProjectId,
+      activeProjectIdRef.current,
+      startedGeneration,
+      projectSelectionRef.current.generation,
+    )
+  );
 
   useEffect(() => {
     setFormOpen(false);
@@ -663,10 +832,77 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
     setTaskBusyId('');
     setTaskResults({});
     setPromptCopied(false);
+    setDecisionPromptCopiedId('');
+    setClassificationTarget(null);
+    setClassificationDraft(null);
+    classificationDirtyRef.current = false;
+    setClassificationDirty(false);
+    setClassificationConflict(false);
+    setClassificationSaving(false);
+    setContextSaving(false);
+    contextDirtyRef.current = false;
+    setContextDirty(false);
+    setContextConflict(false);
     setGuideOpen(false);
     setLegacyStoppingImporting(false);
 
   }, [project?.id]);
+
+  useEffect(() => {
+    const projectId = project?.id || '';
+    const rawContext = typeof project?.critique_context === 'string'
+      ? project.critique_context
+      : '';
+    const previous = loadedContextRef.current;
+    const sameProject = previous.projectId === projectId;
+    const changedExternally = sameProject
+      && previous.raw !== undefined
+      && previous.raw !== rawContext;
+    loadedContextRef.current = { projectId, raw: rawContext };
+
+    if (!project) {
+      const empty = createEmptyCritiqueContext();
+      setCritiqueContext(empty);
+      setContextDraft(empty);
+      setContextHasSaved(false);
+      setContextError('');
+      setContextCorruptRaw('');
+      setContextOpen(true);
+      contextDirtyRef.current = false;
+      setContextDirty(false);
+      return;
+    }
+
+    const parsed = readCritiqueContext(rawContext);
+    setCritiqueContext(parsed.context);
+    setContextHasSaved(parsed.hasSavedContext);
+    setContextError(parsed.error?.message || '');
+    setContextCorruptRaw(parsed.corruptRaw || '');
+
+    const cachedDraft = readCachedCritiqueDraft(contextDraftCacheRef.current, projectId);
+    if (cachedDraft) {
+      setContextDraft(cachedDraft.draft);
+      contextDirtyRef.current = true;
+      setContextDirty(true);
+      setContextConflict(hasCachedCritiqueDraftConflict(cachedDraft, parsed.context.updatedAt));
+      setContextOpen(true);
+    } else if (!sameProject || !contextDirtyRef.current) {
+      const inferredReader = parsed.hasSavedContext ? '' : extractTargetReader(project);
+      const nextDraft = parsed.hasSavedContext
+        ? parsed.context
+        : { ...parsed.context, targetReader: inferredReader };
+      setContextDraft(nextDraft);
+      const hasSuggestedDraft = !parsed.hasSavedContext && Boolean(inferredReader);
+      contextDirtyRef.current = hasSuggestedDraft;
+      setContextDirty(hasSuggestedDraft);
+      setContextConflict(false);
+    } else if (changedExternally) {
+      setContextConflict(true);
+      toast.info('同じプロジェクトの「本の前提」が更新されました。入力中の内容は保持しています');
+    }
+
+    if (!parsed.hasSavedContext || parsed.error) setContextOpen(true);
+  }, [project?.id, project?.critique_context]);
 
   useEffect(() => {
     const projectId = project?.id || '';
@@ -695,6 +931,14 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
       toast.info('同じプロジェクトの論評履歴が更新されました。入力中の下書きは保持しています');
     }
   }, [project?.id, project?.critique_history]);
+
+  useEffect(() => {
+    if (!classificationTarget) return;
+    const latestEntry = entries.find(entry => entry.id === classificationTarget.id);
+    if (latestEntry && latestEntry.updatedAt !== classificationTarget.updatedAt) {
+      setClassificationConflict(true);
+    }
+  }, [entries, classificationTarget]);
 
   useEffect(() => {
     if (!project) {
@@ -740,6 +984,120 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
     setFormOpen(true);
   };
 
+  const handleContextDraftChange = updater => {
+    setContextDraft(current => {
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      const manuscriptChanged = [
+        'manuscriptLabel',
+        'expectedFinalChapterTitle',
+        'expectedLastSentence',
+      ].some(key => current.manuscriptCheck?.[key] !== next?.manuscriptCheck?.[key]);
+      const normalized = manuscriptChanged
+        ? {
+            ...next,
+            manuscriptCheck: {
+              ...next.manuscriptCheck,
+              status: 'not_checked',
+              checkedAt: '',
+            },
+          }
+        : next;
+      cacheCritiqueDraft(contextDraftCacheRef.current, project?.id || '', normalized, {
+        baseUpdatedAt: current?.updatedAt || '',
+      });
+      return normalized;
+    });
+    contextDirtyRef.current = true;
+    setContextDirty(true);
+  };
+
+  const handleSaveContext = async event => {
+    event?.preventDefault?.();
+    if (!project || contextSaving || contextError || contextConflict) return;
+
+    const targetProject = project;
+    const targetProjectId = targetProject.id;
+    const targetGeneration = projectSelectionRef.current.generation;
+    const targetDraftRevision = readCachedCritiqueDraft(
+      contextDraftCacheRef.current,
+      targetProjectId,
+    )?.revision ?? null;
+    const expectedUpdatedAt = contextDraft.updatedAt || '';
+    setContextSaving(true);
+    try {
+      let savedContext = contextDraft;
+      const updated = await mutatePublishingProject(targetProjectId, latest => {
+        const latestRaw = typeof latest?.critique_context === 'string'
+          ? latest.critique_context
+          : '';
+        const result = upsertCritiqueContext(latestRaw, contextDraft, { expectedUpdatedAt });
+        savedContext = result.context;
+        return { critique_context: result.value };
+      }, targetProject);
+
+      const cachedAfterSave = readCachedCritiqueDraft(
+        contextDraftCacheRef.current,
+        targetProjectId,
+      );
+      const draftUnchanged = cachedAfterSave
+        ? cachedAfterSave.revision === targetDraftRevision
+        : targetDraftRevision === null;
+      if (cachedAfterSave && draftUnchanged) {
+        clearCachedCritiqueDraftIfUnchanged(
+          contextDraftCacheRef.current,
+          targetProjectId,
+          targetDraftRevision,
+        );
+      }
+
+      if (canApplyMutationResult(targetProjectId, targetGeneration) && draftUnchanged) {
+        contextDirtyRef.current = false;
+        setContextDirty(false);
+        setCritiqueContext(savedContext);
+        setContextDraft(savedContext);
+        setContextHasSaved(true);
+        setContextConflict(false);
+        setContextOpen(false);
+      }
+      onProjectUpdateRef.current?.(updated);
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
+        toast.success('この本の前提と原稿確認情報を保存しました');
+      }
+    } catch (error) {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
+        toast.error(error?.message || 'この本の前提を保存できませんでした');
+      }
+    } finally {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
+        setContextSaving(false);
+      }
+    }
+  };
+
+  const discardStaleContextDraft = () => {
+    if (!project) return;
+    contextDraftCacheRef.current.delete(project.id);
+    setContextDraft(critiqueContext);
+    contextDirtyRef.current = false;
+    setContextDirty(false);
+    setContextConflict(false);
+    toast.info('未保存内容を破棄し、最新の本の前提へ切り替えました');
+  };
+
+  const downloadCorruptContext = () => {
+    if (!contextCorruptRaw) return;
+    try {
+      const url = URL.createObjectURL(new Blob([contextCorruptRaw], { type: 'application/json;charset=utf-8' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `kindle-navi-critique-context-recovery-${project?.id || 'project'}.json`;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      toast.error(error?.message || '本の前提の退避データをダウンロードできませんでした');
+    }
+  };
+
   const handleFormOpenChange = nextOpen => {
     if (savingEntry) return;
     setFormOpen(nextOpen);
@@ -767,10 +1125,11 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
       return;
     }
 
+    const targetProject = project;
+    const targetProjectId = targetProject.id;
+    const targetGeneration = projectSelectionRef.current.generation;
     setSavingEntry(true);
     try {
-      const targetProject = project;
-      const targetProjectId = targetProject.id;
       const targetEntryId = editingEntryId;
       const expectedUpdatedAt = targetEntryId ? draft.updatedAt : '';
       const entryInput = {
@@ -780,6 +1139,9 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
         reviewedAt: reviewedAt.toISOString(),
         scores: serializeCritiqueDraftScores(draft.scores, axisKeys),
         priorityFixes: normalizePriorityFixes(draft.priorityFixes),
+        briefSnapshot: targetEntryId
+          ? draft.briefSnapshot
+          : createCritiqueBriefSnapshot(critiqueContext),
       };
       const entryToSave = targetEntryId ? entryInput : createCritiqueEntry(entryInput);
       let nextEntries = entries;
@@ -803,7 +1165,7 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
         return { critique_history: result.value };
       }, targetProject);
       onProjectUpdate?.(updated);
-      if (shouldApplyCritiqueMutationResult(targetProjectId, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
         setEntries(sortedByReviewedAt(nextEntries));
         setFormOpen(false);
         setEditingEntryId('');
@@ -811,18 +1173,20 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
         toast.success('辛口論評を保存しました');
       }
     } catch (error) {
-      if (shouldApplyCritiqueMutationResult(project.id, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
         toast.error(error?.message || '辛口論評を保存できませんでした');
       }
     } finally {
-      if (shouldApplyCritiqueMutationResult(project.id, activeProjectIdRef.current)) setSavingEntry(false);
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) setSavingEntry(false);
     }
   };
 
   const handleDuplicate = entry => {
     if (!project || historyError) return;
     try {
-      const duplicateDraft = createCritiqueDuplicateDraft(entry);
+      const duplicateDraft = createCritiqueDuplicateDraft(entry, {
+        briefSnapshot: createCritiqueBriefSnapshot(critiqueContext),
+      });
       setEditingEntryId('');
       setDraft(prepareDraft(duplicateDraft, axes));
       setFormOpen(true);
@@ -835,17 +1199,27 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
   const handleStoppingCheckChange = (signId, checked) => {
     if (!project || stoppingChecksError) return;
     const targetProject = project;
+    const targetGeneration = projectSelectionRef.current.generation;
     const previous = stoppingChecksRef.current;
     const next = { ...previous, [signId]: checked === true };
     stoppingChecksRef.current = next;
     setStoppingChecks(next);
 
-    mutatePublishingProject(targetProject.id, latest => ({
-      checklist_data: writeCritiqueStoppingChecks(latest?.checklist_data, next),
-    }), targetProject).then(updated => {
+    let savedChecks = next;
+    mutatePublishingProject(targetProject.id, latest => {
+      const result = patchCritiqueStoppingCheck(latest?.checklist_data, signId, checked);
+      savedChecks = result.checks;
+      return { checklist_data: result.value };
+    }, targetProject).then(updated => {
       onProjectUpdateRef.current?.(updated);
+      if (canApplyMutationResult(targetProject.id, targetGeneration)) {
+        const current = stoppingChecksRef.current;
+        const reconciled = current === next ? savedChecks : { ...savedChecks, ...current };
+        stoppingChecksRef.current = reconciled;
+        setStoppingChecks(reconciled);
+      }
     }).catch(error => {
-      if (shouldApplyCritiqueMutationResult(targetProject.id, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProject.id, targetGeneration)) {
         const rolledBack = rollbackFailedCritiqueStoppingChecks(
           stoppingChecksRef.current,
           next,
@@ -863,28 +1237,33 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
   const handleImportLegacyStoppingChecks = async () => {
     if (!project || stoppingChecksError || legacyStoppingImporting) return;
     const targetProject = project;
-    const next = { ...legacyStoppingChecks, ...stoppingChecksRef.current };
+    const targetGeneration = projectSelectionRef.current.generation;
+    let next = { ...legacyStoppingChecks, ...stoppingChecksRef.current };
     setLegacyStoppingImporting(true);
     try {
-      const updated = await mutatePublishingProject(targetProject.id, latest => ({
-        checklist_data: writeCritiqueStoppingChecks(latest?.checklist_data, next),
-      }), targetProject);
+      const updated = await mutatePublishingProject(targetProject.id, latest => {
+        const result = mergeCritiqueStoppingChecks(latest?.checklist_data, legacyStoppingChecks);
+        next = result.checks;
+        return { checklist_data: result.value };
+      }, targetProject);
       try {
         localStorage.removeItem(LEGACY_CRITIQUE_STOPPING_CHECKS_KEY);
       } catch {
         // プロジェクトへの保存は完了しているため、旧キーが残っても保存値を優先する。
       }
       onProjectUpdateRef.current?.(updated);
-      if (shouldApplyCritiqueMutationResult(targetProject.id, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProject.id, targetGeneration)) {
         stoppingChecksRef.current = next;
         setStoppingChecks(next);
         setLegacyStoppingChecks({});
         toast.success(`旧終了判断チェックを「${targetProject.name}」へ引き継ぎました`);
       }
     } catch (error) {
-      toast.error(error?.message || '旧終了判断チェックを引き継げませんでした。元の旧キーは残しています');
+      if (canApplyMutationResult(targetProject.id, targetGeneration)) {
+        toast.error(error?.message || '旧終了判断チェックを引き継げませんでした。元の旧キーは残しています');
+      }
     } finally {
-      if (shouldApplyCritiqueMutationResult(targetProject.id, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProject.id, targetGeneration)) {
         setLegacyStoppingImporting(false);
       }
     }
@@ -892,42 +1271,42 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
 
   const handleDelete = async () => {
     if (!project || !deleteTarget || historyError || deleting) return;
+    const targetProject = project;
+    const targetProjectId = targetProject.id;
+    const targetGeneration = projectSelectionRef.current.generation;
     setDeleting(true);
     try {
-      const targetProject = project;
-      const targetProjectId = targetProject.id;
       let nextEntries = entries;
       const updated = await mutatePublishingProject(project.id, latest => {
         const latestRaw = typeof latest?.critique_history === 'string'
           ? latest.critique_history
           : serializeCritiqueHistory([]);
-        const latestHistory = readCritiqueHistory(latestRaw);
-        if (latestHistory.error) throw latestHistory.error;
-        const result = deleteCritiqueEntry(latestRaw, deleteTarget.id);
+        const result = deleteCritiqueEntryIfUnchanged(latestRaw, deleteTarget);
         nextEntries = result.entries;
         return { critique_history: result.value };
       }, targetProject);
       onProjectUpdate?.(updated);
-      if (shouldApplyCritiqueMutationResult(targetProjectId, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
         setEntries(sortedByReviewedAt(nextEntries));
         setDeleteTarget(null);
         toast.success('論評を削除しました');
       }
     } catch (error) {
-      if (shouldApplyCritiqueMutationResult(project.id, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
         toast.error(error?.message || '論評を削除できませんでした');
       }
     } finally {
-      if (shouldApplyCritiqueMutationResult(project.id, activeProjectIdRef.current)) setDeleting(false);
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) setDeleting(false);
     }
   };
 
   const handleAddTasks = async entry => {
     if (!project || historyError || taskBusyId) return;
+    const targetProject = project;
+    const targetProjectId = targetProject.id;
+    const targetGeneration = projectSelectionRef.current.generation;
     setTaskBusyId(entry.id);
     try {
-      const targetProject = project;
-      const targetProjectId = targetProject.id;
       let resultSummary = { added: 0, updated: 0, skipped: 0 };
       const updated = await mutatePublishingProject(project.id, latest => {
         const checklist = readChecklistEnvelope(latest?.checklist_data);
@@ -936,7 +1315,10 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
         const existingTasks = Array.isArray(envelope._creation_custom)
           ? envelope._creation_custom
           : Array.isArray(envelope._custom) ? envelope._custom : [];
-        const plan = buildCritiqueTaskPlan(entry, existingTasks);
+        const latestRaw = typeof latest?.critique_history === 'string'
+          ? latest.critique_history
+          : serializeCritiqueHistory([]);
+        const plan = buildLatestCritiqueTaskPlan(latestRaw, entry.id, existingTasks);
         const additions = Array.isArray(plan.additions) ? plan.additions : [];
         const updates = Array.isArray(plan.updates) ? plan.updates : [];
         const skipped = Array.isArray(plan.skipped) ? plan.skipped : [];
@@ -951,7 +1333,7 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
         };
       }, targetProject);
       onProjectUpdate?.(updated);
-      if (shouldApplyCritiqueMutationResult(targetProjectId, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
         setTaskResults(current => ({ ...current, [entry.id]: resultSummary }));
         if (resultSummary.added > 0 || resultSummary.updated > 0) {
           toast.success(`修正タスクを${resultSummary.added}件追加・${resultSummary.updated}件更新しました`);
@@ -959,88 +1341,247 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
         else toast.info('追加できる新しい修正タスクはありませんでした');
       }
     } catch (error) {
-      if (shouldApplyCritiqueMutationResult(project.id, activeProjectIdRef.current)) {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
         toast.error(error?.message || '修正タスクを追加できませんでした');
       }
     } finally {
-      if (shouldApplyCritiqueMutationResult(project.id, activeProjectIdRef.current)) setTaskBusyId('');
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) setTaskBusyId('');
     }
   };
 
-  const handleCopyPrompt = async () => {
-    if (!project) return;
-    const fields = readProjectFields(project);
+  const createSavedPromptContext = () => {
+    if (!project) return null;
+    const saved = readCritiqueContext(project.critique_context || '');
+    if (saved.error || contextError) {
+      toast.error(saved.error?.message || contextError || '本の前提を読み込めないため、相談文のコピーを停止しました');
+      return null;
+    }
+    if (!saved.hasSavedContext || contextDirtyRef.current) {
+      toast.info('先に「この本の前提」を保存してから相談文をコピーしてください');
+      setContextOpen(true);
+      return null;
+    }
+
     let manuscript;
     try {
       manuscript = readProjectManuscript(project);
     } catch (error) {
       toast.error(error?.message || '旧版で保存した原稿データを読み込めないため、相談文のコピーを停止しました');
-      return;
+      return null;
     }
-    const bookTitle = project.book_title
-      || fields.t41_book_title
-      || fields.t42_book_title2
-      || project.name
-      || '';
-    const authorName = project.author_name || fields.t42_author_name || '';
-    const targetReader = extractTargetReader(project);
-    const categories = [
-      project.category_main,
-      project.category_sub1,
-      project.category_sub2,
-      fields.t43a_category1,
-      fields.t43a_category2,
-      fields.t43a_category3,
-    ].filter(Boolean);
-    const keywords = [
-      fields.t43b_kw1,
-      fields.t43b_kw2,
-      fields.t43b_kw3,
-      fields.t43b_kw4,
-      fields.t43b_kw5,
-      fields.t43b_kw6,
-      fields.t43b_kw7,
-    ].filter(Boolean);
-    const latestEntry = entries[0] || null;
-    const previousEntry = entries[1] || null;
-    const context = {
-      bookTitle,
-      authorName,
-      bookDescription: stripHtml(project.kdp_description || ''),
-      targetReader,
-      targetAudience: targetReader,
-      bookPromise: project.promotion_goal || '',
-      promotionGoal: project.promotion_goal || '',
-      strategyMemo: project.strategy_memo || '',
-      categories: project.categories || categories,
-      keywords: project.keywords || keywords,
-      releaseTargetDate: project.release_target_date || project.release_date || '',
+    return buildProjectPromptContext({
+      project,
+      fields: readProjectFields(project),
+      entries,
+      context: saved.context,
       manuscript,
-      manuscriptLabel: latestEntry?.manuscriptLabel || '',
-      latestCritique: latestEntry ? JSON.stringify({
-        manuscriptLabel: latestEntry.manuscriptLabel,
-        reviewedAt: latestEntry.reviewedAt,
-        judgment: optionLabel(judgments, latestEntry.judgment),
-        scores: latestEntry.scores,
-        summary: latestEntry.summary,
-        hardGates: latestEntry.hardGates,
-        priorityFixes: latestEntry.priorityFixes,
-        authorDecision: latestEntry.authorDecision,
-        responseStatus: optionLabel(statuses, latestEntry.responseStatus),
-      }, null, 2) : '',
-      latestEntry,
-      previousEntry,
-      critiqueEntries: entries,
-    };
+      judgments,
+      statuses,
+    });
+  };
 
+  const handleCopyPrompt = async () => {
+    const promptContext = createSavedPromptContext();
+    if (!promptContext) return;
     try {
-      const prompt = buildCritiqueCodexPrompt(context);
+      const prompt = buildCritiqueCodexPrompt(promptContext);
       await navigator.clipboard.writeText(prompt);
       setPromptCopied(true);
       setTimeout(() => setPromptCopied(false), 2000);
-      toast.success('Codexへの辛口論評相談文をコピーしました');
+      toast.success('原稿確認＋辛口論評の相談文をコピーしました');
     } catch (error) {
       toast.error(error?.message || '相談文をコピーできませんでした。ブラウザのクリップボード許可を確認してください');
+    }
+  };
+
+  const openClassification = entry => {
+    if (!project || historyError) return;
+    const cacheKey = classificationDraftCacheKey(project.id, entry.id);
+    const cached = readCachedCritiqueDraft(classificationDraftCacheRef.current, cacheKey);
+    const hasCachedBaseUpdatedAt = Boolean(
+      cached && Object.prototype.hasOwnProperty.call(cached, 'baseUpdatedAt'),
+    );
+    const hasConflict = hasCachedCritiqueDraftConflict(cached, entry.updatedAt);
+    setClassificationTarget(hasCachedBaseUpdatedAt
+      ? { ...entry, updatedAt: cached.baseUpdatedAt }
+      : entry);
+    setClassificationDraft(cached?.draft || {
+      mustFix: entry.findingCategories?.mustFix || '',
+      readerCheck: entry.findingCategories?.readerCheck || '',
+      authorJudgment: entry.findingCategories?.authorJudgment || '',
+      deferred: entry.findingCategories?.deferred || '',
+    });
+    classificationDirtyRef.current = Boolean(cached);
+    setClassificationDirty(Boolean(cached));
+    setClassificationConflict(hasConflict);
+    if (hasConflict) {
+      toast.warning('一時保存した4分類より後に、この論評が別の画面で更新されています。内容を確認してから最新データへ切り替えてください');
+    }
+  };
+
+  const handleClassificationDraftChange = updater => {
+    setClassificationDraft(current => {
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      const cacheKey = classificationDraftCacheKey(project?.id, classificationTarget?.id);
+      cacheCritiqueDraft(classificationDraftCacheRef.current, cacheKey, next, {
+        baseUpdatedAt: classificationTarget?.updatedAt || '',
+      });
+      return next;
+    });
+    classificationDirtyRef.current = true;
+    setClassificationDirty(true);
+  };
+
+  const handleClassificationOpenChange = nextOpen => {
+    if (classificationSaving) return;
+    if (!nextOpen) {
+      if (classificationDirtyRef.current) {
+        toast.info('未保存の4分類を一時保存しました。もう一度開くと入力内容を戻せます');
+      }
+      setClassificationTarget(null);
+      setClassificationDraft(null);
+      classificationDirtyRef.current = false;
+      setClassificationDirty(false);
+      setClassificationConflict(false);
+    }
+  };
+
+  const discardStaleClassificationDraft = () => {
+    if (!project || !classificationTarget) return;
+    const latestEntry = entries.find(entry => entry.id === classificationTarget.id);
+    if (!latestEntry) {
+      toast.error('最新の論評を確認できませんでした。画面を更新してください');
+      return;
+    }
+    const cacheKey = classificationDraftCacheKey(project.id, latestEntry.id);
+    classificationDraftCacheRef.current.delete(cacheKey);
+    setClassificationTarget(latestEntry);
+    setClassificationDraft({
+      mustFix: latestEntry.findingCategories?.mustFix || '',
+      readerCheck: latestEntry.findingCategories?.readerCheck || '',
+      authorJudgment: latestEntry.findingCategories?.authorJudgment || '',
+      deferred: latestEntry.findingCategories?.deferred || '',
+    });
+    classificationDirtyRef.current = false;
+    setClassificationDirty(false);
+    setClassificationConflict(false);
+    toast.info('一時保存した内容を破棄し、最新の4分類へ切り替えました');
+  };
+
+  const handleSaveClassification = async event => {
+    event?.preventDefault?.();
+    if (!project || !classificationTarget || !classificationDraft || historyError || classificationSaving || classificationConflict) return;
+
+    const targetProject = project;
+    const targetProjectId = targetProject.id;
+    const targetGeneration = projectSelectionRef.current.generation;
+    const targetEntryId = classificationTarget.id;
+    const targetCacheKey = classificationDraftCacheKey(targetProjectId, targetEntryId);
+    const targetDraftRevision = readCachedCritiqueDraft(
+      classificationDraftCacheRef.current,
+      targetCacheKey,
+    )?.revision ?? null;
+    const expectedUpdatedAt = classificationTarget.updatedAt;
+    setClassificationSaving(true);
+    try {
+      let nextEntries = entries;
+      const updated = await mutatePublishingProject(targetProjectId, latest => {
+        const latestRaw = typeof latest?.critique_history === 'string'
+          ? latest.critique_history
+          : serializeCritiqueHistory([]);
+        const latestHistory = readCritiqueHistory(latestRaw);
+        if (latestHistory.error) throw latestHistory.error;
+        const latestEntry = latestHistory.entries.find(entry => entry.id === targetEntryId);
+        if (!latestEntry) throw new Error('整理対象の論評が別の画面で削除されました');
+        if (hasCritiqueEntryEditConflict(expectedUpdatedAt, latestEntry)) {
+          throw new Error('この論評は別の画面で更新されています。最新履歴を確認してから4分類を編集し直してください');
+        }
+        const result = upsertCritiqueEntry(latestRaw, {
+          ...latestEntry,
+          findingCategories: classificationDraft,
+        });
+        nextEntries = result.entries;
+        return { critique_history: result.value };
+      }, targetProject);
+      onProjectUpdateRef.current?.(updated);
+      const cachedAfterSave = readCachedCritiqueDraft(
+        classificationDraftCacheRef.current,
+        targetCacheKey,
+      );
+      const draftUnchanged = cachedAfterSave
+        ? cachedAfterSave.revision === targetDraftRevision
+        : targetDraftRevision === null;
+      if (cachedAfterSave && draftUnchanged) {
+        clearCachedCritiqueDraftIfUnchanged(
+          classificationDraftCacheRef.current,
+          targetCacheKey,
+          targetDraftRevision,
+        );
+      }
+      if (canApplyMutationResult(targetProjectId, targetGeneration) && draftUnchanged) {
+        setEntries(sortedByReviewedAt(nextEntries));
+        setClassificationTarget(null);
+        setClassificationDraft(null);
+        classificationDirtyRef.current = false;
+        setClassificationDirty(false);
+        setClassificationConflict(false);
+        toast.success('AIの指摘を4種類に整理して保存しました');
+      }
+    } catch (error) {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
+        toast.error(error?.message || '指摘の分類を保存できませんでした');
+      }
+    } finally {
+      if (canApplyMutationResult(targetProjectId, targetGeneration)) {
+        setClassificationSaving(false);
+      }
+    }
+  };
+
+  const handleCopyDecisionPrompt = async (entry, draftCategories = null) => {
+    const promptContext = createSavedPromptContext();
+    if (!promptContext || !entry) return;
+    try {
+      const historicalBrief = entry.briefSnapshot && typeof entry.briefSnapshot === 'object'
+        ? entry.briefSnapshot
+        : {};
+      const hasHistoricalBrief = [
+        'targetReader',
+        'coreMessage',
+        'readerOutcome',
+        'plannedPrice',
+        'publicationPurpose',
+        'manuscriptLabel',
+      ].some(key => String(historicalBrief[key] || '').trim());
+      const reviewedManuscriptLabel = String(
+        entry.manuscriptLabel || historicalBrief.manuscriptLabel || '',
+      ).trim();
+      const currentManuscriptLabel = String(promptContext.manuscriptLabel || '').trim();
+      const manuscriptVersionMismatch = hasCritiqueManuscriptVersionMismatch(
+        reviewedManuscriptLabel,
+        currentManuscriptLabel,
+      );
+      const prompt = buildCritiqueDecisionPrompt({
+        ...promptContext,
+        targetReader: hasHistoricalBrief ? historicalBrief.targetReader : '',
+        coreMessage: hasHistoricalBrief ? historicalBrief.coreMessage : '',
+        readerOutcome: hasHistoricalBrief ? historicalBrief.readerOutcome : '',
+        plannedPrice: hasHistoricalBrief ? historicalBrief.plannedPrice : '',
+        publicationPurpose: hasHistoricalBrief ? historicalBrief.publicationPurpose : '',
+        reviewedManuscriptLabel,
+        currentManuscriptLabel,
+        manuscriptVersionMismatch,
+        historicalPremiseUnavailable: !hasHistoricalBrief,
+        selectedCritique: entry,
+        findingCategories: draftCategories || entry.findingCategories,
+        authorDecision: entry.authorDecision,
+      });
+      await navigator.clipboard.writeText(prompt);
+      setDecisionPromptCopiedId(entry.id);
+      setTimeout(() => setDecisionPromptCopiedId(''), 2000);
+      toast.success('修正判断をCodexへ相談する文をコピーしました');
+    } catch (error) {
+      toast.error(error?.message || '修正判断の相談文をコピーできませんでした');
     }
   };
 
@@ -1081,11 +1622,11 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
               <h2 className="text-base font-black text-neon-pink neon-pink-glow">辛口論評</h2>
             </div>
             <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted-foreground">
-              本文を読み込む → 論評を保存 → 優先修正を制作タスク化 → 原稿を直す → 再論評、の履歴をこの本ごとに残せます。
-              点数は判断材料であり、権利・安全・事実確認と最終判断は著者が行います。
+              本の前提を保存 → 原稿を末尾まで読めたか確認 → 論評を保存 → 指摘を4種類に整理 → 小さく直して再論評、の履歴をこの本ごとに残せます。
+              AIの点数を上げることではなく、読者へ伝わる本にしながら著者らしさを守ることが目的です。
             </p>
-            <ol className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-[10px] text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
-              {['原稿を準備', 'Codexへ相談文をコピー', '論評結果を記録', '修正後に再論評・比較'].map((step, index) => (
+            <ol className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-[10px] text-muted-foreground sm:grid-cols-2 xl:grid-cols-5">
+              {['本の前提を保存', '原稿を渡す', '最終章・最後の一文を確認', '論評結果を記録', '4分類して小さく修正'].map((step, index) => (
                 <li key={step} className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-black/10 px-3 py-2">
                   <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-neon-cyan/15 font-black text-neon-cyan">{index + 1}</span>
                   <span className="break-words">{step}</span>
@@ -1096,7 +1637,7 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
           <div className="flex flex-shrink-0 flex-wrap gap-2 lg:max-w-[280px] lg:justify-end">
             <Button type="button" onClick={handleCopyPrompt} variant="outline" className="min-h-10 gap-2 border-violet-400/40 bg-violet-500/10 text-xs text-violet-200 hover:bg-violet-500/20">
               {promptCopied ? <Check className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-              {promptCopied ? '相談文をコピー済み' : 'Codexへの相談文をコピー'}
+              {promptCopied ? '相談文をコピー済み' : '原稿確認＋辛口論評の相談文をコピー'}
             </Button>
             <Button type="button" onClick={openNewEntry} disabled={mutationsBlocked} className="min-h-10 gap-2 border border-neon-pink/40 bg-neon-pink/20 text-xs text-neon-pink hover:bg-neon-pink/30">
               <Plus className="h-4 w-4" />新しい論評を記録
@@ -1104,9 +1645,25 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
           </div>
         </div>
         <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">
-          相談文には、現在の書名・説明文・対象読者の手掛かり・旧版で保存済みの原稿本文（ある場合）・直近の論評をまとめます。新しい原稿はCodexの相談時にファイルで添付してください。このボタンでは外部送信しません。
+          相談文には、保存した5つの前提・書名・説明文・原稿版・旧版で保存済みの本文（ある場合）・直近の論評をまとめます。新しい原稿はCodexの相談時にファイルで添付してください。最初の返信では採点せず、最終章と最後の一文だけを確認します。このボタンでは外部送信しません。
         </p>
       </section>
+
+      <CritiqueContextCard
+        context={critiqueContext}
+        draft={contextDraft}
+        hasSaved={contextHasSaved}
+        error={contextError}
+        dirty={contextDirty}
+        conflict={contextConflict}
+        saving={contextSaving}
+        open={contextOpen}
+        onOpenChange={setContextOpen}
+        onDraftChange={handleContextDraftChange}
+        onSave={handleSaveContext}
+        onDiscardStaleDraft={discardStaleContextDraft}
+        onDownloadRaw={downloadCorruptContext}
+      />
 
       {historyError && (
         <section className="rounded-xl border border-red-500/40 bg-red-950/30 p-4" role="alert">
@@ -1131,7 +1688,7 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
           <FileText className="mx-auto h-10 w-10 text-neon-cyan/70" />
           <h3 className="mt-4 text-sm font-bold text-foreground">まだ論評はありません</h3>
           <p className="mx-auto mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
-            まずCodexへの相談文をコピーして論評を依頼し、返ってきた結果を「新しい論評を記録」から保存してください。
+            まず上の「この本の前提」を保存し、相談文をコピーしてください。Codexが答えた最終章と最後の一文を照合してから論評を進め、結果を「新しい論評を記録」へ保存します。
           </p>
           <div className="mt-5 flex flex-wrap justify-center gap-2">
             <Button type="button" variant="outline" onClick={handleCopyPrompt} className="gap-2 border-violet-400/40 bg-violet-500/10 text-xs text-violet-200 hover:bg-violet-500/20">
@@ -1167,6 +1724,9 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
               onDuplicate={handleDuplicate}
               onDelete={setDeleteTarget}
               onAddTasks={handleAddTasks}
+              onClassify={openClassification}
+              onCopyDecisionPrompt={handleCopyDecisionPrompt}
+              decisionPromptCopied={decisionPromptCopiedId === entry.id}
               onNavigateCreation={() => onNavigateTab?.('creation')}
             />
           ))}
@@ -1254,6 +1814,22 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
         onOpenChange={handleFormOpenChange}
         onDraftChange={setDraft}
         onSave={handleSaveEntry}
+      />
+
+      <CritiqueFindingDialog
+        open={Boolean(classificationTarget)}
+        entry={classificationTarget}
+        draft={classificationDraft}
+        categories={CRITIQUE_FINDING_CATEGORIES}
+        dirty={classificationDirty}
+        conflict={classificationConflict}
+        saving={classificationSaving}
+        promptCopied={Boolean(classificationTarget && decisionPromptCopiedId === classificationTarget.id)}
+        onOpenChange={handleClassificationOpenChange}
+        onDraftChange={handleClassificationDraftChange}
+        onDiscardStaleDraft={discardStaleClassificationDraft}
+        onSave={handleSaveClassification}
+        onCopyPrompt={() => handleCopyDecisionPrompt(classificationTarget, classificationDraft)}
       />
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null); }}>

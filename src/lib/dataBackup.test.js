@@ -14,6 +14,7 @@ import {
   PROJECT_RUBY_DICTIONARY_STORAGE_PREFIX,
   RUBY_DICTIONARY_STORAGE_KEY,
   SELECTED_PROJECT_STORAGE_KEY,
+  serializeDataBackup,
   serializeCritiqueRecovery,
   validateDataBackup,
 } from './dataBackup.js';
@@ -70,6 +71,26 @@ function critiqueHistory(entries) {
   return serializeCritiqueHistory(entries);
 }
 
+function critiqueContext(overrides = {}) {
+  return JSON.stringify({
+    version: 1,
+    updatedAt: FIXED_DATE,
+    targetReader: '初めてKindle出版する人',
+    coreMessage: '出版工程を迷わず進める方法',
+    readerOutcome: '自分で出版準備を完了できる',
+    plannedPrice: '500円を検討',
+    publicationPurpose: '教材を実践へつなぐ',
+    manuscriptCheck: {
+      manuscriptLabel: '第3稿',
+      expectedFinalChapterTitle: 'おわりに',
+      expectedLastSentence: 'あなたの一冊を届けてください。',
+      status: 'matched',
+      checkedAt: FIXED_DATE,
+    },
+    ...overrides,
+  });
+}
+
 function backup({
   projects = [{ id: 'p1', name: '既存の本' }],
   selectedProjectId = projects[0]?.id || null,
@@ -100,6 +121,7 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
       id: 'p1',
       name: '一般向けガイド',
       manuscript: '本文',
+      critique_context: critiqueContext(),
       post_publication_notes: 'オーディオブック化と続編を検討',
       categories: JSON.stringify([{ value: 'ノンフィクション', custom: '', memo: '', book_type: '実用・ビジネス', theme: '仕事術' }]),
       aplus_image_url: 'local-image:img1',
@@ -124,6 +146,7 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
 
   assert.equal(result.appVersion, '1.2.3');
   assert.equal(result.data.projects[0].manuscript, '本文');
+  assert.equal(JSON.parse(result.data.projects[0].critique_context).plannedPrice, '500円を検討');
   assert.equal(result.data.projects[0].post_publication_notes, 'オーディオブック化と続編を検討');
   assert.equal(JSON.parse(result.data.projects[0].categories)[0].theme, '仕事術');
   assert.equal(result.data.projects[0].aplus_image_url, 'local-image:img1');
@@ -153,6 +176,24 @@ test('不明な構造や不正な画像をimport前に拒否する', () => {
     () => validateDataBackup(backup({ images: [{ ...image('img1'), dataUrl: 'https://example.com/a.png' }] })),
     BackupValidationError,
   );
+  assert.throws(
+    () => validateDataBackup(backup({
+      projects: [{ id: 'p1', name: '本', critique_context: '{broken-context' }],
+    })),
+    error => error instanceof BackupValidationError
+      && error.path === 'backup.data.projects[0].critique_context',
+  );
+  assert.throws(
+    () => validateDataBackup(backup({
+      projects: [{
+        id: 'p1',
+        name: '本',
+        critique_context: JSON.stringify({ version: 999, updatedAt: FIXED_DATE }),
+      }],
+    })),
+    error => error instanceof BackupValidationError
+      && error.path === 'backup.data.projects[0].critique_context',
+  );
   assert.throws(() => parseDataBackup('{not json'), BackupValidationError);
 });
 
@@ -164,6 +205,7 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
         name: '既存名',
         author_name: '既存著者',
         strategy_memo: '残す',
+        critique_context: critiqueContext({ publicationPurpose: '現在の目的' }),
         post_publication_notes: '現在の出版後メモ',
         kdp_meta: JSON.stringify({ description: '現在の紹介文', aplus: { version: 1, modules: [{ id: 'keep' }] } }),
       },
@@ -197,6 +239,7 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
   assert.equal(plan.projects.length, 3);
   assert.equal(p1.name, '復元名');
   assert.equal(p1.strategy_memo, '残す');
+  assert.equal(JSON.parse(p1.critique_context).publicationPurpose, '現在の目的');
   assert.equal(p1.post_publication_notes, '現在の出版後メモ');
   assert.equal(JSON.parse(p1.kdp_meta).description, '復元した紹介文');
   assert.equal(JSON.parse(p1.kdp_meta).aplus.modules[0].id, 'keep');
@@ -207,6 +250,163 @@ test('mergeでは既存を残し、同じIDだけ入力側の項目で更新す�
     { 現在語: 'げんざいご', 復元語: 'ふくげんご' },
   );
   assert.equal(plan.images.length, 3);
+});
+
+test('本の前提はバックアップのmerge・replace・旧版互換で保持される', async () => {
+  const currentRaw = critiqueContext({ publicationPurpose: '現在の出版目的' });
+  const incomingRaw = critiqueContext({
+    updatedAt: '2026-08-04T00:00:00.000Z',
+    publicationPurpose: '復元した出版目的',
+  });
+  const oldBackup = backup({ projects: [{ id: 'p1', name: '旧版の本' }] });
+  const current = backup({
+    projects: [{ id: 'p1', name: '現在の本', critique_context: currentRaw }],
+  });
+
+  const mergedWithOld = buildDataRestorePlan(current, oldBackup, 'merge');
+  assert.equal(mergedWithOld.projects[0].critique_context, currentRaw);
+  const mergedWithBlank = buildDataRestorePlan(
+    current,
+    backup({ projects: [{ id: 'p1', name: '空欄の旧版', critique_context: '' }] }),
+    'merge',
+  );
+  const mergedWithNull = buildDataRestorePlan(
+    current,
+    backup({ projects: [{ id: 'p1', name: 'nullの旧版', critique_context: null }] }),
+    'merge',
+  );
+  assert.equal(mergedWithBlank.projects[0].critique_context, currentRaw);
+  assert.equal(mergedWithNull.projects[0].critique_context, currentRaw);
+
+  const incoming = backup({
+    projects: [{ id: 'p1', name: '復元後の本', critique_context: incomingRaw }],
+  });
+  const merged = buildDataRestorePlan(current, incoming, 'merge');
+  assert.equal(merged.projects[0].critique_context, incomingRaw);
+
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{ id: 'old', name: '置換前の本', critique_context: currentRaw }]),
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  await importDataBackup(incoming, {
+    mode: 'replace', storage, imageStore, now,
+  });
+  const roundTrip = await createDataBackup({ storage, imageStore, now });
+  assert.equal(roundTrip.data.projects[0].critique_context, incomingRaw);
+});
+
+test('読み込めない本の前提は通常バックアップから分離し、正常データで復旧できる', async () => {
+  const corruptRaw = '{broken-context';
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'p1', name: '現在の本', critique_context: corruptRaw,
+    }]),
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  const bundle = await createDataBackupBundle({ storage, imageStore, now });
+  const exported = bundle.backup;
+  assert.equal(Object.hasOwn(exported.data.projects[0], 'critique_context'), false);
+  assert.doesNotThrow(() => parseDataBackup(serializeDataBackup(exported)));
+  assert.equal(bundle.critiqueRecovery.entries[0].field, 'critique_context');
+  assert.equal(bundle.critiqueRecovery.entries[0].raw, corruptRaw);
+  await assert.rejects(
+    createDataBackup({ storage, imageStore, now }),
+    error => error instanceof BackupRecoveryRequiredError
+      && error.critiqueRecovery?.entries[0].raw === corruptRaw,
+  );
+
+  const validRaw = critiqueContext({ publicationPurpose: '復旧後の目的' });
+  const repaired = buildDataRestorePlan(
+    exported,
+    backup({ projects: [{ id: 'p1', name: '復旧する本', critique_context: validRaw }] }),
+    'merge',
+  );
+  assert.equal(repaired.projects[0].critique_context, validRaw);
+
+  await importDataBackup(
+    backup({ projects: [{ id: 'p1', name: '復旧する本', critique_context: validRaw }] }),
+    {
+      mode: 'merge',
+      storage,
+      imageStore,
+      now,
+      beforeApply: ({ beforeCritiqueRecovery }) => {
+        assert.equal(beforeCritiqueRecovery.entries[0].field, 'critique_context');
+        assert.equal(beforeCritiqueRecovery.entries[0].raw, corruptRaw);
+        return { critiqueRecoverySaved: true };
+      },
+    },
+  );
+  const storedProject = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY))[0];
+  assert.equal(storedProject.critique_context, validRaw);
+});
+
+test('空白文字だけの論評履歴と本の前提も原文を復旧用JSONへ分離する', async () => {
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'p1',
+      name: '空白データの本',
+      critique_history: '  \r\n ',
+      critique_context: '   ',
+    }]),
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+
+  const bundle = await createDataBackupBundle({ storage, imageStore, now });
+  const safeProject = bundle.backup.data.projects[0];
+  const recoveryByField = new Map(
+    bundle.critiqueRecovery.entries.map(entry => [entry.field, entry.raw]),
+  );
+
+  assert.doesNotThrow(() => parseDataBackup(serializeDataBackup(bundle.backup)));
+  assert.equal(Object.hasOwn(safeProject, 'critique_history'), false);
+  assert.equal(Object.hasOwn(safeProject, 'critique_context'), false);
+  assert.equal(recoveryByField.get('critique_history'), '  \r\n ');
+  assert.equal(recoveryByField.get('critique_context'), '   ');
+});
+
+test('壊れた・将来版の本の前提はimportの書込み前に拒否する', async () => {
+  const originalProjectsRaw = JSON.stringify([{ id: 'current', name: '現在の本' }]);
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: originalProjectsRaw,
+  });
+  let imageWrites = 0;
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => { imageWrites += 1; },
+  };
+  const invalidContexts = [
+    '{broken-context',
+    JSON.stringify({ version: 999, updatedAt: FIXED_DATE }),
+  ];
+
+  for (const critique_context of invalidContexts) {
+    const incoming = backup({
+      projects: [{ id: 'p1', name: '読み込まない本', critique_context }],
+    });
+
+    assert.throws(
+      () => buildDataRestorePlan(backup(), incoming, 'merge'),
+      error => error instanceof BackupValidationError
+        && error.path === 'backup.data.projects[0].critique_context',
+    );
+    await assert.rejects(
+      importDataBackup(incoming, { mode: 'merge', storage, imageStore, now }),
+      error => error instanceof BackupValidationError
+        && error.path === 'backup.data.projects[0].critique_context',
+    );
+    assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
+    assert.equal(imageWrites, 0);
+  }
 });
 
 test('出版後の展開メモはバックアップのmerge・replace・旧版互換で保持される', async () => {
@@ -490,6 +690,38 @@ test('mergeでは辛口論評履歴をID単位で結合し、同じIDは入力�
   );
 });
 
+test('旧v1バックアップの同一論評をmergeしても現在の前提スナップショットと4分類を保つ', () => {
+  const current = backup({
+    projects: [{
+      id: 'p1',
+      name: '現在の本',
+      critique_history: critiqueHistory([critiqueEntry('shared-v1', {
+        summary: '現在の総評',
+        briefSnapshot: { targetReader: '現在の対象読者' },
+        findingCategories: { mustFix: '現在の必須修正' },
+      })]),
+    }],
+  });
+  const incomingV1History = JSON.stringify({
+    version: 1,
+    entries: [critiqueEntry('shared-v1', { summary: '旧バックアップの総評' })],
+  });
+  const incoming = backup({
+    projects: [{
+      id: 'p1',
+      name: '復元後の本',
+      critique_history: incomingV1History,
+    }],
+  });
+
+  const plan = buildDataRestorePlan(current, incoming, 'merge');
+  const merged = readCritiqueHistory(plan.projects[0].critique_history).entries[0];
+
+  assert.equal(merged.summary, '旧バックアップの総評');
+  assert.equal(merged.briefSnapshot.targetReader, '現在の対象読者');
+  assert.equal(merged.findingCategories.mustFix, '現在の必須修正');
+});
+
 test('旧バックアップのmergeでは現在の辛口論評履歴を失わない', () => {
   const current = backup({
     projects: [{
@@ -583,6 +815,7 @@ test('壊れた辛口論評履歴を通常バックアップから分離し、�
   assert.equal(bundle.critiqueRecovery.entries.length, 1);
   assert.equal(bundle.critiqueRecovery.entries[0].projectId, 'p1');
   assert.equal(bundle.critiqueRecovery.entries[0].projectName, '復旧対象の本');
+  assert.equal(bundle.critiqueRecovery.entries[0].field, 'critique_history');
   assert.match(bundle.critiqueRecovery.entries[0].error, /バージョン999/);
   assert.equal(bundle.critiqueRecovery.entries[0].raw, corruptRaw);
   assert.equal(
@@ -796,7 +1029,14 @@ test('現在の論評履歴が壊れていても、正常バックアップか�
   });
 
   const result = await importDataBackup(incoming, {
-    mode: 'replace', storage, imageStore, now,
+    mode: 'replace',
+    storage,
+    imageStore,
+    now,
+    beforeApply: ({ beforeCritiqueRecovery }) => {
+      assert.equal(beforeCritiqueRecovery.entries[0].raw, corruptRaw);
+      return { critiqueRecoverySaved: true };
+    },
   });
   const restoredProjects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY));
 

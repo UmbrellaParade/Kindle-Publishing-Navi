@@ -79,6 +79,10 @@
       "type": "string",
       "description": "\u539f\u7a3f\u672c\u6587"
     },
+    "critique_context": {
+      "type": "string",
+      "description": "\u8f9b\u53e3\u8ad6\u8a55\u7528\u306e\u672c\u306e\u524d\u63d0\u3068\u539f\u7a3f\u53d6\u5f97\u78ba\u8a8d\uff08JSON\uff09"
+    },
     "critique_history": {
       "type": "string",
       "description": "\u8f9b\u53e3\u8ad6\u8a55\u5c65\u6b74\uff08JSON\uff09"

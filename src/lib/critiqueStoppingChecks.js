@@ -59,6 +59,32 @@ export function writeCritiqueStoppingChecks(rawChecklistData, checks) {
   });
 }
 
+export function patchCritiqueStoppingCheck(rawChecklistData, signId, checked) {
+  const restored = readCritiqueStoppingChecks(rawChecklistData);
+  if (restored.error) throw restored.error;
+  const checks = {
+    ...selectProjectCritiqueStoppingChecks(restored),
+    [signId]: checked === true,
+  };
+  return {
+    checks,
+    value: writeCritiqueStoppingChecks(rawChecklistData, checks),
+  };
+}
+
+export function mergeCritiqueStoppingChecks(rawChecklistData, incomingChecks) {
+  const restored = readCritiqueStoppingChecks(rawChecklistData);
+  if (restored.error) throw restored.error;
+  const checks = {
+    ...normalizeCritiqueStoppingChecks(incomingChecks),
+    ...selectProjectCritiqueStoppingChecks(restored),
+  };
+  return {
+    checks,
+    value: writeCritiqueStoppingChecks(rawChecklistData, checks),
+  };
+}
+
 export function selectProjectCritiqueStoppingChecks(readResult) {
   return readResult?.source === 'project'
     ? normalizeCritiqueStoppingChecks(readResult.checks)
