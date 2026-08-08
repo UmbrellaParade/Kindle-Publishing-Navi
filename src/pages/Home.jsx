@@ -17,7 +17,7 @@ import BrowserStorageNotice from '../components/BrowserStorageNotice';
 import LegacyMigrationNotice from '../components/LegacyMigrationNotice';
 import { base44, LOCAL_PROJECTS_KEY } from '@/api/base44Client';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ArrowUp, RefreshCw } from 'lucide-react';
 import {
   flushPendingSaves,
   getPendingSaveCount,
@@ -225,6 +225,17 @@ export default function Home() {
     }, 50);
   };
 
+  const handleScrollToTop = () => {
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({
+      top: 0,
+      behavior: reduceMotion ? 'auto' : 'smooth',
+    });
+    window.setTimeout(() => {
+      document.getElementById('kindle-navi-page-title')?.focus({ preventScroll: true });
+    }, reduceMotion ? 0 : 350);
+  };
+
   useEffect(() => {
     tabButtonRefs.current[activeTab]?.scrollIntoView({
       behavior: 'smooth',
@@ -361,6 +372,18 @@ export default function Home() {
             {activeTab === 'critique'  && <ReviewGuideTab {...tabProps} />}
           </motion.div>
         </AnimatePresence>
+
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={handleScrollToTop}
+            aria-label="ページの上に戻る"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-neon-cyan/40 bg-neon-cyan/10 px-4 py-2 text-sm font-bold text-neon-cyan shadow-[0_0_14px_rgba(0,245,255,0.08)] transition hover:border-neon-cyan/70 hover:bg-neon-cyan/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d0d1a]"
+          >
+            <ArrowUp className="h-4 w-4" aria-hidden="true" />
+            上に戻る
+          </button>
+        </div>
       </main>
     </div>
   );
