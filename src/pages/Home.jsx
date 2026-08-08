@@ -344,7 +344,7 @@ export default function Home() {
       </nav>
 
       {/* コンテンツ */}
-      <main className="relative z-10 max-w-7xl mx-auto px-2 py-6 pb-16">
+      <main className="relative z-10 max-w-7xl mx-auto px-2 py-6 pb-24">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
@@ -373,18 +373,25 @@ export default function Home() {
           </motion.div>
         </AnimatePresence>
 
-        <div className="mt-4 flex justify-end">
+      </main>
+
+      <div
+        data-scroll-to-top="true"
+        className="pointer-events-none fixed inset-x-0 z-40"
+        style={{ bottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))' }}
+      >
+        <div className="relative mx-auto h-11 w-full max-w-7xl">
           <button
             type="button"
             onClick={handleScrollToTop}
             aria-label="ページの上に戻る"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-neon-cyan/40 bg-neon-cyan/10 px-4 py-2 text-sm font-bold text-neon-cyan shadow-[0_0_14px_rgba(0,245,255,0.08)] transition hover:border-neon-cyan/70 hover:bg-neon-cyan/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d0d1a]"
+            className="pointer-events-auto absolute bottom-0 right-4 inline-flex min-h-11 w-max items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-neon-cyan/50 bg-[#121225]/95 px-4 py-2 text-sm font-bold text-neon-cyan shadow-[0_0_18px_rgba(0,245,255,0.16)] backdrop-blur-md transition hover:border-neon-cyan/80 hover:bg-[#171735] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d0d1a] min-[1600px]:left-[calc(100%+1rem)] min-[1600px]:right-auto"
           >
             <ArrowUp className="h-4 w-4" aria-hidden="true" />
             上に戻る
           </button>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
