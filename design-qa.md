@@ -1,38 +1,56 @@
-# Amazon A+ 管理画面 — Design QA
+# Design QA — floating scroll-to-top button
 
-## 比較対象
+## Comparison target
 
-- 参照画像: `C:\Users\myabe\AppData\Local\Temp\codex-clipboard-1bccd735-231d-4a16-a166-6df880a94bc8.png`
-- 参照画像: `C:\Users\myabe\AppData\Local\Temp\codex-clipboard-26893125-f754-4e2e-917a-008236de5f4f.png`
-- PC実装: `C:\Users\myabe\.codex\visualizations\2026\08\03\019fc56e-1a7b-73c0-a088-181ce21766f2\kindle-a-plus-qa\implementation-desktop-module.png`
-- スマホ実装: `C:\Users\myabe\.codex\visualizations\2026\08\03\019fc56e-1a7b-73c0-a088-181ce21766f2\kindle-a-plus-qa\implementation-mobile-module.png`
-- 同一画面比較: `C:\Users\myabe\.codex\visualizations\2026\08\03\019fc56e-1a7b-73c0-a088-181ce21766f2\kindle-a-plus-qa\source-vs-implementation.png`
+- Source visual truth: `C:\Users\myabe\OneDrive\Desktop\スクリーンショット 2026-08-09 011229.png`
+- Final desktop implementation: `C:\Users\myabe\AppData\Local\Temp\kindle-navi-scroll-top-qa\implementation-desktop-final2-1920x1032.png`
+- Final mobile implementation: `C:\Users\myabe\AppData\Local\Temp\kindle-navi-scroll-top-qa\implementation-mobile-final-390x844.png`
+- Focused side-by-side comparison: `C:\Users\myabe\AppData\Local\Temp\kindle-navi-scroll-top-qa\comparison-bottom-right.png`
+- State: the manual is open and scrolled to a middle section.
+- Desktop viewport: 1920 x 1032 CSS px, device scale factor 1.
+- Source pixels: 1920 x 1032. Implementation pixels: 1920 x 1032.
+- Mobile viewport and pixels: 390 x 844, device scale factor 1.
 
-参照画像のAmazon白色UIをそのまま複製せず、本ツール既存のダーク／ネオンテーマへ適応した。比較の主眼は、標準複数画像モジュールAの構造、入力順、操作性、レスポンシブ挙動である。
+The source includes Chrome browser chrome while the implementation capture is page content only. Full-page typography and vertical offsets are therefore not treated as a fidelity target. The user-marked bottom-right region was cropped at identical pixel coordinates and compared side by side; that focused comparison is the authoritative placement evidence.
 
-## 検証条件
+## Full-view comparison evidence
 
-- PC: 1275 × 720 px
-- スマホ: 390 × 844 px（ページ実幅385 px）
-- 状態: 空画像、画像登録済み、選択画像、任意項目入力、ASIN正常／異常、審査NG警告、モジュール追加／削除、自動保存後の再読込
+- At 1920px, the button remains fixed beside the right edge of the `max-w-7xl` content frame while the manual is scrolled.
+- At 390px, the button remains fixed 16px from the viewport right edge and above the mobile safe area.
+- The main content has additional bottom padding so the final content can scroll clear of the fixed control.
+- No horizontal overflow was introduced: mobile body width 385px in a 390px viewport.
 
-## 比較結果
+## Focused comparison evidence
 
-- 4画像枠、大プレビュー、4サムネイル、各キャプション、選択画像ごとの代替テキスト・見出し・説明を実装済み。
-- モジュールと画像の並べ替え、差し替え、ダウンロード、削除を実装済み。
-- 既存のNoto Sans JP、ネオン色、Lucideアイコン、カード面を一貫して使用している。
-- PCでは参照画面と同じ左右2カラム、スマホでは画像部→登録文の1カラムへ崩れず変形する。
-- スマホ実幅385 pxで `scrollWidth === clientWidth` を確認し、横方向のページ溢れはない。
-- 入力ラベル、文字数、必須／任意、選択状態、無効状態、画像仕様、alt説明が読み分けられる。
+The focused comparison shows the source's red-circled target area on the left and the final implementation on the right. The final button occupies that marked gutter without colliding with the manual article or the browser-side utility controls.
 
-## 修正履歴
+## Required fidelity surfaces
 
-1. P1: スマホで画像操作の削除ボタンだけが次行へ孤立した。アップロード操作をスマホ幅では全幅にし、アイコン操作を次行へまとめた。
-2. P1: 制作進捗カードからA+へ移動した際、横スクロール内のアクティブタブが見えない場合があった。選択タブを中央へ自動スクロールし、`aria-current`を追加した。
-3. P1: 任意の見出し・説明・キャプションが必須に見えた。任意表示を追加し、準備度は画像・alt・ASIN・提出前確認を中心に計算するよう修正した。
-4. P1: ASIN、RGB、状態同期の説明が不足していた。10文字形式／重複検査、RGB・300PPI確認、KDP非同期の注記を追加した。
-5. 最終パス: PC／スマホともP0・P1・P2の未解決事項なし。ブラウザコンソールエラーなし。
+- Fonts and typography: the existing app font, 14px bold label, line height, and Japanese copy are preserved. `w-max` and `whitespace-nowrap` keep `上に戻る` on one line.
+- Spacing and layout rhythm: the desktop button begins 16px outside the 1280px content frame at widths of 1600px or more; narrower screens use a 16px viewport inset. The bottom inset adds the device safe area.
+- Colors and visual tokens: the existing dark surface, neon-cyan text/border, focus ring, and shadow are reused. Contrast remains clear against the manual background.
+- Image quality and asset fidelity: no new raster assets are required. The existing Lucide `ArrowUp` icon is retained and renders sharply at all checked sizes.
+- Copy and content: visible text remains `上に戻る`; the accessible name remains `ページの上に戻る`.
+
+## Interaction and accessibility verification
+
+- The control is a native `button`, has a minimum 44px target, visible focus treatment, and an accessible Japanese name.
+- Mouse/touch activation scrolls to `scrollY: 0` and moves focus to `#kindle-navi-page-title`.
+- Reduced-motion behavior remains covered by the source regression test.
+- The app update banner is offset above the floating button and keeps its higher overlay priority.
+- Manual and Kindle manuscript guide middle states both expose one global scroll-to-top button.
+- Console errors and warnings: 0 in the checked local browser session.
+
+## Comparison history
+
+1. Baseline: the control was inline after the main content and was unavailable until the user reached the page bottom.
+2. First fixed pass: placement matched the requested gutter, but an intermediate max-width-frame implementation allowed the Japanese label to wrap vertically at 1920px (P1).
+3. Fix: added intrinsic width and no-wrap behavior, recaptured the same viewport/state, and confirmed the horizontal label in the requested location.
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain. No P3 visual follow-up is required for this scoped change.
 
 ## Final result
 
-passed
+final result: passed

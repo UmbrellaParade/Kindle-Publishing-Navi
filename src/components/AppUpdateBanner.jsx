@@ -44,7 +44,8 @@ export default function AppUpdateBanner({ beforeReload }) {
 
   return (
     <aside
-      className="fixed inset-x-3 bottom-3 z-[100] mx-auto max-w-3xl rounded-xl border border-neon-cyan/40 bg-[#121225]/95 p-4 shadow-2xl backdrop-blur-md"
+      className="fixed inset-x-3 z-[100] mx-auto max-w-3xl rounded-xl border border-neon-cyan/40 bg-[#121225]/95 p-4 shadow-2xl backdrop-blur-md"
+      style={{ bottom: 'calc(4.75rem + env(safe-area-inset-bottom, 0px))' }}
       aria-live="polite"
       aria-label="アプリの更新通知"
     >
