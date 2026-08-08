@@ -52,7 +52,7 @@ const TOOL_ICON_GUIDE = [
 ];
 
 const MANUAL_BODY_MARKDOWN = manualMarkdown.replace(
-  /^# Umbrella Parade 原稿制作ツール 利用マニュアル\r?\n\r?\n更新日: 2026年8月6日\r?\n\r?\n公開版: \[Umbrella Parade 原稿制作ツール\]\(https:\/\/umbrellaparade\.github\.io\/novel-drafting-tool\/\)\r?\n\r?\n/,
+  /^# Umbrella Parade 原稿制作ツール 利用マニュアル\r?\n\r?\n更新日: [^\r\n]+\r?\n\r?\n公開版: \[Umbrella Parade 原稿制作ツール\]\(https:\/\/umbrellaparade\.github\.io\/novel-drafting-tool\/\)\r?\n\r?\n/,
   '',
 );
 
@@ -279,7 +279,7 @@ export default function ManuscriptFormatterManual({ onBack }) {
           </div>
 
           <footer className="mt-10 border-t border-neon-cyan/20 pt-5 text-sm text-muted-foreground">
-            <p>このページは、2026年8月6日更新の利用マニュアルです。</p>
+            <p>このページは、{MANUSCRIPT_FORMATTER_MANUAL_UPDATED_AT}更新の利用マニュアルです。</p>
           </footer>
         </article>
       </div>
