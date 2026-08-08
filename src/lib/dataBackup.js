@@ -5,6 +5,7 @@ import {
   readCritiqueHistory,
   serializeCritiqueHistory,
 } from './critiqueHistory.js';
+import { readCritiqueContext } from './critiqueContext.js';
 
 export const BACKUP_SCHEMA_VERSION = 1;
 export const CRITIQUE_RECOVERY_SCHEMA_VERSION = 1;
@@ -39,6 +40,7 @@ export const PROJECT_FIELD_ALLOWLIST = Object.freeze([
   'promotion_notes',
   'post_publication_notes',
   'manuscript',
+  'critique_context',
   'critique_history',
   'cover_image_url',
   'aplus_image_url',
@@ -80,8 +82,13 @@ const CRITIQUE_RECOVERY_FIELDS = new Set([
 const CRITIQUE_RECOVERY_ENTRY_FIELDS = new Set([
   'projectId',
   'projectName',
+  'field',
   'error',
   'raw',
+]);
+const CRITIQUE_RECOVERY_PROJECT_FIELDS = new Set([
+  'critique_history',
+  'critique_context',
 ]);
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const MAX_BACKUP_TEXT_LENGTH = 350 * 1024 * 1024;
@@ -170,18 +177,44 @@ function normalizeCritiqueHistoryField(value, path) {
   }
 }
 
+function normalizeCritiqueContextField(
+  value,
+  path,
+  { allowCorruptCritiqueContext = false } = {},
+) {
+  if (typeof value !== 'string') fail(path, '文字列ではありません');
+  if (value === '') return '';
+
+  const result = readCritiqueContext(value);
+  if (result?.error) {
+    if (allowCorruptCritiqueContext) return value;
+    fail(path, result.error.message || '本の前提を読み込めません');
+  }
+  if (!result?.hasSavedContext) return '';
+
+  try {
+    return JSON.stringify(result.context);
+  } catch (cause) {
+    fail(path, cause?.message || '本の前提を正規化できません');
+  }
+}
+
 export class BackupRecoveryRequiredError extends BackupValidationError {
   constructor(critiqueRecovery) {
     super(
-      '壊れた辛口論評履歴が見つかりました。原文を失わないよう createDataBackupBundle を使用してください',
-      'backup.data.projects.critique_history',
+      '壊れた辛口論評データが見つかりました。原文を失わないよう createDataBackupBundle を使用してください',
+      'backup.data.projects.critique_data',
     );
     this.name = 'BackupRecoveryRequiredError';
     this.critiqueRecovery = critiqueRecovery;
   }
 }
 
-function normalizeProject(project, path, { ignoreUnknown = false } = {}) {
+function normalizeProject(
+  project,
+  path,
+  { ignoreUnknown = false, allowCorruptCritiqueContext = false } = {},
+) {
   assertPlainObject(project, path);
   if (!ignoreUnknown) assertExactKeys(project, PROJECT_FIELDS, path);
 
@@ -201,9 +234,15 @@ function normalizeProject(project, path, { ignoreUnknown = false } = {}) {
       fail(`${path}.${field}`, '文字列ではありません');
     }
 
-    normalized[field] = field === 'critique_history'
-      ? normalizeCritiqueHistoryField(value, `${path}.${field}`)
-      : value;
+    if (field === 'critique_history') {
+      normalized[field] = normalizeCritiqueHistoryField(value, `${path}.${field}`);
+    } else if (field === 'critique_context') {
+      normalized[field] = normalizeCritiqueContextField(value, `${path}.${field}`, {
+        allowCorruptCritiqueContext,
+      });
+    } else {
+      normalized[field] = value;
+    }
   }
 
   assertString(normalized.id, `${path}.id`, { allowEmpty: false });
@@ -353,7 +392,7 @@ function normalizeBackupData(data, path = 'backup.data', options = {}) {
 }
 
 /** JSONから読み込んだバックアップを厳密に検証し、安全な新しいオブジェクトを返します。 */
-export function validateDataBackup(value) {
+function validateDataBackupWithOptions(value, options = {}) {
   assertPlainObject(value, 'backup');
   assertExactKeys(value, ROOT_FIELDS, 'backup');
   if (value.schemaVersion !== BACKUP_SCHEMA_VERSION) {
@@ -366,11 +405,21 @@ export function validateDataBackup(value) {
     schemaVersion: BACKUP_SCHEMA_VERSION,
     appVersion,
     exportedAt,
-    data: normalizeBackupData(value.data),
+    data: normalizeBackupData(value.data, 'backup.data', options),
   };
 }
 
-/** 壊れた辛口論評履歴の原文を、通常バックアップとは別に安全に保存する形式です。 */
+/** 外部から受け取るバックアップを厳格に検証します。 */
+export function validateDataBackup(value) {
+  return validateDataBackupWithOptions(value);
+}
+
+/** 復元前の内部計算用。壊れた値は事前に通常バックアップから分離済みです。 */
+function validateCurrentDataBackup(value) {
+  return validateDataBackupWithOptions(value, { allowCorruptCritiqueContext: true });
+}
+
+/** 壊れた辛口論評履歴／本の前提の原文を、通常バックアップとは別に安全に保存する形式です。 */
 export function validateCritiqueRecovery(value) {
   assertPlainObject(value, 'recovery');
   assertExactKeys(value, CRITIQUE_RECOVERY_FIELDS, 'recovery');
@@ -388,17 +437,25 @@ export function validateCritiqueRecovery(value) {
   const exportedAt = assertIsoDate(value.exportedAt, 'recovery.exportedAt');
   if (!Array.isArray(value.entries)) fail('recovery.entries', '配列ではありません');
 
-  const seenProjectIds = new Set();
+  const seenEntries = new Set();
   const entries = value.entries.map((entry, index) => {
     const path = `recovery.entries[${index}]`;
     assertPlainObject(entry, path);
     assertExactKeys(entry, CRITIQUE_RECOVERY_ENTRY_FIELDS, path);
     const projectId = assertString(entry.projectId, `${path}.projectId`, { allowEmpty: false });
-    if (seenProjectIds.has(projectId)) fail(`${path}.projectId`, '同じプロジェクトIDが重複しています');
-    seenProjectIds.add(projectId);
+    const field = entry.field === undefined
+      ? 'critique_history'
+      : assertString(entry.field, `${path}.field`, { allowEmpty: false });
+    if (!CRITIQUE_RECOVERY_PROJECT_FIELDS.has(field)) {
+      fail(`${path}.field`, '復旧対象の項目が正しくありません');
+    }
+    const entryKey = `${projectId}:${field}`;
+    if (seenEntries.has(entryKey)) fail(`${path}.projectId`, '同じプロジェクトの復旧項目が重複しています');
+    seenEntries.add(entryKey);
     return {
       projectId,
       projectName: assertString(entry.projectName, `${path}.projectName`, { allowEmpty: false }),
+      field,
       error: assertString(entry.error, `${path}.error`, { allowEmpty: false }),
       raw: assertString(entry.raw, `${path}.raw`),
     };
@@ -454,7 +511,7 @@ function toIsoString(now) {
 
 /**
  * 現在の許可済みデータだけを収集します。AI設定やAPIキーの保存キーは読みません。
- * 壊れた辛口論評履歴は通常バックアップから分離し、原文を復旧用ファイルへ残します。
+ * 壊れた辛口論評履歴／本の前提は通常バックアップから分離し、原文を復旧用ファイルへ残します。
  */
 export async function createDataBackupBundle({
   appVersion = 'unknown',
@@ -596,6 +653,13 @@ function mergeProject(left, right) {
       right.critique_history,
     );
   }
+  if (Object.prototype.hasOwnProperty.call(right, 'critique_context')) {
+    const incomingHasSavedContext = typeof right.critique_context === 'string'
+      && right.critique_context.trim().length > 0;
+    if (!incomingHasSavedContext && Object.prototype.hasOwnProperty.call(left, 'critique_context')) {
+      merged.critique_context = left.critique_context;
+    }
+  }
   return merged;
 }
 
@@ -613,28 +677,47 @@ function normalizeProjectsForBackup(projects, path, options) {
   const recoveryEntries = [];
   const safeProjects = projects.map((project) => {
     if (!isPlainObject(project)) return project;
-    if (!Object.prototype.hasOwnProperty.call(project, 'critique_history')) return project;
-    const rawValue = project.critique_history;
-    if (rawValue === null || rawValue === undefined || rawValue === '') return project;
-    if (typeof rawValue === 'string' && !rawValue.trim()) return project;
-
-    let errorMessage = '';
-    try {
-      const result = readCritiqueHistory(rawValue);
-      if (!result.error) return project;
-      errorMessage = result.error.message;
-    } catch (cause) {
-      errorMessage = cause?.message || '';
-    }
-
-    recoveryEntries.push({
-      projectId: typeof project.id === 'string' ? project.id : '',
-      projectName: typeof project.name === 'string' ? project.name : '',
-      error: errorMessage || '辛口論評履歴を読み込めません',
-      raw: recoveryRawText(rawValue),
-    });
     const safeProject = { ...project };
-    delete safeProject.critique_history;
+    const recoverableFields = [
+      {
+        field: 'critique_history',
+        read: readCritiqueHistory,
+        fallbackError: '辛口論評履歴を読み込めません',
+      },
+      {
+        field: 'critique_context',
+        read: readCritiqueContext,
+        fallbackError: '本の前提を読み込めません',
+      },
+    ];
+
+    for (const { field, read, fallbackError } of recoverableFields) {
+      if (!Object.prototype.hasOwnProperty.call(project, field)) continue;
+      const rawValue = project[field];
+      if (rawValue === null || rawValue === undefined || rawValue === '') continue;
+
+      let errorMessage = '';
+      if (typeof rawValue === 'string' && !rawValue.trim()) {
+        errorMessage = `${fallbackError}（空白文字だけのデータ）`;
+      } else {
+        try {
+          const result = read(rawValue);
+          if (!result?.error) continue;
+          errorMessage = result.error.message;
+        } catch (cause) {
+          errorMessage = cause?.message || '';
+        }
+      }
+
+      recoveryEntries.push({
+        projectId: typeof project.id === 'string' ? project.id : '',
+        projectName: typeof project.name === 'string' ? project.name : '',
+        field,
+        error: errorMessage || fallbackError,
+        raw: recoveryRawText(rawValue),
+      });
+      delete safeProject[field];
+    }
     return safeProject;
   });
 
@@ -649,7 +732,7 @@ export function buildDataRestorePlan(currentBackup, incomingBackup, mode = 'merg
   if (mode !== 'merge' && mode !== 'replace') {
     throw new TypeError('復元モードは merge または replace を指定してください');
   }
-  const current = validateDataBackup(currentBackup);
+  const current = validateCurrentDataBackup(currentBackup);
   const incoming = validateDataBackup(incomingBackup);
   if (mode === 'replace') return incoming.data;
 
@@ -682,35 +765,44 @@ export function buildDataRestorePlan(currentBackup, incomingBackup, mode = 'merg
   };
 }
 
-function preserveCorruptCritiqueHistories(plan, incoming, critiqueRecovery) {
+function preserveCorruptCritiqueData(plan, incoming, critiqueRecovery) {
   if (!critiqueRecovery) return plan;
   const incomingById = new Map(incoming.data.projects.map(project => [project.id, project]));
-  const recoveryById = new Map(critiqueRecovery.entries.map(entry => [entry.projectId, entry]));
+  const recoveryById = new Map();
+  for (const entry of critiqueRecovery.entries) {
+    const entries = recoveryById.get(entry.projectId) || [];
+    entries.push(entry);
+    recoveryById.set(entry.projectId, entries);
+  }
 
   return {
     ...plan,
     projects: plan.projects.map((project) => {
-      const recovery = recoveryById.get(project.id);
-      if (!recovery) return project;
+      const recoveries = recoveryById.get(project.id);
+      if (!recoveries) return project;
       const incomingProject = incomingById.get(project.id);
-      const explicitlyRepairs = incomingProject
-        && Object.prototype.hasOwnProperty.call(incomingProject, 'critique_history');
-      return explicitlyRepairs
-        ? project
-        : { ...project, critique_history: recovery.raw };
+      return recoveries.reduce((nextProject, recovery) => {
+        const explicitlyRepairs = incomingProject
+          && Object.prototype.hasOwnProperty.call(incomingProject, recovery.field);
+        return explicitlyRepairs
+          ? nextProject
+          : { ...nextProject, [recovery.field]: recovery.raw };
+      }, project);
     }),
   };
 }
 
 function listCorruptCritiqueRepairProjectIds(incoming, critiqueRecovery) {
   if (!critiqueRecovery) return [];
-  const corruptProjectIds = new Set(
-    critiqueRecovery.entries.map(entry => entry.projectId),
-  );
-  return incoming.data.projects
-    .filter(project => corruptProjectIds.has(project.id)
-      && Object.prototype.hasOwnProperty.call(project, 'critique_history'))
-    .map(project => project.id);
+  const incomingById = new Map(incoming.data.projects.map(project => [project.id, project]));
+  return [...new Set(
+    critiqueRecovery.entries
+      .filter(entry => Object.prototype.hasOwnProperty.call(
+        incomingById.get(entry.projectId) || {},
+        entry.field,
+      ))
+      .map(entry => entry.projectId),
+  )];
 }
 
 function captureRawStorage(storage, keys) {
@@ -762,7 +854,7 @@ function applyStoragePlan(storage, plan, affectedProjectIds, affectedFormatGuide
  * バックアップを復元します。成功時は復元直前の完全なスナップショットを返します。
  * localStorage または IndexedDB の書き込みに失敗した場合は、両方を復元前へ戻します。
  * beforeApply は書き込みロック内・データ変更前に実行し、例外時は変更せず停止します。
- * 壊れた論評履歴を修復する場合は { critiqueRecoverySaved: true } の返却も必須です。
+ * 読み込めない論評履歴／本の前提を修復する場合は { critiqueRecoverySaved: true } の返却も必須です。
  * @param {*} input
  * @param {{
  *   mode?: string,
@@ -786,15 +878,15 @@ async function importDataBackupUnlocked(input, {
   const { backup: beforeSnapshot, critiqueRecovery: beforeCritiqueRecovery } = beforeBundle;
   const basePlan = buildDataRestorePlan(beforeSnapshot, incoming, mode);
   const plan = mode === 'merge'
-    ? preserveCorruptCritiqueHistories(basePlan, incoming, beforeCritiqueRecovery)
+    ? preserveCorruptCritiqueData(basePlan, incoming, beforeCritiqueRecovery)
     : basePlan;
   const critiqueRepairProjectIds = mode === 'merge'
     ? listCorruptCritiqueRepairProjectIds(incoming, beforeCritiqueRecovery)
-    : [];
+    : [...new Set(beforeCritiqueRecovery?.entries.map(entry => entry.projectId) || [])];
 
   if (critiqueRepairProjectIds.length > 0 && typeof beforeApply !== 'function') {
     throw new BackupImportError(
-      '壊れた辛口論評履歴を置き換える前に、復旧用JSONを保存する処理が必要です。データは変更していません',
+      '読み込めない辛口論評履歴／本の前提を置き換える前に、復旧用JSONを保存する処理が必要です。データは変更していません',
       {
         beforeSnapshot,
         beforeCritiqueRecovery,
@@ -818,7 +910,7 @@ async function importDataBackupUnlocked(input, {
       });
       if (critiqueRepairProjectIds.length > 0
         && preflightResult?.critiqueRecoverySaved !== true) {
-        throw new Error('辛口論評履歴の復旧用JSONを保存できたことを確認できませんでした');
+        throw new Error('辛口論評履歴／本の前提の復旧用JSONを保存できたことを確認できませんでした');
       }
     } catch (cause) {
       throw new BackupImportError(
@@ -914,7 +1006,7 @@ export function importDataBackup(input, options) {
 }
 
 export function serializeDataBackup(backup) {
-  return JSON.stringify(validateDataBackup(backup), null, 2);
+  return JSON.stringify(validateCurrentDataBackup(backup), null, 2);
 }
 
 export function serializeCritiqueRecovery(recovery) {

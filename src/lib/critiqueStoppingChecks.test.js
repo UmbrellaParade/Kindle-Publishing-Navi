@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import {
   CRITIQUE_STOPPING_CHECKS_FIELD,
+  mergeCritiqueStoppingChecks,
   normalizeCritiqueStoppingChecks,
+  patchCritiqueStoppingCheck,
   readCritiqueStoppingChecks,
   rollbackFailedCritiqueStoppingChecks,
   selectProjectCritiqueStoppingChecks,
@@ -61,6 +63,34 @@ test('別プロジェクトの終了判断チェックを混ぜず、再読込�
   assert.deepEqual(readCritiqueStoppingChecks(projectA).checks, { 'same-feedback': true });
   assert.deepEqual(readCritiqueStoppingChecks(projectB).checks, { 'minor-only': true });
   assert.deepEqual(normalizeCritiqueStoppingChecks(null), {});
+});
+
+test('別画面の終了判断チェックを消さず1項目だけ更新する', () => {
+  const afterFirstTab = patchCritiqueStoppingCheck('', 'same-feedback', true);
+  const afterSecondTab = patchCritiqueStoppingCheck(afterFirstTab.value, 'minor-only', true);
+
+  assert.deepEqual(afterSecondTab.checks, {
+    'same-feedback': true,
+    'minor-only': true,
+  });
+  assert.deepEqual(readCritiqueStoppingChecks(afterSecondTab.value).checks, afterSecondTab.checks);
+});
+
+test('旧チェック移行は最新のプロジェクト別チェックを優先して結合する', () => {
+  const current = writeCritiqueStoppingChecks('', {
+    'same-feedback': false,
+    'minor-only': true,
+  });
+  const merged = mergeCritiqueStoppingChecks(current, {
+    'same-feedback': true,
+    'three-plus': true,
+  });
+
+  assert.deepEqual(merged.checks, {
+    'same-feedback': false,
+    'three-plus': true,
+    'minor-only': true,
+  });
 });
 
 test('壊れたチェックリストを空として上書きしない', () => {

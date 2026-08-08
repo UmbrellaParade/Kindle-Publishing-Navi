@@ -48,7 +48,7 @@ test('出版ナビの初心者マニュアルは全19章を安定IDで案内す�
   const sections = KINDLE_NAVI_MANUAL_GROUPS.flatMap(group => group.sections);
   const markdownHeadings = [...manual.matchAll(/^## (\d+)\. (.+)$/gm)];
 
-  assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月6日');
+  assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月9日');
   assert.equal(sections.length, 19);
   assert.deepEqual(sections.map(section => section.title), EXPECTED_TITLES);
   assert.deepEqual(
@@ -94,6 +94,35 @@ test('初めての利用者が開始からバックアップまで迷わず進�
     assert.equal(manual.includes(phrase), true, `不足している初心者案内: ${phrase}`);
   });
   assert.equal((manual.match(/^- \[ \] /gm) || []).length, 4);
+});
+
+test('辛口論評を本の前提から小さな修正まで初心者向けに案内する', () => {
+  const requiredPhrases = [
+    '誰に向けた本か',
+    '何を伝える本か',
+    '読後にどう変わってほしいか',
+    '予定している価格',
+    '出版の目的',
+    '最終章のタイトル',
+    '最後の一文',
+    '必ず直す',
+    '読者確認',
+    '著者判断',
+    '見送る',
+    '1〜3件',
+    '目次の重複',
+    '誤字脱字',
+    '具体的な1件を最初に直します',
+    '不要な修正を作る必要はありません',
+    'ハードゲート',
+    '読者へ伝わる本にすることが目的',
+    '前の原稿へ戻す',
+    '外部へ自動送信しません',
+  ];
+
+  requiredPhrases.forEach(phrase => {
+    assert.equal(manual.includes(phrase), true, `不足している辛口論評の説明: ${phrase}`);
+  });
 });
 
 test('現行9機能と外部操作・KDP最新確認の注意をすべて案内する', () => {

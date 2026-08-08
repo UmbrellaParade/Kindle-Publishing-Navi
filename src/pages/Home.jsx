@@ -107,7 +107,7 @@ export default function Home() {
           'kindle-navi-before-legacy-import-critique-recovery',
         ),
       });
-      toast.warning('旧版データ取込前のバックアップに加え、壊れた辛口論評履歴の原文を復旧用JSONとして保存しました。両方を保管してください');
+      toast.warning('旧版データ取込前のバックアップに加え、読み込めない辛口論評履歴／本の前提の原文を復旧用JSONとして保存しました。両方を保管してください');
     }
   }, []);
 
