@@ -70,7 +70,11 @@ export default function AppHeader({
     <header className="relative z-20 w-full border-b border-neon-pink/20" style={{ background: 'rgba(13,13,26,0.97)' }}>
       {/* タイトル行 */}
       <div className="text-center py-4 px-4 border-b border-border/50 relative">
-        <h1 className="font-heading font-black text-xl md:text-2xl tracking-widest neon-pink-glow text-neon-pink">
+        <h1
+          id="kindle-navi-page-title"
+          tabIndex={-1}
+          className="rounded-sm font-heading font-black text-xl md:text-2xl tracking-widest neon-pink-glow text-neon-pink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80"
+        >
           🌂 Umbrella Parade Kindle 出版ナビ
         </h1>
         <p className="text-[10px] text-muted-foreground tracking-widest mt-0.5">── 企画から出版・告知まで、迷わず進める ──</p>
