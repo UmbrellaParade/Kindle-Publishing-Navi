@@ -263,7 +263,7 @@ export default function ManuscriptFormatterManual({ onBack }) {
       </details>
 
       <div className="grid min-w-0 gap-5 lg:grid-cols-[17rem_minmax(0,1fr)] lg:items-start">
-        <aside className="sticky top-20 hidden max-h-[calc(100vh-6rem)] overflow-y-auto rounded-2xl p-4 lg:block" style={CARD_STYLE}>
+        <aside className="sticky top-32 hidden max-h-[calc(100vh-9rem)] overflow-y-auto rounded-2xl p-4 lg:block" style={CARD_STYLE}>
           <div className="mb-4 flex items-center gap-2 border-b border-neon-cyan/20 pb-3">
             <ListTree className="h-5 w-5 text-neon-cyan" aria-hidden="true" />
             <h2 className="font-black text-foreground">目次</h2>
