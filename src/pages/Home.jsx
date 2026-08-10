@@ -17,7 +17,7 @@ import BrowserStorageNotice from '../components/BrowserStorageNotice';
 import LegacyMigrationNotice from '../components/LegacyMigrationNotice';
 import { base44, LOCAL_PROJECTS_KEY } from '@/api/base44Client';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, ArrowUp, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ArrowUp, ChevronDown, RefreshCw } from 'lucide-react';
 import {
   flushPendingSaves,
   getPendingSaveCount,
@@ -59,7 +59,9 @@ export default function Home() {
   const [saveErrorMessage, setSaveErrorMessage] = useState('');
   const [retryingSaves, setRetryingSaves] = useState(false);
   const [createRequestToken, setCreateRequestToken] = useState(0);
-  const tabButtonRefs = useRef({});
+  const [mobileTabsOpen, setMobileTabsOpen] = useState(false);
+  const mobileTabsToggleRef = useRef(null);
+  const mainNavigationRef = useRef(null);
 
   const loadProjects = async () => {
     const list = await base44.entities.PublishingProject.list('-created_date', 50);
@@ -194,12 +196,41 @@ export default function Home() {
     setTimeout(() => setSaving(false), 500);
   };
 
-  const handleTabChange = async (tabId) => {
-    if (tabId === activeTab || switchingTab) return;
+  const restoreMobileTabsToggleFocus = () => {
+    window.setTimeout(() => {
+      mobileTabsToggleRef.current?.focus({ preventScroll: true });
+    }, 0);
+  };
+
+  const handleMobileTabsToggle = () => {
+    const nextOpen = !mobileTabsOpen;
+    setMobileTabsOpen(nextOpen);
+    if (!nextOpen) return;
+
+    window.setTimeout(() => {
+      const navigation = mainNavigationRef.current;
+      if (!navigation || navigation.getBoundingClientRect().top <= 1) return;
+      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      navigation.scrollIntoView({
+        behavior: reduceMotion ? 'auto' : 'smooth',
+        block: 'start',
+      });
+    }, 0);
+  };
+
+  const handleTabChange = async (tabId, { restoreMobileFocus = false } = {}) => {
+    if (tabId === activeTab) {
+      setMobileTabsOpen(false);
+      if (restoreMobileFocus) restoreMobileTabsToggleFocus();
+      return;
+    }
+    if (switchingTab) return;
     setSwitchingTab(true);
     try {
       await flushPendingSaves();
       setActiveTab(tabId);
+      setMobileTabsOpen(false);
+      if (restoreMobileFocus) restoreMobileTabsToggleFocus();
     } catch (error) {
       toast.error(error?.message || '保存を完了できなかったため、タブを切り替えませんでした');
     } finally {
@@ -235,14 +266,6 @@ export default function Home() {
       document.getElementById('kindle-navi-page-title')?.focus({ preventScroll: true });
     }, reduceMotion ? 0 : 350);
   };
-
-  useEffect(() => {
-    tabButtonRefs.current[activeTab]?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'nearest',
-      inline: 'center',
-    });
-  }, [activeTab]);
 
   const tabProps = {
     project: currentProject,
@@ -312,29 +335,71 @@ export default function Home() {
 
       {/* タブナビゲーション */}
       <nav
+        ref={mainNavigationRef}
         aria-label="メイン機能"
         className="sticky top-0 z-30 border-b shadow-[0_5px_14px_rgba(0,0,0,0.28)]"
         style={{ background: 'rgba(13,13,26,0.97)', borderColor: '#2a2a4a', backdropFilter: 'blur(8px)' }}
       >
         <div className="max-w-7xl mx-auto px-2">
-          <div className="flex gap-0.5 py-2 overflow-x-auto overscroll-x-contain scrollbar-hide">
+          <div className="py-2 md:hidden">
+            <button
+              ref={mobileTabsToggleRef}
+              type="button"
+              aria-expanded={mobileTabsOpen}
+              aria-controls="mobile-main-tab-list"
+              onClick={handleMobileTabsToggle}
+              className="flex min-h-11 w-full items-center gap-3 rounded-lg border border-[#34345a] bg-[#151529] px-3 py-2 text-left transition hover:border-neon-cyan/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-[10px] font-bold text-muted-foreground">表示中の機能</span>
+                <span className="block truncate text-sm font-bold text-neon-pink neon-pink-glow">
+                  {TABS.find(tab => tab.id === activeTab)?.label}
+                </span>
+              </span>
+              <span className="flex-shrink-0 text-xs font-bold text-neon-cyan">機能一覧（{TABS.length}）</span>
+              <ChevronDown
+                className={`h-4 w-4 flex-shrink-0 text-neon-cyan transition-transform ${mobileTabsOpen ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              />
+            </button>
+
+            {mobileTabsOpen && (
+              <div id="mobile-main-tab-list" className="mt-2 grid max-h-[calc(100dvh-5.5rem)] grid-cols-2 gap-1 overflow-y-auto pb-1">
+                {TABS.map(tab => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => handleTabChange(tab.id, { restoreMobileFocus: true })}
+                    disabled={switchingTab}
+                    aria-current={activeTab === tab.id ? 'page' : undefined}
+                    data-main-tab={tab.id}
+                    className={`min-h-11 w-full rounded-lg border px-2 py-2 text-center text-xs font-bold leading-tight transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 disabled:cursor-wait disabled:opacity-60 ${
+                      activeTab === tab.id
+                        ? 'border-neon-pink/50 bg-neon-pink/10 text-neon-pink neon-pink-glow'
+                        : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-white/5 hover:text-foreground'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="hidden grid-cols-5 gap-1 py-2 md:grid" data-main-tab-grid="desktop">
             {TABS.map(tab => (
               <button
                 key={tab.id}
-                ref={element => { tabButtonRefs.current[tab.id] = element; }}
+                type="button"
                 onClick={() => handleTabChange(tab.id)}
                 disabled={switchingTab}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
                 data-main-tab={tab.id}
-                className={`flex-shrink-0 px-3 md:px-4 py-2 text-xs md:text-sm font-bold rounded-lg transition-all duration-200 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 ${
+                className={`min-h-11 w-full rounded-lg border px-2 py-2 text-center text-[11px] font-bold leading-tight transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 disabled:cursor-wait disabled:opacity-60 lg:text-sm ${
                   activeTab === tab.id
-                    ? 'text-neon-pink neon-pink-glow'
-                    : 'text-muted-foreground hover:text-foreground'
+                    ? 'border-transparent text-neon-pink neon-pink-glow'
+                    : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-white/5 hover:text-foreground'
                 }`}
-                style={activeTab === tab.id
-                  ? { background: 'transparent', border: '1px solid transparent' }
-                  : { background: 'transparent', border: '1px solid transparent' }
-                }
               >
                 {tab.label}
               </button>
