@@ -83,6 +83,9 @@ test('初めての利用者が開始からバックアップまで迷わず進�
     '「逆算して設定」',
     'フェーズ0：準備',
     '「データ管理」→「バックアップをダウンロード」',
+    '「○○（仮）」',
+    '「名前を変更」',
+    'KDPへ登録する正式な書名は変わりません',
     '別のパソコンやスマートフォンで開く',
     '「結合して復元」',
     '「すべて置き換える」',
@@ -178,6 +181,7 @@ test('マニュアルから現行9機能と初回4ステップへ移動できる
   assert.match(manualComponentSource, /ここが実質的なスタートです/);
   assert.match(manualComponentSource, /初回準備[\s\S]*STEP 1[\s\S]*発売目標日から逆算/);
   assert.match(manualComponentSource, /この本は準備済み/);
+  assert.match(manualComponentSource, /仮タイトルでも大丈夫です/);
   assert.doesNotMatch(manualComponentSource, /最初の10分で行う4ステップ/);
   assert.match(manual, /スマートフォンでは \*\*「機能一覧（10）」\*\* を押す/);
   assert.doesNotMatch(manual, /メニューを横へスワイプ/);
