@@ -215,37 +215,47 @@ export default function KindleNaviManualTab({
         <div className="flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-neon-pink" aria-hidden="true" />
           <div>
-            <p className="text-xs font-bold text-neon-pink">まずはここから</p>
-            <h2 id="first-steps-heading" className="text-lg font-black text-foreground sm:text-xl">最初の10分で行う4ステップ</h2>
+            <p className="text-xs font-bold text-neon-pink">迷ったらここへ</p>
+            <h2 id="first-steps-heading" className="text-lg font-black text-foreground sm:text-xl">発売目標日から始める初回ガイド</h2>
           </div>
+        </div>
+        <div className="mt-3 rounded-xl border border-neon-cyan/25 bg-neon-cyan/5 px-4 py-3 text-sm leading-7 text-slate-300">
+          <p><strong className="text-neon-cyan">この4つは一度に終わらせなくて大丈夫です。</strong> 最初に決めるのは発売目標日です。日程を逆算すると、次に何をするかが見えやすくなります。</p>
+          <p className="mt-1 text-xs leading-6 text-muted-foreground">まだ本がない場合だけ、日程の保存先となるプロジェクトを先に1つ作ります。</p>
         </div>
         <ol className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <li className="flex flex-col rounded-xl border border-neon-pink/25 bg-neon-pink/5 p-4">
-            <span className="text-xs font-black text-neon-pink">STEP 1</span>
-            <div className="mt-2 flex items-center gap-2 font-black text-foreground"><Plus className="h-4 w-4" />本を作る</div>
-            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">管理用のプロジェクト名を入力します。正式な書名は後から設定できます。</p>
-            <button type="button" onClick={onCreateProject} className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-neon-pink/40 bg-neon-pink/15 px-3 py-2 text-xs font-black text-neon-pink transition hover:bg-neon-pink/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-pink/70">
-              {hasProject ? '別の本を追加する' : '新しい本を作る'}<ChevronRight className="h-4 w-4" />
-            </button>
+            <span className="text-xs font-black text-neon-pink">初回準備</span>
+            <div className="mt-2 flex items-center gap-2 font-black text-foreground"><Plus className="h-4 w-4" />本の保存先を作る</div>
+            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">本がまだない場合だけ行います。管理用の名前を入力し、発売日程を保存できるようにします。</p>
+            {hasProject ? (
+              <p className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-black text-emerald-300">
+                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />この本は準備済み
+              </p>
+            ) : (
+              <button type="button" onClick={onCreateProject} className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-neon-pink/40 bg-neon-pink/15 px-3 py-2 text-xs font-black text-neon-pink transition hover:bg-neon-pink/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-pink/70">
+                新しい本を作る<ChevronRight className="h-4 w-4" />
+              </button>
+            )}
           </li>
           <li className="flex flex-col rounded-xl border border-neon-cyan/25 bg-neon-cyan/5 p-4">
-            <span className="text-xs font-black text-neon-cyan">STEP 2</span>
-            <div className="mt-2 flex items-center gap-2 font-black text-foreground"><CalendarDays className="h-4 w-4" />発売日を逆算</div>
-            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">配信方法と発売目標日を選び、各工程へ標準8週間の日程を入れます。</p>
+            <span className="text-xs font-black text-neon-cyan">STEP 1</span>
+            <div className="mt-2 flex items-center gap-2 font-black text-foreground"><CalendarDays className="h-4 w-4" />発売目標日から逆算</div>
+            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">ここが実質的なスタートです。配信方法と発売目標日を選び、各工程へ標準8週間の日程を入れます。</p>
             <button type="button" onClick={hasProject ? onOpenSchedule : onCreateProject} className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-neon-cyan/40 bg-neon-cyan/15 px-3 py-2 text-xs font-black text-neon-cyan transition hover:bg-neon-cyan/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70">
               {hasProject ? '発売日を設定する' : '先に本を作る'}<ChevronRight className="h-4 w-4" />
             </button>
           </li>
           <li className="flex flex-col rounded-xl border border-neon-amber/25 bg-neon-amber/5 p-4">
-            <span className="text-xs font-black text-neon-amber">STEP 3</span>
-            <div className="mt-2 flex items-center gap-2 font-black text-foreground"><BookCheck className="h-4 w-4" />フェーズ0を開始</div>
-            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">制作進捗を個別表示にして、準備の一番上からチェックします。</p>
+            <span className="text-xs font-black text-neon-amber">STEP 2</span>
+            <div className="mt-2 flex items-center gap-2 font-black text-foreground"><BookCheck className="h-4 w-4" />フェーズ0を1つ確認</div>
+            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">制作進捗を個別表示にして、準備の一番上にある項目を確認します。全部進めなくて大丈夫です。</p>
             <button type="button" onClick={hasProject ? () => navigateToFeature('creation') : onCreateProject} className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-neon-amber/40 bg-neon-amber/10 px-3 py-2 text-xs font-black text-neon-amber transition hover:bg-neon-amber/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-amber/70">
               {hasProject ? '制作進捗を開く' : '本を作って準備を始める'}<ChevronRight className="h-4 w-4" />
             </button>
           </li>
           <li className="flex flex-col rounded-xl border border-[#3a3a5f] bg-[#111122] p-4">
-            <span className="text-xs font-black text-slate-300">STEP 4</span>
+            <span className="text-xs font-black text-slate-300">安全のため</span>
             <div className="mt-2 flex items-center gap-2 font-black text-foreground"><DatabaseBackup className="h-4 w-4" />バックアップ</div>
             <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">初回設定後にJSONを保存します。端末変更や万一の消失に備えられます。</p>
             <button type="button" onClick={focusDataManagement} className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-[#4a4a70] px-3 py-2 text-xs font-black text-slate-200 transition hover:border-neon-cyan/50 hover:text-neon-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70">
