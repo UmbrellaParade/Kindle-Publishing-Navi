@@ -227,7 +227,7 @@ export default function KindleNaviManualTab({
           <li className="flex flex-col rounded-xl border border-neon-pink/25 bg-neon-pink/5 p-4">
             <span className="text-xs font-black text-neon-pink">初回準備</span>
             <div className="mt-2 flex items-center gap-2 font-black text-foreground"><Plus className="h-4 w-4" />本の保存先を作る</div>
-            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">本がまだない場合だけ行います。管理用の名前を入力し、発売日程を保存できるようにします。</p>
+            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">本がまだない場合だけ行います。仮タイトルでも大丈夫です。管理名は画面上部からあとで変更できます。</p>
             {hasProject ? (
               <p className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-black text-emerald-300">
                 <CheckCircle2 className="h-4 w-4" aria-hidden="true" />この本は準備済み

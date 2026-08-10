@@ -287,6 +287,7 @@ export default function Home() {
         currentProject={currentProject}
         onSelectProject={handleSelectProject}
         onRefresh={loadProjects}
+        onProjectUpdate={handleProjectUpdate}
         saving={saving}
         saved={saved}
         createRequestToken={createRequestToken}
