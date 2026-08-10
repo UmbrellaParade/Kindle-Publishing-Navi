@@ -25,7 +25,7 @@ const manualComponentSource = readFileSync(
 const EXPECTED_TITLES = [
   'このマニュアルの使い方',
   'ゴリアスさんの教材・スプレッドシートとの関係',
-  '最初の10分でやること',
+  '発売目標日から始める初回ガイド',
   '出版までのおすすめ順',
   '画面上部と自動保存',
   'Kindle本制作進捗',
@@ -48,7 +48,7 @@ test('出版ナビの初心者マニュアルは全19章を安定IDで案内す�
   const sections = KINDLE_NAVI_MANUAL_GROUPS.flatMap(group => group.sections);
   const markdownHeadings = [...manual.matchAll(/^## (\d+)\. (.+)$/gm)];
 
-  assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月9日');
+  assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月10日');
   assert.equal(sections.length, 19);
   assert.deepEqual(sections.map(section => section.title), EXPECTED_TITLES);
   assert.deepEqual(
@@ -57,8 +57,8 @@ test('出版ナビの初心者マニュアルは全19章を安定IDで案内す�
   );
   assert.deepEqual(markdownHeadings.map(match => match[2]), EXPECTED_TITLES);
   assert.equal(new Set(sections.map(section => section.id)).size, 19);
-  assert.equal(getKindleNaviManualSectionId('3. 最初の10分でやること'), 'kindle-navi-manual-section-3');
-  assert.equal(getKindleNaviManualSectionId('最初の10分でやること'), undefined);
+  assert.equal(getKindleNaviManualSectionId('3. 発売目標日から始める初回ガイド'), 'kindle-navi-manual-section-3');
+  assert.equal(getKindleNaviManualSectionId('発売目標日から始める初回ガイド'), undefined);
 });
 
 test('教材との内容連携と自動同期ではないことを誤解なく説明する', () => {
@@ -93,6 +93,19 @@ test('初めての利用者が開始からバックアップまで迷わず進�
   requiredPhrases.forEach(phrase => {
     assert.equal(manual.includes(phrase), true, `不足している初心者案内: ${phrase}`);
   });
+  assert.equal(manual.includes('一度に全部終わらせる必要はありません'), true);
+  assert.equal(manual.includes('最初に決めるのは発売目標日です。'), true);
+  assert.equal(manual.includes('初日は発売目標日から逆算するところまで'), true);
+  assert.equal(manual.includes('最初の10分でやること'), false);
+  const firstGuide = manual.match(/## 3\. 発売目標日から始める初回ガイド([\s\S]*?)\n---/)?.[1] || '';
+  const firstGuideHeadings = [...firstGuide.matchAll(/^### (.+)$/gm)].map(match => match[1]);
+  assert.deepEqual(firstGuideHeadings, [
+    '初回準備：本の保存先を作る',
+    'STEP 1：発売目標日から逆算する',
+    'STEP 2：フェーズ0の最初の1項目を確認する',
+    '安全のため：最初のバックアップを取る',
+  ]);
+  assert.ok(firstGuide.indexOf('発売目標日から逆算する') < firstGuide.indexOf('フェーズ0の最初の1項目'));
   assert.equal((manual.match(/^- \[ \] /gm) || []).length, 4);
 });
 
@@ -160,5 +173,12 @@ test('マニュアルから現行9機能と初回4ステップへ移動できる
   assert.match(manualComponentSource, /onCreateProject/);
   assert.match(manualComponentSource, /onOpenSchedule/);
   assert.match(manualComponentSource, /data-management-trigger/);
-  assert.match(manualComponentSource, /最初の10分で行う4ステップ/);
+  assert.match(manualComponentSource, /発売目標日から始める初回ガイド/);
+  assert.match(manualComponentSource, /この4つは一度に終わらせなくて大丈夫です/);
+  assert.match(manualComponentSource, /ここが実質的なスタートです/);
+  assert.match(manualComponentSource, /初回準備[\s\S]*STEP 1[\s\S]*発売目標日から逆算/);
+  assert.match(manualComponentSource, /この本は準備済み/);
+  assert.doesNotMatch(manualComponentSource, /最初の10分で行う4ステップ/);
+  assert.match(manual, /スマートフォンでは \*\*「機能一覧（10）」\*\* を押す/);
+  assert.doesNotMatch(manual, /メニューを横へスワイプ/);
 });
