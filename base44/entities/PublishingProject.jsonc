@@ -87,6 +87,10 @@
       "type": "string",
       "description": "\u8f9b\u53e3\u8ad6\u8a55\u5c65\u6b74\uff08JSON\uff09"
     },
+    "planning_notes": {
+      "type": "string",
+      "description": "\u4f01\u753b\u30fb\u7af6\u5408\u8abf\u67fb\u30fb\u7ae0\u69cb\u6210\u30fb\u53d6\u6750\u30fb\u57f7\u7b46\u6307\u793a\u66f8\u30fb\u610f\u601d\u6c7a\u5b9a\uff08JSON\uff09"
+    },
     "cover_image_url": {
       "type": "string",
       "description": "\u8868\u7d19\u753b\u50cf URL"

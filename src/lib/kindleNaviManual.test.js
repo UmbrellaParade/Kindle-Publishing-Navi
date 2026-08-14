@@ -29,6 +29,7 @@ const EXPECTED_TITLES = [
   '出版までのおすすめ順',
   '画面上部と自動保存',
   'Kindle本制作進捗',
+  '企画・取材・構成ノート',
   'KDP登録進捗',
   'カテゴリーチェック',
   'プロモーション戦略メモ',
@@ -44,19 +45,19 @@ const EXPECTED_TITLES = [
   '初回チェックリスト',
 ];
 
-test('出版ナビの初心者マニュアルは全19章を安定IDで案内する', () => {
+test('出版ナビの初心者マニュアルは全20章を安定IDで案内する', () => {
   const sections = KINDLE_NAVI_MANUAL_GROUPS.flatMap(group => group.sections);
   const markdownHeadings = [...manual.matchAll(/^## (\d+)\. (.+)$/gm)];
 
   assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月14日');
-  assert.equal(sections.length, 19);
+  assert.equal(sections.length, 20);
   assert.deepEqual(sections.map(section => section.title), EXPECTED_TITLES);
   assert.deepEqual(
     sections.map(section => section.id),
     EXPECTED_TITLES.map((_, index) => `kindle-navi-manual-section-${index + 1}`),
   );
   assert.deepEqual(markdownHeadings.map(match => match[2]), EXPECTED_TITLES);
-  assert.equal(new Set(sections.map(section => section.id)).size, 19);
+  assert.equal(new Set(sections.map(section => section.id)).size, 20);
   assert.equal(getKindleNaviManualSectionId('3. 仮日または発売目標日から始める初回ガイド'), 'kindle-navi-manual-section-3');
   assert.equal(getKindleNaviManualSectionId('仮日または発売目標日から始める初回ガイド'), undefined);
 });
@@ -152,9 +153,38 @@ test('辛口論評を本の前提から小さな修正まで初心者向けに�
   });
 });
 
-test('現行9機能と外部操作・KDP最新確認の注意をすべて案内する', () => {
+test('企画・取材・構成ノートを初心者が安全に使えるよう案内する', () => {
+  const requiredPhrases = [
+    '最初の1件を保存する',
+    '企画メモを書く',
+    '取材を1問記録',
+    '6つの領域を使い分ける',
+    '章ID',
+    '案と承認版を分ける',
+    '本人承認済み',
+    '承認版を残して新しい案',
+    '新しい版',
+    '事実／仮説',
+    '公開候補',
+    '共有用JSON',
+    '共有用Markdown',
+    '非公開取材',
+    '約700KB',
+    '約2MB',
+    'JSON／Markdownの自動取込',
+    '添付ファイル本体の保存',
+    '旧バックアップに企画ノートがなくても',
+  ];
+
+  requiredPhrases.forEach(phrase => {
+    assert.equal(manual.includes(phrase), true, `不足している企画ノートの説明: ${phrase}`);
+  });
+});
+
+test('現行10機能と外部操作・KDP最新確認の注意をすべて案内する', () => {
   const featureNames = [
     'Kindle本制作進捗',
+    '企画・取材・構成ノート',
     'KDP登録進捗',
     'カテゴリーチェック',
     'プロモーション戦略メモ',
@@ -178,8 +208,8 @@ test('使い方マニュアルはナビ先頭にあり、プロジェクト0件�
   assert.match(homeSource, /activeTab === 'manual'[\s\S]*?<KindleNaviManualTab/);
 });
 
-test('マニュアルから現行9機能と初回4ステップへ移動できる', () => {
-  const featureIds = ['creation', 'kdp', 'category', 'promo', 'description', 'aplus', 'format', 'formatter', 'critique'];
+test('マニュアルから現行10機能と初回4ステップへ移動できる', () => {
+  const featureIds = ['creation', 'notes', 'kdp', 'category', 'promo', 'description', 'aplus', 'format', 'formatter', 'critique'];
   featureIds.forEach(id => {
     assert.match(manualComponentSource, new RegExp(`\\{ id: '${id}',`), `${id} への導線がありません`);
   });
@@ -196,6 +226,6 @@ test('マニュアルから現行9機能と初回4ステップへ移動できる
   assert.match(manualComponentSource, /この本は準備済み/);
   assert.match(manualComponentSource, /仮タイトルでも大丈夫です/);
   assert.doesNotMatch(manualComponentSource, /最初の10分で行う4ステップ/);
-  assert.match(manual, /スマートフォンでは \*\*「機能一覧（10）」\*\* を押す/);
+  assert.match(manual, /スマートフォンでは \*\*「機能一覧（11）」\*\* を押す/);
   assert.doesNotMatch(manual, /メニューを横へスワイプ/);
 });

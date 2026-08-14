@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import RainEffect from '../components/RainEffect';
 import AppHeader from '../components/AppHeader';
 import PublishingChecklistTab from '../components/tabs/PublishingChecklistTab';
+import PlanningNotesTab from '@/components/tabs/PlanningNotesTab';
 import KdpChecklistTab from '../components/tabs/KdpChecklistTab';
 import CategoryCheckTab from '../components/tabs/CategoryCheckTab';
 import PromoChecklistTab from '../components/tabs/PromoChecklistTab';
@@ -39,6 +40,7 @@ const SELECTED_PROJECT_KEY = 'kindle_publishing_navi_selected_project_id';
 const TABS = [
   { id: 'manual',    label: '使い方マニュアル' },
   { id: 'creation',  label: 'Kindle本制作進捗' },
+  { id: 'notes',     label: '企画・取材・構成ノート' },
   { id: 'kdp',       label: 'KDP登録進捗' },
   { id: 'category',  label: 'カテゴリーチェック' },
   { id: 'promo',     label: 'プロモーション戦略メモ' },
@@ -109,7 +111,7 @@ export default function Home() {
           'kindle-navi-before-legacy-import-critique-recovery',
         ),
       });
-      toast.warning('旧版データ取込前のバックアップに加え、読み込めない辛口論評履歴／本の前提の原文を復旧用JSONとして保存しました。両方を保管してください');
+      toast.warning('旧版データ取込前のバックアップに加え、読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの原文を復旧用JSONとして保存しました。両方を保管してください');
     }
   }, []);
 
@@ -374,7 +376,7 @@ export default function Home() {
                     disabled={switchingTab}
                     aria-current={activeTab === tab.id ? 'page' : undefined}
                     data-main-tab={tab.id}
-                    className={`min-h-11 w-full rounded-lg border px-2 py-2 text-center text-xs font-bold leading-tight transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 disabled:cursor-wait disabled:opacity-60 ${
+                    className={`min-h-11 w-full rounded-lg border px-2 py-2 text-center text-xs font-bold leading-tight transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 disabled:cursor-wait disabled:opacity-60 ${tab.id === 'notes' ? 'col-span-2' : ''} ${
                       activeTab === tab.id
                         ? 'border-neon-pink/50 bg-neon-pink/10 text-neon-pink neon-pink-glow'
                         : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-white/5 hover:text-foreground'
@@ -387,7 +389,7 @@ export default function Home() {
             )}
           </div>
 
-          <div className="hidden grid-cols-5 gap-1 py-2 md:grid" data-main-tab-grid="desktop">
+          <div className="hidden grid-cols-6 gap-1 py-2 md:grid" data-main-tab-grid="desktop">
             {TABS.map(tab => (
               <button
                 key={tab.id}
@@ -428,6 +430,7 @@ export default function Home() {
               />
             )}
             {activeTab === 'creation'  && <PublishingChecklistTab {...tabProps} />}
+            {activeTab === 'notes'     && <PlanningNotesTab {...tabProps} />}
             {activeTab === 'kdp'       && <KdpChecklistTab {...tabProps} />}
             {activeTab === 'category'  && <CategoryCheckTab {...tabProps} />}
             {activeTab === 'promo'     && <PromoChecklistTab {...tabProps} />}

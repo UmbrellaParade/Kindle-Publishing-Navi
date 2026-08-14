@@ -37,10 +37,25 @@ import {
   downloadCritiqueRecovery,
   downloadDataBackup,
   importDataBackup,
+  previewDataBackupPlanningNotesConflicts,
   readDataBackupFile,
 } from '@/lib/dataBackup';
 
 const DEFAULT_APP_VERSION = packageInfo.version || 'unknown';
+const PLANNING_CONFLICT_SECTION_LABELS = Object.freeze({
+  concept: '企画メモ',
+  conceptHistory: '企画メモ履歴',
+  competitors: '競合・市場調査',
+  chapters: '目次・章構成',
+  interviews: '取材記録',
+  instructionVersions: '執筆設計・GPTs指示書',
+  decisions: '意思決定・版履歴',
+});
+const PLANNING_CONFLICT_REASON_LABELS = Object.freeze({
+  same_id_different_content: '同じIDの内容違い',
+  chapter_order_requires_review: '章順の重なり',
+  duplicate_document_version: '同じ指示書系列・版番号の重なり',
+});
 
 function downloadRecoveryIfNeeded(recovery, prefix = 'kindle-navi-critique-recovery') {
   if (!recovery) return false;
@@ -80,6 +95,7 @@ export default function DataBackupDialog({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pendingBackup, setPendingBackup] = useState(null);
+  const [planningMergeConflicts, setPlanningMergeConflicts] = useState([]);
   const [selectedFileName, setSelectedFileName] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
@@ -96,6 +112,7 @@ export default function DataBackupDialog({
 
   const resetSelection = () => {
     setPendingBackup(null);
+    setPlanningMergeConflicts([]);
     setSelectedFileName('');
     setErrorMessage('');
     resetReplaceConfirmation();
@@ -117,7 +134,7 @@ export default function DataBackupDialog({
       downloadDataBackup(backup, { filename: createBackupFileName() });
       const recoveryDownloaded = downloadRecoveryIfNeeded(critiqueRecovery);
       if (recoveryDownloaded) {
-        toast.warning('通常バックアップに加え、読み込めない辛口論評履歴／本の前提の原文を復旧用JSONとして保存しました。両方を保管してください');
+        toast.warning('通常バックアップに加え、読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの原文を復旧用JSONとして保存しました。両方を保管してください');
       } else {
         toast.success('バックアップをダウンロードしました');
       }
@@ -135,13 +152,22 @@ export default function DataBackupDialog({
     if (!file) return;
     setBusy(true);
     setPendingBackup(null);
+    setPlanningMergeConflicts([]);
     setSelectedFileName(file.name);
     setErrorMessage('');
     resetReplaceConfirmation();
     try {
       const backup = await readDataBackupFile(file);
+      if (beforeAction) await beforeAction();
+      const currentBundle = await createDataBackupBundle({ appVersion });
+      const conflicts = previewDataBackupPlanningNotesConflicts(currentBundle.backup, backup);
+      setPlanningMergeConflicts(conflicts);
       setPendingBackup(backup);
-      toast.success('バックアップの検証が完了しました');
+      if (conflicts.length > 0) {
+        toast.warning(`企画・取材・構成ノートに内容・章順・指示書版の競合が${conflicts.length}件あります。結合は停止しています`);
+      } else {
+        toast.success('バックアップの検証が完了しました');
+      }
     } catch (error) {
       const message = error?.message || 'バックアップを読み込めませんでした';
       setErrorMessage(message);
@@ -172,7 +198,7 @@ export default function DataBackupDialog({
       );
       setReplaceSafetyReady(true);
       if (recoveryDownloaded) {
-        toast.warning('復元前バックアップと、読み込めない辛口論評履歴／本の前提の復旧用JSONを保存しました。両方を保管してください');
+        toast.warning('復元前バックアップと、読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの復旧用JSONを保存しました。両方を保管してください');
       } else {
         toast.success('復元前バックアップのダウンロードを開始しました');
       }
@@ -187,6 +213,12 @@ export default function DataBackupDialog({
 
   const runImport = async (mode) => {
     if (!pendingBackup || busy) return;
+    if (mode === 'merge' && planningMergeConflicts.length > 0) {
+      const message = '企画・取材・構成ノートに内容・章順・指示書版の競合があるため、結合を停止しました。全置換を使うか、競合内容を整理したバックアップを選んでください';
+      setErrorMessage(message);
+      toast.error(message);
+      return;
+    }
     if (mode === 'replace' && (!replaceSafetyReady || !replaceSafetyConfirmed)) return;
     setBusy(true);
     setErrorMessage('');
@@ -257,9 +289,9 @@ export default function DataBackupDialog({
         ? ' 復元処理を始める前に停止したため、保存データは変更していません。'
         : '';
       const critiqueRecoveryNote = critiqueRecoveryDownloaded
-        ? ' 読み込めない辛口論評履歴／本の前提の原文は、別の復旧用JSONにも保存しました。'
+        ? ' 読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの原文は、別の復旧用JSONにも保存しました。'
         : error?.beforeCritiqueRecovery
-          ? ' 読み込めない辛口論評履歴／本の前提の復旧用JSONはダウンロードできませんでした。'
+          ? ' 読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの復旧用JSONはダウンロードできませんでした。'
           : '';
       const message = `${error?.message || '復元できませんでした'}${rollbackNote}${preflightNote}${critiqueRecoveryNote}`;
       setErrorMessage(message);
@@ -271,7 +303,7 @@ export default function DataBackupDialog({
     // 結合前スナップショットは、書き込み前のbeforeApplyで保存済みです。
     // 全置換は、書き込み前に明示保存できた場合だけ runImport へ到達します。
     if (mode === 'merge' && preflightCritiqueRecoveryDownloaded) {
-      toast.warning('結合前にあった壊れた辛口論評履歴の原文を、別の復旧用JSONへ保存しました');
+      toast.warning('結合前にあった読み込めない項目の原文を、別の復旧用JSONへ保存しました');
     }
 
     if (onRestored) {
@@ -323,10 +355,10 @@ export default function DataBackupDialog({
             <div className="flex items-center gap-1.5 text-amber-400 font-bold mb-1">
               <ShieldCheck className="w-4 h-4" />ファイルの取り扱いについて
             </div>
-            バックアップには原稿・メモ・画像が含まれます。AI接続設定、APIキー、トークンは含めません。
-            原稿を含む機密ファイルとして、安全な場所に保管してください。
+            バックアップには原稿・メモ・画像が含まれます。AI接続設定として保存されたAPIキーやトークンの専用保存キーは対象外です。
+            ただし、原稿やメモへ手作業で貼り付けた機密文字列・非公開取材は通常バックアップに含まれます。「共有用JSON／Markdown」とは別の機密ファイルとして、安全な場所に保管してください。
             <p className="mt-2">
-              壊れた辛口論評履歴を検出した場合は、復元できる通常バックアップと、履歴の原文だけを残す復旧用JSONを別々に保存します。通常の復元には通常バックアップを選び、復旧用JSONも修復が済むまで保管してください。
+              読み込めない辛口論評履歴・本の前提・企画ノートを検出した場合は、復元できる通常バックアップと、原文だけを残す復旧用JSONを別々に保存します。通常の復元には通常バックアップを選び、復旧用JSONも修復が済むまで保管してください。
             </p>
           </div>
 
@@ -384,11 +416,30 @@ export default function DataBackupDialog({
             {pendingBackup && (
               <div className="space-y-3">
                 <BackupSummary backup={pendingBackup} />
+                {planningMergeConflicts.length > 0 && (
+                  <div className="rounded-md border border-amber-400/45 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-100">
+                    <div className="mb-1 flex items-center gap-1.5 font-bold">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      企画・取材・構成ノートの結合を停止しています
+                    </div>
+                    内容・章順・指示書版の競合が{planningMergeConflicts.length}件あります。
+                    承認済みの内容を静かに上書きしないため、このファイルは「結合して復元」できません。
+                    競合を整理したバックアップを選ぶか、内容をすべてバックアップ側へ置き換える場合だけ「すべて置き換える」を選んでください。
+                    <ul className="mt-2 space-y-1 rounded-md border border-amber-300/20 bg-black/10 p-2">
+                      {planningMergeConflicts.slice(0, 8).map(conflict => (
+                        <li key={`${conflict.projectId}-${conflict.section}-${conflict.id}`} className="break-all">
+                          ・{conflict.projectName} ／ {PLANNING_CONFLICT_SECTION_LABELS[conflict.section] || conflict.section} ／ {PLANNING_CONFLICT_REASON_LABELS[conflict.reason] || '内容の競合'} ／ ID: {conflict.id}
+                        </li>
+                      ))}
+                      {planningMergeConflicts.length > 8 && <li>ほか{planningMergeConflicts.length - 8}件</li>}
+                    </ul>
+                  </div>
+                )}
                 <div className="grid sm:grid-cols-2 gap-2">
                   <Button
                     type="button"
                     onClick={() => setMergeConfirmOpen(true)}
-                    disabled={busy}
+                    disabled={busy || planningMergeConflicts.length > 0}
                     className="bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/35 hover:bg-neon-cyan/25"
                   >
                     結合して復元（推奨）
@@ -416,12 +467,17 @@ export default function DataBackupDialog({
           <AlertDialogHeader>
             <AlertDialogTitle>バックアップを結合しますか？</AlertDialogTitle>
             <AlertDialogDescription>
-              現在のプロジェクトは残ります。同じプロジェクトID、画像ID、原稿データはバックアップ側の内容で更新されます。
+              {planningMergeConflicts.length > 0
+                ? `企画・取材・構成ノートに内容・章順・指示書版の競合が${planningMergeConflicts.length}件あるため、結合できません。`
+                : '現在のプロジェクトは残ります。同じプロジェクトID、画像ID、原稿データはバックアップ側の内容で更新されます。'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>キャンセル</AlertDialogCancel>
-            <AlertDialogAction onClick={() => runImport('merge')} disabled={busy}>
+            <AlertDialogAction
+              onClick={() => runImport('merge')}
+              disabled={busy || planningMergeConflicts.length > 0}
+            >
               {busy && <Loader2 className="animate-spin" />}結合して復元
             </AlertDialogAction>
           </AlertDialogFooter>

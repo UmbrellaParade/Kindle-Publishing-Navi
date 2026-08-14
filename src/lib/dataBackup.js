@@ -7,6 +7,12 @@ import {
 } from './critiqueHistory.js';
 import { readCritiqueContext } from './critiqueContext.js';
 import {
+  mergePlanningNotesValues,
+  previewPlanningNotesMerge,
+  readPlanningNotes,
+  serializePlanningNotes,
+} from './planningNotes.js';
+import {
   SCHEDULE_DATE_SOURCE_PROVISIONAL,
   SCHEDULE_DATE_SOURCE_RELEASE_TARGET,
   parseDateOnly,
@@ -47,6 +53,7 @@ export const PROJECT_FIELD_ALLOWLIST = Object.freeze([
   'manuscript',
   'critique_context',
   'critique_history',
+  'planning_notes',
   'cover_image_url',
   'aplus_image_url',
   'kdp_meta',
@@ -96,6 +103,7 @@ const CRITIQUE_RECOVERY_ENTRY_FIELDS = new Set([
 const CRITIQUE_RECOVERY_PROJECT_FIELDS = new Set([
   'critique_history',
   'critique_context',
+  'planning_notes',
 ]);
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const MAX_BACKUP_TEXT_LENGTH = 350 * 1024 * 1024;
@@ -206,11 +214,27 @@ function normalizeCritiqueContextField(
   }
 }
 
+function normalizePlanningNotesField(value, path, { enforceStorageBudget = false } = {}) {
+  if (typeof value !== 'string') fail(path, '文字列ではありません');
+  if (!value.trim()) return '';
+
+  const result = readPlanningNotes(value);
+  if (result.error) {
+    fail(path, result.error.message || '企画・取材・構成ノートを読み込めません');
+  }
+
+  try {
+    return serializePlanningNotes(result.data, { enforceStorageBudget });
+  } catch (cause) {
+    fail(path, cause?.message || '企画・取材・構成ノートを正規化できません');
+  }
+}
+
 export class BackupRecoveryRequiredError extends BackupValidationError {
   constructor(critiqueRecovery) {
     super(
-      '壊れた辛口論評データが見つかりました。原文を失わないよう createDataBackupBundle を使用してください',
-      'backup.data.projects.critique_data',
+      '読み込めないプロジェクト項目が見つかりました。原文を失わないよう createDataBackupBundle を使用してください',
+      'backup.data.projects.recovery_data',
     );
     this.name = 'BackupRecoveryRequiredError';
     this.critiqueRecovery = critiqueRecovery;
@@ -269,7 +293,11 @@ function restoreDowngradedScheduleMetadata(project) {
 function normalizeProject(
   project,
   path,
-  { ignoreUnknown = false, allowCorruptCritiqueContext = false } = {},
+  {
+    ignoreUnknown = false,
+    allowCorruptCritiqueContext = false,
+    enforcePlanningNotesBudget = false,
+  } = {},
 ) {
   assertPlainObject(project, path);
   if (!ignoreUnknown) assertExactKeys(project, PROJECT_FIELDS, path);
@@ -295,6 +323,10 @@ function normalizeProject(
     } else if (field === 'critique_context') {
       normalized[field] = normalizeCritiqueContextField(value, `${path}.${field}`, {
         allowCorruptCritiqueContext,
+      });
+    } else if (field === 'planning_notes') {
+      normalized[field] = normalizePlanningNotesField(value, `${path}.${field}`, {
+        enforceStorageBudget: enforcePlanningNotesBudget,
       });
     } else if (field === 'provisional_release_date') {
       if (value && !parseDateOnly(value)) fail(`${path}.${field}`, '日付は YYYY-MM-DD 形式の実在日で指定してください');
@@ -492,7 +524,7 @@ function validateDataBackupWithOptions(value, options = {}) {
 
 /** 外部から受け取るバックアップを厳格に検証します。 */
 export function validateDataBackup(value) {
-  return validateDataBackupWithOptions(value);
+  return validateDataBackupWithOptions(value, { enforcePlanningNotesBudget: true });
 }
 
 /** 復元前の内部計算用。壊れた値は事前に通常バックアップから分離済みです。 */
@@ -500,12 +532,12 @@ function validateCurrentDataBackup(value) {
   return validateDataBackupWithOptions(value, { allowCorruptCritiqueContext: true });
 }
 
-/** 壊れた辛口論評履歴／本の前提の原文を、通常バックアップとは別に安全に保存する形式です。 */
+/** 読み込めない辛口論評履歴／本の前提／企画ノートの原文を、通常バックアップとは別に安全に保存する形式です。 */
 export function validateCritiqueRecovery(value) {
   assertPlainObject(value, 'recovery');
   assertExactKeys(value, CRITIQUE_RECOVERY_FIELDS, 'recovery');
   if (value.kind !== CRITIQUE_RECOVERY_KIND) {
-    fail('recovery.kind', '辛口論評の復旧用ファイルではありません');
+    fail('recovery.kind', 'このナビの復旧用ファイルではありません');
   }
   if (value.schemaVersion !== CRITIQUE_RECOVERY_SCHEMA_VERSION) {
     fail(
@@ -592,7 +624,7 @@ function toIsoString(now) {
 
 /**
  * 現在の許可済みデータだけを収集します。AI設定やAPIキーの保存キーは読みません。
- * 壊れた辛口論評履歴／本の前提は通常バックアップから分離し、原文を復旧用ファイルへ残します。
+ * 読み込めない辛口論評履歴／本の前提／企画ノートは通常バックアップから分離し、原文を復旧用ファイルへ残します。
  */
 export async function createDataBackupBundle({
   appVersion = 'unknown',
@@ -783,7 +815,46 @@ function mergeProject(left, right) {
       merged.critique_context = left.critique_context;
     }
   }
+  if (Object.prototype.hasOwnProperty.call(right, 'planning_notes')) {
+    merged.planning_notes = mergePlanningNotesValues(
+      left.planning_notes,
+      right.planning_notes,
+    );
+  }
   return merged;
+}
+
+/**
+ * 結合復元を実行する前に、同じ本・同じノートIDの内容競合だけを列挙します。
+ * ノート本文そのものはUIへ返さず、件数と識別情報だけを返します。
+ */
+export function previewDataBackupPlanningNotesConflicts(currentBackup, incomingBackup) {
+  const current = validateCurrentDataBackup(currentBackup);
+  const incoming = validateDataBackup(incomingBackup);
+  const currentProjects = new Map(current.data.projects.map(project => [project.id, project]));
+  const conflicts = [];
+
+  for (const incomingProject of incoming.data.projects) {
+    const currentProject = currentProjects.get(incomingProject.id);
+    if (!currentProject || !Object.prototype.hasOwnProperty.call(incomingProject, 'planning_notes')) {
+      continue;
+    }
+    if (!incomingProject.planning_notes || !String(incomingProject.planning_notes).trim()) continue;
+
+    const projectConflicts = previewPlanningNotesMerge(
+      currentProject.planning_notes,
+      incomingProject.planning_notes,
+    );
+    projectConflicts.forEach(conflict => conflicts.push({
+      projectId: incomingProject.id,
+      projectName: incomingProject.name || currentProject.name || incomingProject.id,
+      section: conflict.section,
+      id: conflict.id,
+      reason: conflict.reason || 'same_id_different_content',
+    }));
+  }
+
+  return conflicts;
 }
 
 function recoveryRawText(value) {
@@ -811,6 +882,11 @@ function normalizeProjectsForBackup(projects, path, options) {
         field: 'critique_context',
         read: readCritiqueContext,
         fallbackError: '本の前提を読み込めません',
+      },
+      {
+        field: 'planning_notes',
+        read: readPlanningNotes,
+        fallbackError: '企画・取材・構成ノートを読み込めません',
       },
     ];
 
@@ -977,7 +1053,7 @@ function applyStoragePlan(storage, plan, affectedProjectIds, affectedFormatGuide
  * バックアップを復元します。成功時は復元直前の完全なスナップショットを返します。
  * localStorage または IndexedDB の書き込みに失敗した場合は、両方を復元前へ戻します。
  * beforeApply は書き込みロック内・データ変更前に実行し、例外時は変更せず停止します。
- * 読み込めない論評履歴／本の前提を修復する場合は { critiqueRecoverySaved: true } の返却も必須です。
+ * 読み込めない論評履歴／本の前提／企画ノートを修復する場合は { critiqueRecoverySaved: true } の返却も必須です。
  * @param {*} input
  * @param {{
  *   mode?: string,
@@ -1009,7 +1085,7 @@ async function importDataBackupUnlocked(input, {
 
   if (critiqueRepairProjectIds.length > 0 && typeof beforeApply !== 'function') {
     throw new BackupImportError(
-      '読み込めない辛口論評履歴／本の前提を置き換える前に、復旧用JSONを保存する処理が必要です。データは変更していません',
+      '読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートを置き換える前に、復旧用JSONを保存する処理が必要です。データは変更していません',
       {
         beforeSnapshot,
         beforeCritiqueRecovery,
@@ -1033,7 +1109,7 @@ async function importDataBackupUnlocked(input, {
       });
       if (critiqueRepairProjectIds.length > 0
         && preflightResult?.critiqueRecoverySaved !== true) {
-        throw new Error('辛口論評履歴／本の前提の復旧用JSONを保存できたことを確認できませんでした');
+        throw new Error('読み込めないプロジェクト項目の復旧用JSONを保存できたことを確認できませんでした');
       }
     } catch (cause) {
       throw new BackupImportError(
@@ -1167,7 +1243,7 @@ export function downloadDataBackup(backup, { filename = '' } = { filename: '' })
 
 export function downloadCritiqueRecovery(recovery, { filename = '' } = { filename: '' }) {
   if (typeof document === 'undefined' || typeof URL === 'undefined') {
-    throw new Error('この環境では辛口論評の復旧用ファイルをダウンロードできません');
+    throw new Error('この環境では復旧用ファイルをダウンロードできません');
   }
   const json = serializeCritiqueRecovery(recovery);
   const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
