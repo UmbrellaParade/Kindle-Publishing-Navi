@@ -1,6 +1,6 @@
 export const PLANNING_NOTES_KIND = 'kindle-navi-planning-notes';
-export const PLANNING_NOTES_VERSION = 3;
-export const PLANNING_NOTES_LEGACY_VERSIONS = Object.freeze([1, 2]);
+export const PLANNING_NOTES_VERSION = 4;
+export const PLANNING_NOTES_LEGACY_VERSIONS = Object.freeze([1, 2, 3]);
 export const PLANNING_NOTES_WARNING_BYTES = 700 * 1024;
 export const PLANNING_NOTES_SAVE_LIMIT_BYTES = 2 * 1024 * 1024;
 
@@ -24,6 +24,11 @@ export const PLANNING_CHAPTER_NODE_TYPES = Object.freeze({
   section: '節',
 });
 
+export const PLANNING_OUTLINE_SNAPSHOT_KINDS = Object.freeze({
+  draft: '仮目次メモ',
+  confirmed: '確定目次',
+});
+
 export const PLANNING_NOTE_SECTIONS = Object.freeze([
   'competitors',
   'chapters',
@@ -35,11 +40,13 @@ export const PLANNING_NOTE_SECTIONS = Object.freeze([
 const MAX_SHORT_TEXT = 4_000;
 const MAX_LONG_TEXT = 500_000;
 const MAX_RECORDS_PER_SECTION = 1_000;
+const MAX_OUTLINE_SNAPSHOTS = 100;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const STATUS_VALUES = new Set(Object.keys(PLANNING_NOTE_STATUSES));
 const PRIORITY_VALUES = new Set(Object.keys(PLANNING_SOURCE_PRIORITIES));
 const CHAPTER_NODE_TYPE_VALUES = new Set(Object.keys(PLANNING_CHAPTER_NODE_TYPES));
+const OUTLINE_SNAPSHOT_KIND_VALUES = new Set(Object.keys(PLANNING_OUTLINE_SNAPSHOT_KINDS));
 const CHAPTER_ALLOWED_PARENT_TYPES = Object.freeze({
   part: new Set([]),
   chapter: new Set(['part']),
@@ -147,6 +154,9 @@ const ROOT_FIELDS = new Set([
   'version',
   'updatedAt',
   'chapterOrderRevision',
+  'outlineRevision',
+  'confirmedOutlineId',
+  'outlineSnapshots',
   'marketSummary',
   'concept',
   'conceptHistory',
@@ -154,7 +164,7 @@ const ROOT_FIELDS = new Set([
 ]);
 
 const SENSITIVE_PATTERNS = [
-  { label: 'APIキーらしき文字列', regex: /\b(?:sk|gh[pousr])-[A-Za-z0-9_-]{16,}\b|\bgh[pousr]_[A-Za-z0-9]{16,}\b|\bAIza[A-Za-z0-9_-]{30,}\b|\bAKIA[A-Z0-9]{16}\b/i },
+  { label: 'APIキーらしき文字列', regex: /\b(?:sk|gh[pousr])-[A-Za-z0-9_-]{16,}\b|\bgh[pousr]_[A-Za-z0-9]{16,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\bAIza[A-Za-z0-9_-]{30,}\b|\bAKIA[A-Z0-9]{16}\b/i },
   { label: '認証トークンらしき文字列', regex: /\bBearer\s+[A-Za-z0-9._~+\/-]{12,}\b|(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|APIキー|アクセストークン|認証トークン)\s*[:=]\s*\S+/i },
   { label: 'セッションIDらしき文字列', regex: /(?:session[_ -]?id|conversation[_ -]?id|セッションID|会話ID)(?:\s*[:=：]\s*|\s+)["'`]?[-A-Za-z0-9._~]{6,}/i },
   { label: '非公開会話URL', regex: /https:\/\/(?:chatgpt\.com|chat\.openai\.com)\/c\/|https:\/\/claude\.ai\/chat\/|https:\/\/gemini\.google\.com\/app\//i },
@@ -344,7 +354,9 @@ function normalizeMarketSummary(value, path) {
 
 function normalizeCommon(record, path) {
   const revision = record.revision === undefined ? 1 : record.revision;
-  if (!Number.isInteger(revision) || revision < 0) fail(`${path}.revision`, '0以上の整数ではありません');
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    fail(`${path}.revision`, '0以上の安全な整数ではありません');
+  }
   return {
     id: idValue(record.id, `${path}.id`),
     revision,
@@ -391,7 +403,7 @@ function normalizeRecord(section, value, path) {
     const fieldPath = `${path}.${field}`;
     if (field === 'order') {
       const order = value.order === undefined ? 0 : value.order;
-      if (!Number.isInteger(order) || order < 0) fail(fieldPath, '0以上の整数ではありません');
+      if (!Number.isSafeInteger(order) || order < 0) fail(fieldPath, '0以上の安全な整数ではありません');
       result.order = order;
     } else if (field === 'nodeType') {
       result.nodeType = enumValue(value.nodeType, CHAPTER_NODE_TYPE_VALUES, 'chapter', fieldPath);
@@ -399,7 +411,7 @@ function normalizeRecord(section, value, path) {
       result.parentId = idValue(value.parentId, fieldPath, { allowEmpty: true });
     } else if (field === 'versionNumber') {
       const number = value.versionNumber === undefined ? 1 : value.versionNumber;
-      if (!Number.isInteger(number) || number < 1) fail(fieldPath, '1以上の整数ではありません');
+      if (!Number.isSafeInteger(number) || number < 1) fail(fieldPath, '1以上の安全な整数ではありません');
       result.versionNumber = number;
     } else if (field === 'url') {
       result.url = httpUrlValue(value.url, fieldPath);
@@ -456,12 +468,106 @@ function normalizeRecord(section, value, path) {
   return result;
 }
 
+function validatePlanningChapterRecords(chapters, path) {
+  const chaptersById = new Map(chapters.map(chapter => [chapter.id, chapter]));
+  const chapterOrdersByParent = new Map();
+  for (const chapter of chapters) {
+    const siblingOrders = chapterOrdersByParent.get(chapter.parentId) || new Set();
+    if (siblingOrders.has(chapter.order)) {
+      fail(`${path}.${chapter.id}.order`, '同じ親に属する構成項目の順序が重複しています');
+    }
+    siblingOrders.add(chapter.order);
+    chapterOrdersByParent.set(chapter.parentId, siblingOrders);
+    if (chapter.parentId && !chaptersById.has(chapter.parentId)) {
+      fail(`${path}.${chapter.id}.parentId`, '存在しない親の構成項目IDです');
+    }
+  }
+  for (const chapter of chapters) {
+    const visited = new Set([chapter.id]);
+    let parentId = chapter.parentId;
+    while (parentId) {
+      if (visited.has(parentId)) fail(`${path}.${chapter.id}.parentId`, '親子関係が循環しています');
+      visited.add(parentId);
+      parentId = chaptersById.get(parentId)?.parentId || '';
+    }
+  }
+  for (const chapter of chapters) {
+    if (!chapter.parentId) continue;
+    const parent = chaptersById.get(chapter.parentId);
+    if (!CHAPTER_ALLOWED_PARENT_TYPES[chapter.nodeType].has(parent.nodeType)) {
+      fail(
+        `${path}.${chapter.id}.parentId`,
+        `${PLANNING_CHAPTER_NODE_TYPES[chapter.nodeType]}は${PLANNING_CHAPTER_NODE_TYPES[parent.nodeType]}の中には置けません`,
+      );
+    }
+  }
+}
+
+function normalizeOutlineSnapshot(value, path) {
+  if (!isPlainObject(value)) fail(path, 'オブジェクトではありません');
+  assertExactKeys(value, [
+    'id',
+    'versionNumber',
+    'kind',
+    'label',
+    'note',
+    'createdAt',
+    'sourceOutlineRevision',
+    'sourceChapterOrderRevision',
+    'chapters',
+  ], path);
+  const chapters = value.chapters ?? [];
+  if (!Array.isArray(chapters)) fail(`${path}.chapters`, '配列ではありません');
+  if (chapters.length > MAX_RECORDS_PER_SECTION) fail(`${path}.chapters`, '保存件数が多すぎます');
+  const chapterIds = new Set();
+  const normalizedChapters = chapters.map((record, index) => {
+    const normalized = normalizeRecord('chapters', record, `${path}.chapters[${index}]`);
+    if (chapterIds.has(normalized.id)) fail(`${path}.chapters[${index}].id`, 'IDが重複しています');
+    chapterIds.add(normalized.id);
+    return normalized;
+  });
+  validatePlanningChapterRecords(normalizedChapters, `${path}.chapters`);
+  for (const chapter of normalizedChapters) {
+    for (const linkedChapterId of chapter.chapterIds) {
+      if (!chapterIds.has(linkedChapterId)) {
+        fail(`${path}.chapters.${chapter.id}.chapterIds`, '保存版の中に存在しない構成項目IDが含まれます');
+      }
+    }
+  }
+  const versionNumber = value.versionNumber ?? 0;
+  if (!Number.isSafeInteger(versionNumber) || versionNumber < 1) {
+    fail(`${path}.versionNumber`, '1以上の安全な整数ではありません');
+  }
+  const sourceChapterOrderRevision = value.sourceChapterOrderRevision ?? 0;
+  if (!Number.isSafeInteger(sourceChapterOrderRevision) || sourceChapterOrderRevision < 0) {
+    fail(`${path}.sourceChapterOrderRevision`, '0以上の安全な整数ではありません');
+  }
+  const sourceOutlineRevision = value.sourceOutlineRevision ?? sourceChapterOrderRevision;
+  if (!Number.isSafeInteger(sourceOutlineRevision) || sourceOutlineRevision < 0) {
+    fail(`${path}.sourceOutlineRevision`, '0以上の安全な整数ではありません');
+  }
+  return {
+    id: idValue(value.id, `${path}.id`),
+    versionNumber,
+    kind: enumValue(value.kind, OUTLINE_SNAPSHOT_KIND_VALUES, 'draft', `${path}.kind`),
+    label: stringValue(value.label, `${path}.label`, { max: MAX_SHORT_TEXT, trim: true }),
+    note: stringValue(value.note, `${path}.note`, { max: MAX_LONG_TEXT }),
+    createdAt: isoValue(value.createdAt, `${path}.createdAt`, { allowEmpty: false }),
+    sourceOutlineRevision,
+    sourceChapterOrderRevision,
+    chapters: normalizedChapters,
+  };
+}
+
 export function createEmptyPlanningNotes() {
   return {
     kind: PLANNING_NOTES_KIND,
     version: PLANNING_NOTES_VERSION,
     updatedAt: '',
     chapterOrderRevision: 0,
+    outlineRevision: 0,
+    confirmedOutlineId: '',
+    outlineSnapshots: [],
     marketSummary: createEmptyMarketSummary(),
     concept: normalizeConcept({ id: 'concept', revision: 0 }, 'planningNotes.concept'),
     conceptHistory: [],
@@ -492,11 +598,39 @@ export function normalizePlanningNotes(value, path = 'planningNotes') {
     version: PLANNING_NOTES_VERSION,
     updatedAt: isoValue(value.updatedAt, `${path}.updatedAt`),
     chapterOrderRevision: value.chapterOrderRevision ?? 0,
+    outlineRevision: value.outlineRevision ?? 0,
+    confirmedOutlineId: idValue(value.confirmedOutlineId, `${path}.confirmedOutlineId`, { allowEmpty: true }),
     marketSummary: normalizeMarketSummary(value.marketSummary, `${path}.marketSummary`),
     concept: normalizeConcept(value.concept || { id: 'concept', revision: 0 }, `${path}.concept`),
   };
-  if (!Number.isInteger(result.chapterOrderRevision) || result.chapterOrderRevision < 0) {
-    fail(`${path}.chapterOrderRevision`, '0以上の整数ではありません');
+  if (!Number.isSafeInteger(result.chapterOrderRevision) || result.chapterOrderRevision < 0) {
+    fail(`${path}.chapterOrderRevision`, '0以上の安全な整数ではありません');
+  }
+  if (!Number.isSafeInteger(result.outlineRevision) || result.outlineRevision < 0) {
+    fail(`${path}.outlineRevision`, '0以上の安全な整数ではありません');
+  }
+
+  const outlineSnapshots = value.outlineSnapshots ?? [];
+  if (!Array.isArray(outlineSnapshots)) fail(`${path}.outlineSnapshots`, '配列ではありません');
+  if (outlineSnapshots.length > MAX_OUTLINE_SNAPSHOTS) {
+    fail(`${path}.outlineSnapshots`, `目次履歴は${MAX_OUTLINE_SNAPSHOTS}件までです`);
+  }
+  const outlineSnapshotIds = new Set();
+  const outlineVersionNumbers = new Set();
+  result.outlineSnapshots = outlineSnapshots.map((snapshot, index) => {
+    const normalized = normalizeOutlineSnapshot(snapshot, `${path}.outlineSnapshots[${index}]`);
+    if (outlineSnapshotIds.has(normalized.id)) fail(`${path}.outlineSnapshots[${index}].id`, 'IDが重複しています');
+    if (outlineVersionNumbers.has(normalized.versionNumber)) {
+      fail(`${path}.outlineSnapshots[${index}].versionNumber`, '目次履歴の版番号が重複しています');
+    }
+    outlineSnapshotIds.add(normalized.id);
+    outlineVersionNumbers.add(normalized.versionNumber);
+    return normalized;
+  });
+  if (result.confirmedOutlineId) {
+    const confirmed = result.outlineSnapshots.find(snapshot => snapshot.id === result.confirmedOutlineId);
+    if (!confirmed) fail(`${path}.confirmedOutlineId`, '確定目次の履歴IDが見つかりません');
+    if (confirmed.kind !== 'confirmed') fail(`${path}.confirmedOutlineId`, '確定目次ではない履歴が指定されています');
   }
 
   const conceptHistory = value.conceptHistory ?? [];
@@ -544,41 +678,8 @@ export function normalizePlanningNotes(value, path = 'planningNotes') {
     }
   }
 
-  const chaptersById = new Map(result.chapters.map(chapter => [chapter.id, chapter]));
-  const chapterIds = new Set(chaptersById.keys());
-  const chapterOrdersByParent = new Map();
-  for (const chapter of result.chapters) {
-    const siblingOrders = chapterOrdersByParent.get(chapter.parentId) || new Set();
-    if (siblingOrders.has(chapter.order)) {
-      fail(`${path}.chapters.${chapter.id}.order`, '同じ親に属する構成項目の順序が重複しています');
-    }
-    siblingOrders.add(chapter.order);
-    chapterOrdersByParent.set(chapter.parentId, siblingOrders);
-    if (chapter.parentId && !chaptersById.has(chapter.parentId)) {
-      fail(`${path}.chapters.${chapter.id}.parentId`, '存在しない親の構成項目IDです');
-    }
-  }
-  for (const chapter of result.chapters) {
-    const visited = new Set([chapter.id]);
-    let parentId = chapter.parentId;
-    while (parentId) {
-      if (visited.has(parentId)) {
-        fail(`${path}.chapters.${chapter.id}.parentId`, '親子関係が循環しています');
-      }
-      visited.add(parentId);
-      parentId = chaptersById.get(parentId)?.parentId || '';
-    }
-  }
-  for (const chapter of result.chapters) {
-    if (!chapter.parentId) continue;
-    const parent = chaptersById.get(chapter.parentId);
-    if (!CHAPTER_ALLOWED_PARENT_TYPES[chapter.nodeType].has(parent.nodeType)) {
-      fail(
-        `${path}.chapters.${chapter.id}.parentId`,
-        `${PLANNING_CHAPTER_NODE_TYPES[chapter.nodeType]}は${PLANNING_CHAPTER_NODE_TYPES[parent.nodeType]}の中には置けません`,
-      );
-    }
-  }
+  validatePlanningChapterRecords(result.chapters, `${path}.chapters`);
+  const chapterIds = new Set(result.chapters.map(chapter => chapter.id));
   for (const section of PLANNING_NOTE_SECTIONS) {
     for (const record of result[section]) {
       for (const chapterId of record.chapterIds) {
@@ -765,10 +866,9 @@ export function getNextPlanningChapterOrder(data, parentId = '') {
   ) + 1;
 }
 
-export function flattenPlanningChapterTree(data, { includeRejected = true } = {}) {
-  const normalized = normalizePlanningNotes(data);
+function flattenChapterRecords(chapters, { includeRejected = true } = {}) {
   const childrenByParent = new Map();
-  for (const chapter of normalized.chapters) {
+  for (const chapter of chapters) {
     if (!includeRejected && chapter.status === 'rejected') continue;
     const children = childrenByParent.get(chapter.parentId) || [];
     children.push(chapter);
@@ -787,6 +887,92 @@ export function flattenPlanningChapterTree(data, { includeRejected = true } = {}
   };
   visit('', 0, []);
   return flattened;
+}
+
+export function flattenPlanningChapterTree(data, options = {}) {
+  const normalized = normalizePlanningNotes(data);
+  return flattenChapterRecords(normalized.chapters, options);
+}
+
+export function flattenPlanningOutlineSnapshot(snapshot, options = {}) {
+  const normalized = normalizeOutlineSnapshot(snapshot, 'outlineSnapshot');
+  return flattenChapterRecords(normalized.chapters, options);
+}
+
+export function sortPlanningOutlineSnapshotsNewest(data) {
+  const normalized = normalizePlanningNotes(data);
+  return [...normalized.outlineSnapshots].sort((left, right) => (
+    String(right.createdAt).localeCompare(String(left.createdAt))
+    || right.versionNumber - left.versionNumber
+    || left.id.localeCompare(right.id)
+  ));
+}
+
+export function getConfirmedPlanningOutline(data) {
+  const normalized = normalizePlanningNotes(data);
+  return normalized.outlineSnapshots.find(snapshot => snapshot.id === normalized.confirmedOutlineId) || null;
+}
+
+export function planningOutlineMatchesSnapshot(data, snapshot) {
+  const normalized = normalizePlanningNotes(data);
+  if (!snapshot) return false;
+  const normalizedSnapshot = normalizeOutlineSnapshot(snapshot, 'outlineSnapshot');
+  return canonical(normalized.chapters) === canonical(normalizedSnapshot.chapters);
+}
+
+export function createPlanningOutlineSnapshot(data, {
+  kind = 'draft',
+  label = '',
+  note = '',
+} = {}, {
+  expectedOutlineRevision,
+  expectedChapterOrderRevision,
+  now = () => new Date(),
+  idFactory = createPlanningNoteId,
+} = {}) {
+  const normalized = normalizePlanningNotes(data);
+  if (expectedOutlineRevision !== normalized.outlineRevision) {
+    throw new Error('目次が別の画面で更新されました。最新の仮目次を確認してから保存してください');
+  }
+  if (expectedChapterOrderRevision !== normalized.chapterOrderRevision) {
+    throw new Error('目次の順序が別の画面で更新されました。最新の仮目次を確認してから保存してください');
+  }
+  if (normalized.chapters.filter(chapter => chapter.status !== 'rejected').length === 0) {
+    throw new Error('採用する構成項目がないため、目次として保存できません');
+  }
+  if (normalized.outlineSnapshots.length >= MAX_OUTLINE_SNAPSHOTS) {
+    throw new Error(`目次履歴は${MAX_OUTLINE_SNAPSHOTS}件までです。完全バックアップを保存してから履歴を整理してください`);
+  }
+  const safeKind = enumValue(kind, OUTLINE_SNAPSHOT_KIND_VALUES, 'draft', 'outlineSnapshot.kind');
+  const comparisonSnapshot = safeKind === 'confirmed'
+    ? getConfirmedPlanningOutline(normalized)
+    : sortPlanningOutlineSnapshotsNewest(normalized).find(snapshot => snapshot.kind === safeKind);
+  if (comparisonSnapshot && canonical(comparisonSnapshot.chapters) === canonical(normalized.chapters)) {
+    throw new Error(safeKind === 'confirmed'
+      ? '仮目次は現在の確定目次から変わっていません'
+      : '同じ内容の仮目次がすでに履歴へ保存されています');
+  }
+  const timestamp = isoNow(now);
+  const versionNumber = Math.max(0, ...normalized.outlineSnapshots.map(snapshot => snapshot.versionNumber)) + 1;
+  const sameKindCount = normalized.outlineSnapshots.filter(snapshot => snapshot.kind === safeKind).length + 1;
+  const snapshot = normalizeOutlineSnapshot({
+    id: idFactory('outline'),
+    versionNumber,
+    kind: safeKind,
+    label: String(label || '').trim() || (safeKind === 'confirmed' ? `確定目次 v${sameKindCount}` : `仮目次メモ ${sameKindCount}`),
+    note: String(note || ''),
+    createdAt: timestamp,
+    sourceOutlineRevision: normalized.outlineRevision,
+    sourceChapterOrderRevision: normalized.chapterOrderRevision,
+    chapters: normalized.chapters,
+  }, 'planningNotes.outlineSnapshots');
+  return normalizePlanningNotes({
+    ...normalized,
+    outlineRevision: normalized.outlineRevision + 1,
+    confirmedOutlineId: safeKind === 'confirmed' ? snapshot.id : normalized.confirmedOutlineId,
+    outlineSnapshots: [...normalized.outlineSnapshots, snapshot],
+    updatedAt: timestamp,
+  });
 }
 
 export function getPlanningChapterParentOptions(data, chapterId = '', nodeType = 'chapter') {
@@ -1059,6 +1245,7 @@ export function upsertPlanningRecord(data, section, draft, {
     ...normalized,
     [section]: nextRecords,
     chapterOrderRevision: normalized.chapterOrderRevision + (chapterOrderChanged ? 1 : 0),
+    outlineRevision: normalized.outlineRevision + (section === 'chapters' ? 1 : 0),
     updatedAt: timestamp,
   });
 }
@@ -1118,6 +1305,7 @@ export function deletePlanningRecord(data, section, recordId, { expectedUpdatedA
     ...normalized,
     [section]: next,
     chapterOrderRevision: normalized.chapterOrderRevision + (section === 'chapters' ? 1 : 0),
+    outlineRevision: normalized.outlineRevision + (section === 'chapters' ? 1 : 0),
     updatedAt: timestamp,
   });
 }
@@ -1161,6 +1349,7 @@ export function movePlanningChapter(data, chapterId, direction, { expectedRevisi
     ...normalized,
     chapters,
     chapterOrderRevision: normalized.chapterOrderRevision + 1,
+    outlineRevision: normalized.outlineRevision + 1,
     updatedAt: timestamp,
   });
 }
@@ -1209,7 +1398,7 @@ export function movePlanningChapterToParent(data, chapterId, parentId = '', {
   const nextOrder = targetOrder === null
     ? Math.max(-1, ...targetSiblings.map(chapter => chapter.order)) + 1
     : targetOrder;
-  if (!Number.isInteger(nextOrder) || nextOrder < 0) {
+  if (!Number.isSafeInteger(nextOrder) || nextOrder < 0) {
     throw new TypeError('移動先の順序は0以上の整数で指定してください');
   }
   const occupied = targetSiblings.find(chapter => chapter.order === nextOrder);
@@ -1245,6 +1434,7 @@ export function movePlanningChapterToParent(data, chapterId, parentId = '', {
     ...normalized,
     chapters,
     chapterOrderRevision: normalized.chapterOrderRevision + 1,
+    outlineRevision: normalized.outlineRevision + 1,
     updatedAt: timestamp,
   });
 }
@@ -1608,7 +1798,7 @@ function canonical(value) {
 
 export class PlanningNotesMergeConflictError extends Error {
   constructor(conflicts) {
-    super(`企画・取材・構成ノートに内容・章順・指示書版・正本指定・市場サマリーの競合が${conflicts.length}件あります。内容を確認してから復元してください`);
+    super(`企画・取材・構成ノートに内容・章順・目次版・指示書版・正本指定・市場サマリーの競合が${conflicts.length}件あります。内容を確認してから復元してください`);
     this.name = 'PlanningNotesMergeConflictError';
     this.conflicts = conflicts;
   }
@@ -1654,6 +1844,56 @@ export function previewPlanningNotesMerge(currentRaw, incomingRaw) {
         conflicts.push({ section, id: record.id, current: existing, incoming: record });
       }
     }
+  }
+  const currentOutlineById = new Map(current.outlineSnapshots.map(snapshot => [snapshot.id, snapshot]));
+  const currentOutlineByVersion = new Map(current.outlineSnapshots.map(snapshot => [snapshot.versionNumber, snapshot]));
+  for (const snapshot of incoming.outlineSnapshots) {
+    const sameId = currentOutlineById.get(snapshot.id);
+    if (sameId && canonical(sameId) !== canonical(snapshot)) {
+      conflicts.push({
+        section: 'outlineSnapshots',
+        id: snapshot.id,
+        current: sameId,
+        incoming: snapshot,
+        reason: 'outline_snapshot_requires_review',
+      });
+      continue;
+    }
+    const sameVersion = currentOutlineByVersion.get(snapshot.versionNumber);
+    if (sameVersion && sameVersion.id !== snapshot.id) {
+      conflicts.push({
+        section: 'outlineSnapshots',
+        id: snapshot.id,
+        current: sameVersion,
+        incoming: snapshot,
+        reason: 'outline_version_number_conflict',
+      });
+    }
+  }
+  const incomingNewOutlineCount = incoming.outlineSnapshots
+    .filter(snapshot => !currentOutlineById.has(snapshot.id))
+    .length;
+  if (current.outlineSnapshots.length + incomingNewOutlineCount > MAX_OUTLINE_SNAPSHOTS) {
+    conflicts.push({
+      section: 'outlineSnapshots',
+      id: 'outline-snapshot-limit',
+      current: { count: current.outlineSnapshots.length },
+      incoming: { newCount: incomingNewOutlineCount },
+      reason: 'outline_snapshot_limit_exceeded',
+    });
+  }
+  if (
+    current.confirmedOutlineId
+    && incoming.confirmedOutlineId
+    && current.confirmedOutlineId !== incoming.confirmedOutlineId
+  ) {
+    conflicts.push({
+      section: 'outlineSnapshots',
+      id: incoming.confirmedOutlineId,
+      current: currentOutlineById.get(current.confirmedOutlineId),
+      incoming: incoming.outlineSnapshots.find(snapshot => snapshot.id === incoming.confirmedOutlineId),
+      reason: 'confirmed_outline_conflict',
+    });
   }
   if (current.chapters.length > 0) {
     const currentChapterIds = new Set(current.chapters.map(record => record.id));
@@ -1767,13 +2007,36 @@ export function mergePlanningNotesValues(currentRaw, incomingRaw) {
   if (!currentRaw || !String(currentRaw).trim()) {
     const incoming = readPlanningNotes(incomingRaw);
     if (incoming.error) throw incoming.error;
-    return serializePlanningNotes(incoming.data);
+    return serializePlanningNotes(incoming.data, { enforceStorageBudget: true });
   }
   const conflicts = previewPlanningNotesMerge(currentRaw, incomingRaw);
   if (conflicts.length > 0) throw new PlanningNotesMergeConflictError(conflicts);
   const current = readPlanningNotes(currentRaw).data;
   const incoming = readPlanningNotes(incomingRaw).data;
   const next = { ...current };
+  const outlineById = new Map(current.outlineSnapshots.map(snapshot => [snapshot.id, snapshot]));
+  let hasNewOutlineSnapshot = false;
+  for (const snapshot of incoming.outlineSnapshots) {
+    if (!outlineById.has(snapshot.id)) {
+      outlineById.set(snapshot.id, snapshot);
+      hasNewOutlineSnapshot = true;
+    }
+  }
+  next.outlineSnapshots = [...outlineById.values()].sort((left, right) => (
+    left.versionNumber - right.versionNumber || left.id.localeCompare(right.id)
+  ));
+  const adoptsConfirmedOutline = !current.confirmedOutlineId && Boolean(incoming.confirmedOutlineId);
+  next.confirmedOutlineId = current.confirmedOutlineId || incoming.confirmedOutlineId;
+  const currentChapterIds = new Set(current.chapters.map(chapter => chapter.id));
+  const hasNewIncomingChapter = incoming.chapters.some(chapter => !currentChapterIds.has(chapter.id));
+  next.outlineRevision = Math.max(current.outlineRevision, incoming.outlineRevision)
+    + (
+      hasNewOutlineSnapshot
+      || adoptsConfirmedOutline
+      || hasNewIncomingChapter
+        ? 1
+        : 0
+    );
   if (isMarketSummaryEmpty(current.marketSummary) && !isMarketSummaryEmpty(incoming.marketSummary)) {
     next.marketSummary = incoming.marketSummary;
   }
@@ -1790,14 +2053,12 @@ export function mergePlanningNotesValues(currentRaw, incomingRaw) {
     for (const record of incoming[section]) if (!byId.has(record.id)) byId.set(record.id, record);
     next[section] = [...byId.values()];
   }
-  const currentChapterIds = new Set(current.chapters.map(chapter => chapter.id));
-  const hasNewIncomingChapter = incoming.chapters.some(chapter => !currentChapterIds.has(chapter.id));
   next.chapterOrderRevision = Math.max(
     current.chapterOrderRevision,
     incoming.chapterOrderRevision,
-  ) + (hasNewIncomingChapter && current.chapters.length > 0 ? 1 : 0);
+  ) + (hasNewIncomingChapter ? 1 : 0);
   next.updatedAt = [current.updatedAt, incoming.updatedAt].sort().at(-1) || '';
-  return serializePlanningNotes(next);
+  return serializePlanningNotes(next, { enforceStorageBudget: true });
 }
 
 function walkStrings(value, path, callback) {
@@ -2278,11 +2539,56 @@ export function buildPlanningNotesSharePackage(data, {
   return sharePackage;
 }
 
-function markdownJsonBlock(lines, title, value) {
+function markdownJsonBlock(lines, title, value, { headingLevel = 3 } = {}) {
   const json = JSON.stringify(value, null, 2);
   const longestBacktickRun = Math.max(0, ...[...json.matchAll(/`+/g)].map(match => match[0].length));
   const fence = '`'.repeat(Math.max(3, longestBacktickRun + 1));
-  lines.push(`### ${title || '無題'}`, '', `${fence}json`, json, fence, '');
+  const safeHeadingLevel = Math.max(1, Math.min(6, headingLevel));
+  lines.push(`${'#'.repeat(safeHeadingLevel)} ${title || '無題'}`, '', `${fence}json`, json, fence, '');
+}
+
+function appendMarkdownOutline(lines, {
+  title,
+  chapters,
+  headingLevel = 3,
+  description = '',
+  snapshot = null,
+}) {
+  const safeHeadingLevel = Math.max(1, Math.min(5, headingLevel));
+  lines.push(`${'#'.repeat(safeHeadingLevel)} ${title}`, '');
+  if (description) lines.push(description, '');
+  if (snapshot) {
+    lines.push(
+      `- 種類：${PLANNING_OUTLINE_SNAPSHOT_KINDS[snapshot.kind]}`,
+      `- 版番号：v${snapshot.versionNumber}`,
+      `- 保存日時（日本時間）：${formatPlanningDateTimeJst(snapshot.createdAt)}`,
+    );
+    if (snapshot.note) lines.push(`- 変更メモ：${snapshot.note}`);
+    lines.push('');
+  }
+
+  const visibleTree = flattenChapterRecords(chapters, { includeRejected: false });
+  if (visibleTree.length === 0) {
+    lines.push('構成項目はまだありません。', '');
+  } else {
+    for (const { record, depth } of visibleTree) {
+      lines.push(`${'  '.repeat(depth)}- ${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}`);
+    }
+    lines.push('');
+  }
+
+  const completeTree = flattenChapterRecords(chapters, { includeRejected: true });
+  if (completeTree.length === 0) return;
+  lines.push(`${'#'.repeat(safeHeadingLevel + 1)} 構成項目の詳細`, '');
+  for (const { record } of completeTree) {
+    const rejectedLabel = record.status === 'rejected' ? '（採用しない）' : '';
+    markdownJsonBlock(
+      lines,
+      `${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}${rejectedLabel}`,
+      record,
+      { headingLevel: safeHeadingLevel + 2 },
+    );
+  }
 }
 
 function sortInstructionReferences(records) {
@@ -2302,7 +2608,11 @@ function sortDecisionReferences(records) {
 }
 
 export function planningNotesShareToMarkdown(sharePackage) {
-  const data = normalizePlanningNotes(sharePackage.data);
+  const safeSharePackage = buildPlanningNotesSharePackage(sharePackage.data, {
+    projectName: sharePackage.projectName,
+    bookTitle: sharePackage.bookTitle,
+  });
+  const data = safeSharePackage.data;
   const lines = [
     `# ${sharePackage.bookTitle || sharePackage.projectName || '企画・取材・構成ノート'}`,
     '',
@@ -2340,21 +2650,38 @@ export function planningNotesShareToMarkdown(sharePackage) {
   if (currentDecision) markdownJsonBlock(lines, currentDecision.decision || '現行の判断', currentDecision);
   else lines.push('正本未設定', '');
 
-  const chapterTree = flattenPlanningChapterTree(data);
-  lines.push('', '## 目次・章構成', '', '### 構成の階層', '');
-  if (chapterTree.length === 0) {
-    lines.push('構成項目はまだありません。', '');
+  lines.push('', '## 目次・章構成', '');
+  appendMarkdownOutline(lines, {
+    title: '仮目次（編集中）',
+    chapters: data.chapters,
+    description: 'この目次は編集中です。現在の確定目次とは別に、あとから何度でも直せます。',
+  });
+
+  const confirmedOutline = getConfirmedPlanningOutline(data);
+  if (confirmedOutline) {
+    appendMarkdownOutline(lines, {
+      title: `現在の確定目次：${confirmedOutline.label}`,
+      chapters: confirmedOutline.chapters,
+      description: '本全体で現在使う目次として明示的に確定された、読み取り専用の保存版です。',
+      snapshot: confirmedOutline,
+    });
   } else {
-    for (const { record, depth } of chapterTree) {
-      lines.push(`${'  '.repeat(depth)}- ${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}`);
-    }
-    lines.push('', '### 構成項目の詳細', '');
-    for (const { record } of chapterTree) {
-      markdownJsonBlock(
-        lines,
-        `${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}`,
-        record,
-      );
+    lines.push('### 現在の確定目次', '', '確定目次はまだありません。仮目次を確定版として自動扱いしていません。', '');
+  }
+
+  lines.push('### 過去の目次（新しい順）', '');
+  const pastOutlines = sortPlanningOutlineSnapshotsNewest(data)
+    .filter(snapshot => snapshot.id !== data.confirmedOutlineId);
+  if (pastOutlines.length === 0) {
+    lines.push('過去の目次はまだありません。仮目次を履歴へ保存したときや、確定目次を更新したときに残ります。', '');
+  } else {
+    for (const snapshot of pastOutlines) {
+      appendMarkdownOutline(lines, {
+        title: `${snapshot.label}（${PLANNING_OUTLINE_SNAPSHOT_KINDS[snapshot.kind]}）`,
+        chapters: snapshot.chapters,
+        headingLevel: 4,
+        snapshot,
+      });
     }
   }
   const sections = [

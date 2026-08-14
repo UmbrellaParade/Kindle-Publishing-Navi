@@ -49,7 +49,7 @@ test('出版ナビの初心者マニュアルは全20章を安定IDで案内す�
   const sections = KINDLE_NAVI_MANUAL_GROUPS.flatMap(group => group.sections);
   const markdownHeadings = [...manual.matchAll(/^## (\d+)\. (.+)$/gm)];
 
-  assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月14日');
+  assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月15日');
   assert.equal(sections.length, 20);
   assert.deepEqual(sections.map(section => section.title), EXPECTED_TITLES);
   assert.deepEqual(
@@ -164,6 +164,14 @@ test('企画・取材・構成ノートを初心者が安全に使えるよう�
     '第一部 ＞ 第一話／第二話 ＞ 第一節',
     '構成項目ID',
     'この中に追加',
+    '仮目次から始め、確定目次と履歴を残す',
+    '仮目次（編集中）',
+    '確定目次（現在使う読み取り専用版）',
+    '過去の目次履歴',
+    '今の仮目次を履歴に保存',
+    'この仮目次を確定目次にする',
+    '各項目が自動で「本人承認済み」になるわけではありません',
+    '旧目次を勝手に確定しません',
     '案と承認版を分ける',
     '本人承認済み',
     '承認版を残して新しい案',

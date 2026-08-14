@@ -11,6 +11,14 @@ const backupDialogSource = readFileSync(
   'utf8',
 );
 
+function sourceBlock(startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(start, -1, `開始位置が見つかりません: ${startMarker}`);
+  assert.notEqual(end, -1, `終了位置が見つかりません: ${endMarker}`);
+  return source.slice(start, end);
+}
+
 test('初心者は空状態から企画・階層目次・取材のどれか1件を始められる', () => {
   assert.match(source, /まずは1つだけで大丈夫です/);
   assert.match(source, /企画メモを書く/);
@@ -193,6 +201,85 @@ test('部・章・話・節を階層表示し、親選択・子追加・パン�
   assert.match(source, /section === 'chapters'[\s\S]*?chapterPathLabel\(record, chapters/);
 });
 
+test('仮目次・確定目次・過去の目次をアクセシブルな3タブとして切り替える', () => {
+  for (const label of ['仮目次', '確定目次', '過去の目次']) assert.match(source, new RegExp(label));
+  assert.match(source, /role="tablist"[\s\S]*?aria-label="目次の表示を切り替える"/);
+  assert.match(source, /role="tab"/);
+  assert.match(source, /aria-selected=\{isActive\}/);
+  assert.match(source, /aria-controls=\{`planning-outline-panel-\$\{view\}`\}/);
+  assert.match(source, /tabIndex=\{isActive \? 0 : -1\}/);
+  for (const view of ['confirmed', 'history']) {
+    assert.match(source, new RegExp(`id="planning-outline-panel-${view}"`));
+    assert.match(source, new RegExp(`aria-labelledby="planning-outline-tab-${view}"`));
+  }
+  assert.match(source, /id=\{activeSection === 'chapters' \? 'planning-outline-panel-draft' : undefined\}/);
+  assert.match(source, /role=\{activeSection === 'chapters' \? 'tabpanel' : undefined\}/);
+  assert.match(source, /aria-labelledby=\{activeSection === 'chapters' \? 'planning-outline-tab-draft' : undefined\}/);
+  assert.equal((source.match(/role="tabpanel"/g) || []).length, 3);
+  assert.match(source, /Object\.keys\(OUTLINE_VIEW_META\)[\s\S]*?filter\(view => view !== outlineView\)[\s\S]*?hidden/);
+  assert.match(source, /if \(event\.key === 'ArrowRight'\)/);
+  assert.match(source, /else if \(event\.key === 'ArrowLeft'\)/);
+  assert.match(source, /else if \(event\.key === 'Home'\) nextIndex = 0/);
+  assert.match(source, /else if \(event\.key === 'End'\) nextIndex = views\.length - 1/);
+  assert.match(source, /event\.preventDefault\(\)/);
+  assert.match(source, /outlineTabRefs\.current\.get\(view\)/);
+  assert.match(source, /outlineTabRefs\.current\.get\(view\)\?\.focus\(\)/);
+  assert.match(source, /setStatusMessage\(`\$\{OUTLINE_VIEW_META\[view\]\.label\}を表示しました`\)/);
+});
+
+test('仮目次だけに編集操作を置き、確定目次と履歴は読み取り専用で表示する', () => {
+  assert.match(source, /outlineView === 'draft' && \([\s\S]*?openNewRecord\('chapters', \{ nodeType: 'part' \}\)[\s\S]*?openNewRecord\('chapters', \{ nodeType: 'chapter' \}\)[\s\S]*?openOutlineSnapshotDialog\('draft'\)[\s\S]*?openOutlineSnapshotDialog\('confirmed'\)/);
+  assert.match(source, /outlineView === 'confirmed'[\s\S]*?読み取り専用です。[\s\S]*?<OutlineSnapshotTree snapshot=\{confirmedOutline\} current \/>/);
+  assert.match(source, /outlineView === 'history'[\s\S]*?内容を見る（読み取り専用）[\s\S]*?<OutlineSnapshotTree/);
+
+  const snapshotTreeSource = sourceBlock('function OutlineSnapshotTree', 'function EditorDialog');
+  assert.doesNotMatch(snapshotTreeSource, /openNewRecord|openEditRecord|handleMoveChapter|handleDelete|<Button/);
+
+  assert.match(source, /selectActiveSection\('chapters'\);\s*selectOutlineView\('draft'\);\s*openNewRecord\('chapters', \{ nodeType: 'part' \}\)/);
+});
+
+test('仮目次の履歴保存と確定は確認ダイアログを経て既存版を残す', () => {
+  for (const label of [
+    '今の仮目次を履歴に保存',
+    'この仮目次を確定目次にする',
+    '現在採用中の内容：',
+    '履歴として残るもの：',
+    '消えるもの：',
+    '変わるもの：',
+    '前の確定目次は履歴へ残ります',
+    '版の名前',
+    '変更メモ（任意）',
+    '確定目次として保存',
+    '履歴に保存',
+  ]) assert.match(source, new RegExp(label));
+  assert.match(source, /createPlanningOutlineSnapshot\(current, \{[\s\S]*?kind,[\s\S]*?label: outlineDialog\.label,[\s\S]*?note: outlineDialog\.note/);
+  assert.match(source, /expectedOutlineRevision: outlineDialog\.expectedOutlineRevision/);
+  assert.match(source, /expectedChapterOrderRevision: outlineDialog\.expectedChapterOrderRevision/);
+  assert.match(source, /版の名前（空欄でもOK）/);
+  assert.match(source, /onClick=\{onSave\} disabled=\{busy\}/);
+  assert.match(source, /setOutlineDialog\(null\);\s*selectOutlineView\(kind === 'confirmed' \? 'confirmed' : 'history', \{ focus: true \}\)/);
+});
+
+test('目次全体の確定と各項目の本人承認を初心者向け文言で区別する', () => {
+  assert.match(source, /仮目次<\/span>は何度でも編集できます/);
+  assert.match(source, /確定目次<\/span>は本全体で現在使う読み取り専用の保存版です/);
+  assert.match(source, /各項目の「本人承認済み」とは別です/);
+  assert.match(source, /各項目の「本人承認済み」は内容確認です/);
+  assert.match(source, /ここで作る「確定目次」は、本全体で現在使う目次の保存版です/);
+});
+
+test('目次の3タブは狭い画面で横スクロールし、PCでは3列に収める', () => {
+  assert.match(source, /role="tablist"[\s\S]*?className="flex min-w-max gap-2 sm:min-w-0 sm:grid sm:grid-cols-3"/);
+  assert.match(source, /<div ref=\{outlineTablistScrollRef\} className="overflow-x-auto overscroll-x-contain">[\s\S]*?role="tablist"/);
+  assert.match(source, /min-h-12 min-w-\[7\.5rem\]/);
+  assert.match(source, /focus-visible:ring-2 focus-visible:ring-neon-cyan\/80/);
+  assert.match(source, /const container = outlineTablistScrollRef\.current/);
+  assert.match(source, /const button = outlineTabRefs\.current\.get\(outlineView\)/);
+  assert.match(source, /targetLeft = button\.offsetLeft - \(\(container\.clientWidth - button\.offsetWidth\) \/ 2\)/);
+  assert.match(source, /left: Math\.min\(maxLeft, Math\.max\(0, targetLeft\)\)/);
+  assert.match(source, /prefers-reduced-motion: reduce/);
+});
+
 test('長文入力中に全文の再解析・dirty比較・検索再正規化を繰り返さない', () => {
   assert.match(source, /useState\(\(\) => readPlanningNotes\(project\?\.planning_notes\)\)/);
   assert.doesNotMatch(source, /JSON\.stringify\(editor\.draft\)/);
@@ -208,6 +295,7 @@ test('バックアップ結合のノート競合は場所と理由を示して�
   assert.match(backupDialogSource, /conflict\.projectName/);
   assert.match(backupDialogSource, /conflict\.section/);
   assert.match(backupDialogSource, /conflict\.reason/);
+  assert.match(backupDialogSource, /目次の保存履歴が上限100件を超える/);
   assert.match(backupDialogSource, /disabled=\{busy \|\| planningMergeConflicts\.length > 0\}/);
   assert.match(backupDialogSource, /非公開取材は通常バックアップに含まれます/);
 });
