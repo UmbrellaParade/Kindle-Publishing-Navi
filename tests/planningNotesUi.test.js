@@ -11,18 +11,20 @@ const backupDialogSource = readFileSync(
   'utf8',
 );
 
-test('初心者は空状態から企画・章・取材のどれか1件を始められる', () => {
+test('初心者は空状態から企画・階層目次・取材のどれか1件を始められる', () => {
   assert.match(source, /まずは1つだけで大丈夫です/);
   assert.match(source, /企画メモを書く/);
-  assert.match(source, /章を1つ作る/);
+  assert.match(source, /目次の構成を作る/);
+  assert.match(source, /部を追加/);
+  assert.match(source, /章だけで始める/);
   assert.match(source, /取材を1問記録/);
   assert.match(source, /この1問を保存/);
-  assert.match(source, /章タイトルを入力してください/);
+  assert.match(source, /部・章・話・節のタイトルを入力してください/);
   assert.match(source, /今回の質問を入力してください/);
   assert.match(source, /指示書名を入力してください/);
 });
 
-test('6領域と検索・章・状態・資料優先順位の絞り込みを表示する', () => {
+test('6領域と検索・構成項目・状態・資料優先順位の絞り込みを表示する', () => {
   for (const label of [
     '企画メモ',
     '競合・市場調査',
@@ -34,7 +36,7 @@ test('6領域と検索・章・状態・資料優先順位の絞り込みを表�
     assert.match(source, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(source, /ノート内を検索/);
-  assert.match(source, /章で絞り込み/);
+  assert.match(source, /構成項目で絞り込み/);
   assert.match(source, /状態で絞り込み/);
   assert.match(source, /資料優先順位で絞り込み/);
 });
@@ -45,7 +47,17 @@ test('内側メニューは外側ナビの実測高さを避けて追従し、�
   assert.match(source, /overflow-x-auto overscroll-x-contain/);
   assert.match(source, /flex min-w-max gap-2 lg:min-w-0 lg:w-full/);
   assert.match(source, /sectionButtonRefs\.current\.get\(activeSection\)/);
-  assert.match(source, /container\.scrollTo\(\{[\s\S]*left: Math\.max\(0, targetLeft\)/);
+  assert.match(source, /currentContainer\.scrollTo\(\{[\s\S]*left: Math\.min\(maxLeft, Math\.max\(0, targetLeft\)\)/);
+  assert.match(source, /top: currentContainer\.scrollTop/);
+  assert.match(source, /new window\.ResizeObserver\(handleSectionNavResize\)/);
+  assert.match(source, /resizeObserver\?\.observe\(container\)/);
+  assert.match(source, /resizeObserver\?\.observe\(button\)/);
+  assert.match(source, /window\.addEventListener\('resize', handleSectionNavResize\)/);
+  assert.match(source, /resizeObserver\?\.disconnect\(\)/);
+  assert.match(source, /window\.removeEventListener\('resize', handleSectionNavResize\)/);
+  assert.match(source, /window\.requestAnimationFrame/);
+  assert.match(source, /window\.cancelAnimationFrame/);
+  assert.match(source, /reduceMotion \|\| requestedBehavior !== 'smooth' \? 'auto' : 'smooth'/);
   assert.doesNotMatch(source, /button\.scrollIntoView/);
   assert.match(source, /activeSection === key \? CheckCircle2 : meta\.icon/);
   assert.match(source, /aria-current=\{activeSection === key \? 'page' : undefined\}/);
@@ -71,6 +83,10 @@ test('市場調査はサマリー・根拠・PC比較表・スマホカード・
     'レビュー観察は再確認待ち',
   ]) assert.match(source, new RegExp(label));
   assert.match(source, /<MarketClaimBadge value=\{record\.claimKind\} \/>/);
+  assert.match(source, /title: '読者が求めていること'[\s\S]*?icon: UserRound[\s\S]*?border-l-cyan-400[\s\S]*?text-cyan-200/);
+  assert.match(source, /title: '競合に共通すること・不足'[\s\S]*?icon: Scale[\s\S]*?border-l-amber-400[\s\S]*?text-amber-200/);
+  assert.match(source, /title: 'この本が取る立ち位置'[\s\S]*?icon: Compass[\s\S]*?border-l-emerald-400[\s\S]*?text-emerald-200/);
+  assert.match(source, /border border-l-4/);
   assert.equal((source.match(/<MarketRecheckBadge value=\{record\.recheckStatus\} \/>/g) || []).length, 2);
   assert.match(source, /label === 'レビュー観察メモ' && \/再確認待ち\//);
   assert.match(source, /<table className="min-w-\[1500px\]/);
@@ -133,8 +149,8 @@ test('意思決定は現在の正本と最新順の履歴を分け、差替え�
 test('承認済みを直接上書きせず履歴・新版として扱う導線がある', () => {
   assert.match(source, /承認版を残して新しい案/);
   assert.match(source, /承認済みの旧企画を確認/);
-  assert.match(source, /本人承認済みは直接上書きせず、新しい案・新しい版として残します/);
-  assert.match(source, /activeSection === 'instructionVersions' \? '新しい版' : '複製'/);
+  assert.match(source, /本人承認済みは直接上書きせず、新しい案として残します/);
+  assert.match(source, /この項目だけ複製/);
   assert.match(source, /本人承認済みにする場合は、承認者を入力してください/);
   assert.match(source, /承認後はこの記録を直接編集・削除できません/);
   assert.match(source, /内容を見る/);
@@ -152,12 +168,29 @@ test('生の取材回答と匿名化した共有用文章を分離し、共有�
   assert.match(source, /APIキー・認証情報・非公開会話URLは保存しない/);
 });
 
-test('容量警告・破損停止・明示保存・章並べ替えの安全導線を備える', () => {
+test('容量警告・破損停止・明示保存・兄弟単位の並べ替えを備える', () => {
   assert.match(source, /容量が増えています。バックアップ推奨/);
   assert.match(source, /空データで上書きせず停止しています/);
   assert.match(source, /保存するまで既存データは変わりません/);
-  assert.match(source, /aria-label=\{`\$\{record\.title \|\| '無題の章'\}を上へ`\}/);
-  assert.match(source, /aria-label=\{`\$\{record\.title \|\| '無題の章'\}を下へ`\}/);
+  assert.match(source, /chapter\.parentId === record\.parentId/);
+  assert.match(source, /aria-label=\{`\$\{record\.title \|\| '無題の構成項目'\}を\$\{siblingLocation\}上へ`\}/);
+  assert.match(source, /aria-label=\{`\$\{record\.title \|\| '無題の構成項目'\}を\$\{siblingLocation\}下へ`\}/);
+});
+
+test('部・章・話・節を階層表示し、親選択・子追加・パンくずを配線する', () => {
+  assert.match(source, /PLANNING_CHAPTER_NODE_TYPES/);
+  assert.match(source, /flattenPlanningChapterTree\(data\)/);
+  assert.match(source, /getPlanningChapterParentOptions\(planningData, draft\.id, draft\.nodeType\)/);
+  assert.match(source, /項目の種類/);
+  assert.match(source, /入れる場所/);
+  assert.match(source, /この中に追加/);
+  assert.match(source, /入っている場所：\{pathLabel\}/);
+  assert.match(source, /data-chapter-depth/);
+  assert.match(source, /Math\.min\(depth, 3\) \* 8/);
+  assert.match(source, /紐づく部・章・話・節/);
+  assert.match(source, /planningData=\{data\}/);
+  assert.match(source, /本全体の最上位/);
+  assert.match(source, /section === 'chapters'[\s\S]*?chapterPathLabel\(record, chapters/);
 });
 
 test('長文入力中に全文の再解析・dirty比較・検索再正規化を繰り返さない', () => {

@@ -177,7 +177,7 @@ function KdpTaskRow({ task, state, onChange, fieldData, onFieldChange }) {
   );
 }
 
-export default function KdpChecklistTab({ project, onProjectUpdate, saving, saved }) {
+export default function KdpChecklistTab({ project, onProjectUpdate }) {
   const [checklistData, setChecklistData] = useState({});
   const [fieldData, setFieldData] = useState({});
   const [customTasks, setCustomTasks] = useState([]);
@@ -285,30 +285,30 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
             <span className="hidden shrink-0 text-[11px] font-normal text-muted-foreground group-open:inline">閉じる</span>
           </summary>
 
-          <div className="mt-3 space-y-3" data-kdp-release-guide-content>
+          <div className="mt-3 space-y-3 text-sm leading-relaxed" data-kdp-release-guide-content>
             <p className="text-muted-foreground">
-              発売時刻・予約注文・KUは仕組みが別です。ランキングだけを目的にせず、読者へ分かりやすく案内するための基礎として確認してください。
+              発売時刻・予約注文・Kindle Unlimitedは仕組みが別です。発売日の購入を集めたい場合も含め、目的に合う方法を選ぶための基礎として確認してください。
             </p>
 
             <div className="grid gap-2 md:grid-cols-3">
               <section className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <h3 className="font-bold text-white">発売日は日本時間0:00固定ではありません</h3>
+                <h3 className="font-bold text-white">電子書籍の予約発売は、日本時間0:00ちょうどを保証していません</h3>
                 <p className="mt-1 text-muted-foreground">
-                  予約注文の発売日はGMT基準です。マーケットプレイスや処理状況で表示・計上時刻が前後するため、発売日に商品ページが購入可能になったことを確認してから案内しましょう。
+                  KDP公式では、電子書籍の予約注文の配信日をGMT基準で扱うと案内しています。日本のストアを選んでも、日本時間0:00ちょうどに購入可能になるという公式保証はありません。発売日に商品ページを開き、購入可能になったことを確認してから案内しましょう。
                 </p>
               </section>
 
               <section className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <h3 className="font-bold text-white">予約注文は発売前から反映されます</h3>
+                <h3 className="font-bold text-white">発売日の購入を1日に集めたい場合</h3>
                 <p className="mt-1 text-muted-foreground">
-                  予約注文を設定すると商品ページが発売前に公開され、読者は発売日まで注文できます。KDP公式では、予約注文は発売前から販売ランキングやストア内表示へ影響すると説明されています。予約分が発売日にすべてまとめて加算される前提にはせず、発売後に購入できる案内も用意してください。順位は相対評価で、保証されません。
+                  予約注文を設定すると商品ページが発売前に公開され、読者は発売日まで注文できます。予約注文は、注文された時点から発売前のランキング等へ反映されます。予約分が発売日にもう一度まとめて加算される保証はありません。発売後の購入を同じ日に集めたい場合は予約注文を使わず、商品ページが購入可能になったことを確認してから案内する選択があります。ただし、審査や反映時刻、順位は保証されません。予約注文は、発売前から注文を受け付けたい場合に向いています。
                 </p>
               </section>
 
               <section className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <h3 className="font-bold text-white">KUはKENPで「読まれた量」を確認</h3>
+                <h3 className="font-bold text-white">Kindle Unlimitedでは、実際に読まれたページ数に応じて収益が発生します</h3>
                 <p className="mt-1 text-muted-foreground">
-                  Kindle Unlimitedでは、読者が初めて読んだページがKENPとして記録され、KUロイヤリティの計算に使われます。ダウンロードだけとは異なり、ランキングへの具体的な換算方法は公開されていません。
+                  Kindle Unlimitedは、定額会員が対象本を読めるサービスです。読者が初めて読んだページ数が「既読KENP」として記録され、ロイヤリティの計算に使われます。KENPは端末や文字サイズの違いをならしたKindle独自のページ数です。借りられただけでは増えず、ランキングへの具体的な換算方法は公開されていません。
                 </p>
               </section>
             </div>
@@ -323,6 +323,9 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
               </a>
               <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/G201499380" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1 text-neon-cyan hover:text-neon-pink">
                 <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />KDP公式：電子書籍の予約注文
+              </a>
+              <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/G201499400" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1 text-neon-cyan hover:text-neon-pink">
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />KDP公式：予約注文の販売レポート
               </a>
               <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/G201648140" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1 text-neon-cyan hover:text-neon-pink">
                 <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />KDP公式：販売ランキング

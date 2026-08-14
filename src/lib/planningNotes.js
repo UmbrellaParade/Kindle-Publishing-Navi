@@ -1,6 +1,6 @@
 export const PLANNING_NOTES_KIND = 'kindle-navi-planning-notes';
-export const PLANNING_NOTES_VERSION = 2;
-export const PLANNING_NOTES_LEGACY_VERSIONS = Object.freeze([1]);
+export const PLANNING_NOTES_VERSION = 3;
+export const PLANNING_NOTES_LEGACY_VERSIONS = Object.freeze([1, 2]);
 export const PLANNING_NOTES_WARNING_BYTES = 700 * 1024;
 export const PLANNING_NOTES_SAVE_LIMIT_BYTES = 2 * 1024 * 1024;
 
@@ -15,6 +15,13 @@ export const PLANNING_SOURCE_PRIORITIES = Object.freeze({
   unspecified: '未設定',
   primary: '第一資料',
   supporting: '補助資料',
+});
+
+export const PLANNING_CHAPTER_NODE_TYPES = Object.freeze({
+  part: '部',
+  chapter: '章',
+  episode: '話',
+  section: '節',
 });
 
 export const PLANNING_NOTE_SECTIONS = Object.freeze([
@@ -32,6 +39,13 @@ const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const STATUS_VALUES = new Set(Object.keys(PLANNING_NOTE_STATUSES));
 const PRIORITY_VALUES = new Set(Object.keys(PLANNING_SOURCE_PRIORITIES));
+const CHAPTER_NODE_TYPE_VALUES = new Set(Object.keys(PLANNING_CHAPTER_NODE_TYPES));
+const CHAPTER_ALLOWED_PARENT_TYPES = Object.freeze({
+  part: new Set([]),
+  chapter: new Set(['part']),
+  episode: new Set(['part', 'chapter']),
+  section: new Set(['part', 'chapter', 'episode']),
+});
 const CLAIM_KIND_VALUES = new Set(['fact', 'hypothesis', 'mixed']);
 const RECHECK_STATUS_VALUES = new Set(['needs_recheck', 'checked', 'not_required']);
 const SOURCE_KIND_VALUES = new Set(['fact', 'memory', 'opinion', 'ai_inference']);
@@ -67,7 +81,7 @@ const SECTION_FIELDS = Object.freeze({
     'assessmentStatus',
   ],
   chapters: [
-    'order', 'title', 'role', 'readerQuestion', 'personalSources', 'evidenceNeeded',
+    'order', 'nodeType', 'parentId', 'title', 'role', 'readerQuestion', 'personalSources', 'evidenceNeeded',
     'outlineMarkdown', 'readerNextStep',
   ],
   interviews: [
@@ -379,6 +393,10 @@ function normalizeRecord(section, value, path) {
       const order = value.order === undefined ? 0 : value.order;
       if (!Number.isInteger(order) || order < 0) fail(fieldPath, '0以上の整数ではありません');
       result.order = order;
+    } else if (field === 'nodeType') {
+      result.nodeType = enumValue(value.nodeType, CHAPTER_NODE_TYPE_VALUES, 'chapter', fieldPath);
+    } else if (field === 'parentId') {
+      result.parentId = idValue(value.parentId, fieldPath, { allowEmpty: true });
     } else if (field === 'versionNumber') {
       const number = value.versionNumber === undefined ? 1 : value.versionNumber;
       if (!Number.isInteger(number) || number < 1) fail(fieldPath, '1以上の整数ではありません');
@@ -526,18 +544,45 @@ export function normalizePlanningNotes(value, path = 'planningNotes') {
     }
   }
 
-  const chapterIds = new Set(result.chapters.map(chapter => chapter.id));
-  const chapterOrders = new Set();
+  const chaptersById = new Map(result.chapters.map(chapter => [chapter.id, chapter]));
+  const chapterIds = new Set(chaptersById.keys());
+  const chapterOrdersByParent = new Map();
   for (const chapter of result.chapters) {
-    if (chapterOrders.has(chapter.order)) {
-      fail(`${path}.chapters.${chapter.id}.order`, '章の順序が重複しています');
+    const siblingOrders = chapterOrdersByParent.get(chapter.parentId) || new Set();
+    if (siblingOrders.has(chapter.order)) {
+      fail(`${path}.chapters.${chapter.id}.order`, '同じ親に属する構成項目の順序が重複しています');
     }
-    chapterOrders.add(chapter.order);
+    siblingOrders.add(chapter.order);
+    chapterOrdersByParent.set(chapter.parentId, siblingOrders);
+    if (chapter.parentId && !chaptersById.has(chapter.parentId)) {
+      fail(`${path}.chapters.${chapter.id}.parentId`, '存在しない親の構成項目IDです');
+    }
+  }
+  for (const chapter of result.chapters) {
+    const visited = new Set([chapter.id]);
+    let parentId = chapter.parentId;
+    while (parentId) {
+      if (visited.has(parentId)) {
+        fail(`${path}.chapters.${chapter.id}.parentId`, '親子関係が循環しています');
+      }
+      visited.add(parentId);
+      parentId = chaptersById.get(parentId)?.parentId || '';
+    }
+  }
+  for (const chapter of result.chapters) {
+    if (!chapter.parentId) continue;
+    const parent = chaptersById.get(chapter.parentId);
+    if (!CHAPTER_ALLOWED_PARENT_TYPES[chapter.nodeType].has(parent.nodeType)) {
+      fail(
+        `${path}.chapters.${chapter.id}.parentId`,
+        `${PLANNING_CHAPTER_NODE_TYPES[chapter.nodeType]}は${PLANNING_CHAPTER_NODE_TYPES[parent.nodeType]}の中には置けません`,
+      );
+    }
   }
   for (const section of PLANNING_NOTE_SECTIONS) {
     for (const record of result[section]) {
       for (const chapterId of record.chapterIds) {
-        if (!chapterIds.has(chapterId)) fail(`${path}.${section}.${record.id}.chapterIds`, '存在しない章IDが含まれます');
+        if (!chapterIds.has(chapterId)) fail(`${path}.${section}.${record.id}.chapterIds`, '存在しない構成項目IDが含まれます');
       }
     }
   }
@@ -705,6 +750,102 @@ export function createPlanningNoteId(prefix = 'note') {
   return `${safePrefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
+export function getPlanningChapterNodeLabel(nodeType) {
+  return PLANNING_CHAPTER_NODE_TYPES[nodeType] || PLANNING_CHAPTER_NODE_TYPES.chapter;
+}
+
+export function getNextPlanningChapterOrder(data, parentId = '') {
+  const normalized = normalizePlanningNotes(data);
+  const safeParentId = idValue(parentId, 'parentId', { allowEmpty: true });
+  return Math.max(
+    -1,
+    ...normalized.chapters
+      .filter(chapter => chapter.parentId === safeParentId)
+      .map(chapter => chapter.order),
+  ) + 1;
+}
+
+export function flattenPlanningChapterTree(data, { includeRejected = true } = {}) {
+  const normalized = normalizePlanningNotes(data);
+  const childrenByParent = new Map();
+  for (const chapter of normalized.chapters) {
+    if (!includeRejected && chapter.status === 'rejected') continue;
+    const children = childrenByParent.get(chapter.parentId) || [];
+    children.push(chapter);
+    childrenByParent.set(chapter.parentId, children);
+  }
+  for (const children of childrenByParent.values()) {
+    children.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  }
+  const flattened = [];
+  const visit = (parentId, depth, pathIds) => {
+    for (const chapter of childrenByParent.get(parentId) || []) {
+      const nextPath = [...pathIds, chapter.id];
+      flattened.push({ record: chapter, depth, pathIds: nextPath });
+      visit(chapter.id, depth + 1, nextPath);
+    }
+  };
+  visit('', 0, []);
+  return flattened;
+}
+
+export function getPlanningChapterParentOptions(data, chapterId = '', nodeType = 'chapter') {
+  const normalized = normalizePlanningNotes(data);
+  const safeChapterId = idValue(chapterId, 'chapterId', { allowEmpty: true });
+  const safeNodeType = enumValue(nodeType, CHAPTER_NODE_TYPE_VALUES, 'chapter', 'nodeType');
+  const descendants = new Set();
+  if (safeChapterId) {
+    const childrenByParent = new Map();
+    for (const chapter of normalized.chapters) {
+      const children = childrenByParent.get(chapter.parentId) || [];
+      children.push(chapter.id);
+      childrenByParent.set(chapter.parentId, children);
+    }
+    const pending = [...(childrenByParent.get(safeChapterId) || [])];
+    while (pending.length) {
+      const id = pending.pop();
+      if (descendants.has(id)) continue;
+      descendants.add(id);
+      pending.push(...(childrenByParent.get(id) || []));
+    }
+  }
+  const allowedParentTypes = CHAPTER_ALLOWED_PARENT_TYPES[safeNodeType];
+  return flattenPlanningChapterTree(normalized)
+    .filter(({ record }) => (
+      record.id !== safeChapterId
+      && !descendants.has(record.id)
+      && record.status !== 'approved'
+      && record.status !== 'rejected'
+      && allowedParentTypes.has(record.nodeType)
+    ));
+}
+
+function collectPlanningChapterDescendantIds(chapters, chapterId) {
+  const descendants = new Set();
+  const pending = chapters
+    .filter(chapter => chapter.parentId === chapterId)
+    .map(chapter => chapter.id);
+  while (pending.length > 0) {
+    const id = pending.pop();
+    if (descendants.has(id)) continue;
+    descendants.add(id);
+    pending.push(...chapters
+      .filter(chapter => chapter.parentId === id)
+      .map(chapter => chapter.id));
+  }
+  return descendants;
+}
+
+export function getPlanningChapterDescendantIds(data, chapterId, { includeSelf = false } = {}) {
+  const normalized = normalizePlanningNotes(data);
+  const safeChapterId = idValue(chapterId, 'chapterId');
+  if (!normalized.chapters.some(chapter => chapter.id === safeChapterId)) {
+    throw new Error('対象の構成項目が見つかりません');
+  }
+  const descendants = collectPlanningChapterDescendantIds(normalized.chapters, safeChapterId);
+  return includeSelf ? [safeChapterId, ...descendants] : [...descendants];
+}
+
 export function createPlanningRecord(section, values = {}, {
   now = () => new Date(),
   idFactory = createPlanningNoteId,
@@ -730,7 +871,11 @@ export function createPlanningRecord(section, values = {}, {
     sourcePriority: 'unspecified',
     ...values,
   };
-  if (section === 'chapters' && base.order === undefined) base.order = 0;
+  if (section === 'chapters') {
+    if (base.order === undefined) base.order = 0;
+    if (!base.nodeType) base.nodeType = 'chapter';
+    if (!base.parentId) base.parentId = '';
+  }
   if (section === 'competitors') {
     if (!base.claimKind) base.claimKind = 'mixed';
     if (!base.recheckStatus) base.recheckStatus = 'needs_recheck';
@@ -767,8 +912,46 @@ export function createPlanningRecord(section, values = {}, {
   return normalized;
 }
 
+export function createPlanningChapterRecord(data, values = {}, options = {}) {
+  const normalized = normalizePlanningNotes(data);
+  const parentId = idValue(values.parentId, 'planningNotes.chapters.parentId', { allowEmpty: true });
+  const record = createPlanningRecord('chapters', {
+    ...values,
+    nodeType: values.nodeType || 'chapter',
+    parentId,
+    order: values.order ?? getNextPlanningChapterOrder(normalized, parentId),
+  }, options);
+  const validated = normalizePlanningNotes({
+    ...normalized,
+    chapters: [...normalized.chapters, record],
+  });
+  return validated.chapters.find(chapter => chapter.id === record.id);
+}
+
 function isApproved(record) {
   return record?.status === 'approved';
+}
+
+function chapterSubtreeHasApproved(chapters, chapterId) {
+  const pending = [chapterId];
+  const visited = new Set();
+  while (pending.length) {
+    const id = pending.pop();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const record = chapters.find(chapter => chapter.id === id);
+    if (isApproved(record)) return true;
+    pending.push(...chapters.filter(chapter => chapter.parentId === id).map(chapter => chapter.id));
+  }
+  return false;
+}
+
+function approvedParent(chapters, parentId) {
+  return parentId ? chapters.find(chapter => chapter.id === parentId && isApproved(chapter)) : null;
+}
+
+function rejectedParent(chapters, parentId) {
+  return parentId ? chapters.find(chapter => chapter.id === parentId && chapter.status === 'rejected') : null;
 }
 
 export function savePlanningConcept(data, draft, {
@@ -836,11 +1019,42 @@ export function upsertPlanningRecord(data, section, draft, {
     updatedAt: timestamp,
     approvedAt: draft.status === 'approved' ? (draft.approvedAt || timestamp) : '',
   }, `planningNotes.${section}`);
+  const chapterStructureChanged = section === 'chapters' && (
+    !current
+    || current.order !== nextRecord.order
+    || current.parentId !== nextRecord.parentId
+    || current.nodeType !== nextRecord.nodeType
+  );
+  const chapterVisibilityChanged = section === 'chapters' && current && (
+    (current.status === 'rejected') !== (nextRecord.status === 'rejected')
+  );
+  if (
+    section === 'chapters'
+    && current
+    && current.status !== 'rejected'
+    && nextRecord.status === 'rejected'
+    && normalized.chapters.some(chapter => chapter.parentId === current.id)
+  ) {
+    throw new Error('子項目がある構成項目は「採用しない」にできません。先に子項目を移動または削除してください');
+  }
+  if (chapterStructureChanged || chapterVisibilityChanged) {
+    if (current && chapterSubtreeHasApproved(normalized.chapters, current.id)) {
+      throw new Error('本人承認済みの子項目を含む構成は直接移動・並べ替えできません');
+    }
+    if (approvedParent(normalized.chapters, current?.parentId)) {
+      throw new Error('本人承認済みの親項目に属する構成順は直接変更できません');
+    }
+    if (approvedParent(normalized.chapters, nextRecord.parentId)) {
+      throw new Error('本人承認済みの親項目へ子項目を追加・移動できません');
+    }
+    if (rejectedParent(normalized.chapters, nextRecord.parentId)) {
+      throw new Error('「採用しない」の親項目へ子項目を追加・移動できません');
+    }
+  }
   const nextRecords = [...normalized[section]];
   if (index >= 0) nextRecords[index] = nextRecord;
   else nextRecords.push(nextRecord);
-  const chapterOrderChanged = section === 'chapters'
-    && (!current || current.order !== nextRecord.order);
+  const chapterOrderChanged = chapterStructureChanged || chapterVisibilityChanged;
   return normalizePlanningNotes({
     ...normalized,
     [section]: nextRecords,
@@ -882,13 +1096,20 @@ export function deletePlanningRecord(data, section, recordId, { expectedUpdatedA
     }
   }
   if (section === 'chapters') {
+    if (approvedParent(normalized.chapters, current.parentId)) {
+      throw new Error('本人承認済みの親項目から子項目を削除できません');
+    }
+    const childCount = normalized.chapters.filter(chapter => chapter.parentId === recordId).length;
+    if (childCount > 0) {
+      throw new Error(`この構成項目の中に${childCount}件の子項目があります。先に子項目を移動または削除してください`);
+    }
     const linkedCount = PLANNING_NOTE_SECTIONS
       .filter(key => key !== 'chapters')
       .flatMap(key => normalized[key])
       .filter(record => record.chapterIds.includes(recordId))
       .length;
     if (linkedCount > 0) {
-      throw new Error(`この章に紐づく記録が${linkedCount}件あります。先に各記録の「紐づく章」を外してください`);
+      throw new Error(`この構成項目に紐づく記録が${linkedCount}件あります。先に各記録の「紐づく部・章・話・節」を外してください`);
     }
   }
   const next = normalized[section].filter(record => record.id !== recordId);
@@ -904,16 +1125,25 @@ export function deletePlanningRecord(data, section, recordId, { expectedUpdatedA
 export function movePlanningChapter(data, chapterId, direction, { expectedRevision } = {}) {
   const normalized = normalizePlanningNotes(data);
   if (expectedRevision !== normalized.chapterOrderRevision) {
-    throw new Error('章の順序が別の画面で更新されました。最新内容を確認してください');
+    throw new Error('目次・章構成の順序が別の画面で更新されました。最新内容を確認してください');
   }
+  const selectedChapter = normalized.chapters.find(chapter => chapter.id === chapterId);
+  if (!selectedChapter) throw new Error('移動する構成項目が見つかりません');
   const sorted = normalized.chapters
-    .filter(chapter => chapter.status !== 'rejected')
+    .filter(chapter => (
+      chapter.status !== 'rejected'
+      && chapter.parentId === selectedChapter.parentId
+    ))
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const index = sorted.findIndex(chapter => chapter.id === chapterId);
   const target = direction === 'up' ? index - 1 : index + 1;
   if (index < 0 || target < 0 || target >= sorted.length) return normalized;
-  if (isApproved(sorted[index]) || isApproved(sorted[target])) {
-    throw new Error('本人承認済みの章順は直接変更できません。承認済みを残して新しい章案を作ってください');
+  if (
+    approvedParent(normalized.chapters, selectedChapter.parentId)
+    || chapterSubtreeHasApproved(normalized.chapters, sorted[index].id)
+    || chapterSubtreeHasApproved(normalized.chapters, sorted[target].id)
+  ) {
+    throw new Error('本人承認済みの構成順は直接変更できません。承認済みを残して新しい案を作ってください');
   }
   const timestamp = new Date().toISOString();
   const selected = sorted[index];
@@ -924,6 +1154,90 @@ export function movePlanningChapter(data, chapterId, direction, { expectedRevisi
     }
     if (chapter.id === adjacent.id) {
       return { ...chapter, order: selected.order, revision: chapter.revision + 1, updatedAt: timestamp };
+    }
+    return chapter;
+  });
+  return normalizePlanningNotes({
+    ...normalized,
+    chapters,
+    chapterOrderRevision: normalized.chapterOrderRevision + 1,
+    updatedAt: timestamp,
+  });
+}
+
+export function movePlanningChapterToParent(data, chapterId, parentId = '', {
+  expectedRevision,
+  targetOrder = null,
+  now = () => new Date(),
+} = {}) {
+  const normalized = normalizePlanningNotes(data);
+  if (expectedRevision !== normalized.chapterOrderRevision) {
+    throw new Error('目次・章構成の順序が別の画面で更新されました。最新内容を確認してください');
+  }
+  const selected = normalized.chapters.find(chapter => chapter.id === chapterId);
+  if (!selected) throw new Error('移動する構成項目が見つかりません');
+  if (chapterSubtreeHasApproved(normalized.chapters, selected.id)) {
+    throw new Error('本人承認済みの構成項目または子項目を含むため、別の親へ移動できません。承認済みを残して新しい案を作ってください');
+  }
+  const safeParentId = idValue(parentId, 'parentId', { allowEmpty: true });
+  if (safeParentId === selected.parentId && targetOrder === null) return normalized;
+  if (safeParentId === selected.parentId && targetOrder === selected.order) return normalized;
+  const targetParent = safeParentId
+    ? normalized.chapters.find(chapter => chapter.id === safeParentId)
+    : null;
+  if (safeParentId && !targetParent) throw new Error('移動先の親項目が見つかりません');
+  if (approvedParent(normalized.chapters, selected.parentId)) {
+    throw new Error('本人承認済みの親項目から子項目を移動できません');
+  }
+  if (isApproved(targetParent)) {
+    throw new Error('本人承認済みの親項目へ子項目を移動できません');
+  }
+  if (targetParent?.status === 'rejected') {
+    throw new Error('「採用しない」の親項目へ子項目を移動できません');
+  }
+  if (safeParentId === selected.id) throw new Error('自分自身の中へ移動することはできません');
+  if (targetParent && !CHAPTER_ALLOWED_PARENT_TYPES[selected.nodeType].has(targetParent.nodeType)) {
+    throw new Error(`${getPlanningChapterNodeLabel(selected.nodeType)}は${getPlanningChapterNodeLabel(targetParent.nodeType)}の中には移動できません`);
+  }
+  let ancestorId = safeParentId;
+  while (ancestorId) {
+    if (ancestorId === selected.id) throw new Error('子項目の中へ移動すると親子関係が循環するため保存できません');
+    ancestorId = normalized.chapters.find(chapter => chapter.id === ancestorId)?.parentId || '';
+  }
+  const targetSiblings = normalized.chapters
+    .filter(chapter => chapter.id !== selected.id && chapter.parentId === safeParentId);
+  const nextOrder = targetOrder === null
+    ? Math.max(-1, ...targetSiblings.map(chapter => chapter.order)) + 1
+    : targetOrder;
+  if (!Number.isInteger(nextOrder) || nextOrder < 0) {
+    throw new TypeError('移動先の順序は0以上の整数で指定してください');
+  }
+  const occupied = targetSiblings.find(chapter => chapter.order === nextOrder);
+  if (occupied && safeParentId !== selected.parentId) {
+    throw new Error('指定した移動先の順序は使用中です。移動先の末尾へ追加するか、空いている順序を指定してください');
+  }
+  if (occupied && chapterSubtreeHasApproved(normalized.chapters, occupied.id)) {
+    throw new Error('移動先には本人承認済みの構成項目があります。承認済みの順序は変更できません');
+  }
+  const timestamp = isoNow(now);
+  const chapters = normalized.chapters.map(chapter => {
+    if (chapter.id === selected.id) {
+      return {
+        ...chapter,
+        parentId: safeParentId,
+        order: nextOrder,
+        revision: chapter.revision + 1,
+        updatedAt: timestamp,
+      };
+    }
+    if (occupied && chapter.id === occupied.id) {
+      return {
+        ...chapter,
+        parentId: selected.parentId,
+        order: selected.order,
+        revision: chapter.revision + 1,
+        updatedAt: timestamp,
+      };
     }
     return chapter;
   });
@@ -967,7 +1281,7 @@ export function duplicatePlanningRecord(data, section, recordId, {
     duplicate.referenceStatus = 'active';
   }
   if (section === 'chapters') {
-    duplicate.order = Math.max(-1, ...normalized.chapters.map(chapter => chapter.order)) + 1;
+    duplicate.order = getNextPlanningChapterOrder(normalized, current.parentId);
   }
   if (section === 'decisions') {
     duplicate.isCanonical = false;
@@ -1262,6 +1576,12 @@ export function filterPlanningNotes(data, {
     : section === 'concept'
       ? ['concept', 'conceptHistory']
       : [section];
+  const chapterScope = chapterId !== 'all' && chapterId !== 'unlinked'
+    ? new Set([
+      chapterId,
+      ...collectPlanningChapterDescendantIds(normalized.chapters, chapterId),
+    ])
+    : null;
   const results = [];
   for (const key of sections) {
     const records = key === 'concept' ? [normalized.concept] : (normalized[key] || []);
@@ -1270,7 +1590,11 @@ export function filterPlanningNotes(data, {
       if (status !== 'all' && record.status !== status) continue;
       if (sourcePriority !== 'all' && record.sourcePriority !== sourcePriority) continue;
       if (chapterId === 'unlinked' && record.chapterIds.length > 0) continue;
-      if (chapterId !== 'all' && chapterId !== 'unlinked' && !record.chapterIds.includes(chapterId) && record.id !== chapterId) continue;
+      if (
+        chapterScope
+        && !record.chapterIds.some(id => chapterScope.has(id))
+        && !chapterScope.has(record.id)
+      ) continue;
       if (needle && !searchableText(record).includes(needle)) continue;
       results.push({ section: key, record });
     }
@@ -1333,9 +1657,11 @@ export function previewPlanningNotesMerge(currentRaw, incomingRaw) {
   }
   if (current.chapters.length > 0) {
     const currentChapterIds = new Set(current.chapters.map(record => record.id));
-    const currentChapterByOrder = new Map(current.chapters.map(record => [record.order, record]));
+    const currentChapterByOrder = new Map(
+      current.chapters.map(record => [`${record.parentId}\u0000${record.order}`, record]),
+    );
     for (const record of incoming.chapters) {
-      const occupied = currentChapterByOrder.get(record.order);
+      const occupied = currentChapterByOrder.get(`${record.parentId}\u0000${record.order}`);
       if (!currentChapterIds.has(record.id) && occupied) {
         conflicts.push({
           section: 'chapters',
@@ -2013,9 +2339,26 @@ export function planningNotesShareToMarkdown(sharePackage) {
   lines.push('', '## 現在の判断・正本', '');
   if (currentDecision) markdownJsonBlock(lines, currentDecision.decision || '現行の判断', currentDecision);
   else lines.push('正本未設定', '');
+
+  const chapterTree = flattenPlanningChapterTree(data);
+  lines.push('', '## 目次・章構成', '', '### 構成の階層', '');
+  if (chapterTree.length === 0) {
+    lines.push('構成項目はまだありません。', '');
+  } else {
+    for (const { record, depth } of chapterTree) {
+      lines.push(`${'  '.repeat(depth)}- ${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}`);
+    }
+    lines.push('', '### 構成項目の詳細', '');
+    for (const { record } of chapterTree) {
+      markdownJsonBlock(
+        lines,
+        `${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}`,
+        record,
+      );
+    }
+  }
   const sections = [
     ['competitors', '競合・市場調査', record => record.bookTitle || record.competitorName, sortPlanningRecordsNewest],
-    ['chapters', '目次・章構成', record => record.title, records => [...records].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))],
     ['interviews', '公開候補の取材記録', record => record.question, sortPlanningRecordsNewest],
     ['instructionVersions', '執筆設計・GPTs指示書', record => `${record.name} v${record.versionNumber}`, sortInstructionReferences],
     ['decisions', '変更履歴（更新日時の新しい順）', record => record.decision, sortDecisionReferences],

@@ -157,9 +157,13 @@ test('企画・取材・構成ノートを初心者が安全に使えるよう�
   const requiredPhrases = [
     '最初の1件を保存する',
     '企画メモを書く',
+    '目次の構成を作る',
     '取材を1問記録',
     '6つの領域を使い分ける',
-    '章ID',
+    '部・章・話・節を階層で作り',
+    '第一部 ＞ 第一話／第二話 ＞ 第一節',
+    '構成項目ID',
+    'この中に追加',
     '案と承認版を分ける',
     '本人承認済み',
     '承認版を残して新しい案',
@@ -214,8 +218,22 @@ test('現行10機能と外部操作・KDP最新確認の注意をすべて案内
 test('使い方マニュアルはナビ先頭にあり、プロジェクト0件では自動表示する', () => {
   const tabBlock = homeSource.match(/const TABS = \[([\s\S]*?)\];/)?.[1] || '';
   assert.match(tabBlock.trimStart(), /^\{ id: 'manual',\s+label: '使い方マニュアル' \}/);
-  assert.match(homeSource, /else \{\s*setActiveTab\('manual'\);\s*\}/);
+  assert.match(homeSource, /resolveViewResumeState\(initialViewResumeState, list/);
+  assert.match(homeSource, /setActiveTab\(resolved\.mainTab\)/);
   assert.match(homeSource, /activeTab === 'manual'[\s\S]*?<KindleNaviManualTab/);
+});
+
+test('同じブラウザでは前回の閲覧位置へ安全に戻り、共有データへ混ぜない', () => {
+  for (const phrase of [
+    '最後に見ていた本',
+    '近いスクロール位置から再開します',
+    '前回の続きから再開しました',
+    '完全バックアップ、共有用JSON／Markdownには入りません',
+    '入力途中でまだ保存していない文章',
+    '別の画面を指定したURLで開いた場合は、そのURLを優先します',
+  ]) {
+    assert.match(manual, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
 });
 
 test('マニュアルから現行10機能と初回4ステップへ移動できる', () => {
