@@ -62,6 +62,40 @@ final result: passed
 
 ---
 
+# Design QA: 企画・取材・構成ノート v2
+
+## Visual source
+
+- Before: `C:\Users\myabe\AppData\Local\Temp\kindle-planning-notes-audit-before\02-competitors-pc.png`
+- After PC: `C:\Users\myabe\AppData\Local\Temp\kindle-planning-notes-audit-after\02-market-pc.png`
+- After mobile market: `C:\Users\myabe\AppData\Local\Temp\kindle-planning-notes-audit-after\03-market-mobile.png`
+- After mobile canonical slots: `C:\Users\myabe\AppData\Local\Temp\kindle-planning-notes-audit-after\04-instructions-mobile.png`
+
+## Responsive and interaction checks
+
+- 1440 x 1000: 外側ナビの下で内側7項目メニューが追従し、市場サマリー・根拠・比較表を本文へ重ねない。
+- 390 x 844: document width 385px / viewport width 390px。横あふれなし。
+- 内側メニューは client width 351px / scroll width 867px。執筆設計を選ぶと scrollLeft 464pxへ移動し、選択中項目を中央付近へ表示。
+- 選択状態は色だけでなくチェックアイコン、`aria-current`、可視文言「表示中」で示す。
+- Codex／著者の正本未設定枠、正本と最新の凡例、競合のスマホカードを確認。
+- MARKET-001の実ファイルを隔離QA本へプレビューし、競合5件・公開出典6件・再確認待ち4件・未調査6件・追加6件・競合0件・削除0件を確認後だけ適用。
+- 同じ版の再取込は追加0件／同一6件となり、保存項目と競合件数は増えない。
+- 再読込とプロジェクト往復後も競合5件、公開出典6件、著者承認待ち表示を保持。
+- Console warnings/errors: 0。
+
+## Content and safety checks
+
+- 市場ポジションと主USPは「要確認」「著者承認待ち」を常時表示し、自動承認しない。
+- 書誌確認済みと差別化の編集仮説を別バッジで表示。レビュー観察は再確認待ちのまま。
+- 主USP、市場ポジション、編集ガードレールはMarkdown記号を残さず読みやすい文章として表示。
+- 共有JSON／Markdownを実際に保存し、JSON schema 1 / data version 2 / MARKET-001 / 競合5件を確認。
+- 共有2ファイルの秘密情報・ローカル絶対パス検査は0件。
+- Automated checks: 243/243 tests passed, lint passed, GitHub Pages production build passed.
+
+final result: passed
+
+---
+
 # Design QA: 逆算カードの余白削減
 
 ## Source and implementation

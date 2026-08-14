@@ -2,21 +2,35 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PlanningNotesMergeConflictError,
+  PlanningNotesImportConflictError,
+  applyMarketResearchImport,
+  assignDecisionCanonical,
+  assignInstructionCanonical,
   buildPlanningNotesSharePackage,
+  clearInstructionCanonical,
   createEmptyPlanningNotes,
   createPlanningRecord,
   deletePlanningRecord,
   duplicatePlanningRecord,
   estimatePlanningNotesBytes,
   filterPlanningNotes,
+  findMarketResearchRestrictedData,
+  findPlanningNotesSensitiveData,
+  formatPlanningDateTimeJst,
+  getPlanningMarketMetrics,
   mergePlanningNotesValues,
   movePlanningChapter,
   normalizePlanningNotes,
   planningNotesShareToMarkdown,
+  parseMarketResearchSummaryMarkdown,
+  previewMarketResearchImport,
   readPlanningNotes,
+  savePlanningMarketSummary,
   savePlanningConcept,
   serializePlanningNotes,
+  sortPlanningRecordsNewest,
   upsertPlanningRecord,
+  withdrawPlanningDecision,
 } from './planningNotes.js';
 
 const fixedNow = () => new Date('2026-08-14T00:00:00.000Z');
@@ -526,6 +540,21 @@ test('共有用データにAPIキーや非公開会話URLがあれば書き出�
     }),
     /非公開会話URL/,
   );
+  const sessionRecord = createPlanningRecord('decisions', {
+    decision: '取材メモ',
+    reason: 'セッションID abc123-not-for-sharing',
+  }, { now: fixedNow, idFactory: idFactory('decision-session') });
+  assert.throws(
+    () => buildPlanningNotesSharePackage(
+      addRecord(createEmptyPlanningNotes(), 'decisions', sessionRecord),
+      { now: fixedNow },
+    ),
+    /認証情報/,
+  );
+  assert.match(
+    findPlanningNotesSensitiveData('セッションID abc123-not-for-sharing')[0].label,
+    /セッションID/,
+  );
 });
 
 test('長文容量を計測し、保存用上限を超えた場合は明示して停止する', () => {
@@ -546,4 +575,375 @@ test('長文容量を計測し、保存用上限を超えた場合は明示し�
     () => serializePlanningNotes(oversized, { enforceStorageBudget: true }),
     /約2MB/,
   );
+});
+
+function marketResearchMarkdown() {
+  const competitors = Array.from({ length: 5 }, (_, index) => (
+    `|著者${index + 1}『競合${index + 1}』|読者${index + 1}|約束${index + 1}|同じにしない${index + 1}|差別化${index + 1}|書籍内容は出版社で確認済み。差は編集判断|`
+  )).join('\n');
+  const sources = Array.from({ length: 6 }, (_, index) => {
+    const number = String(index + 1).padStart(3, '0');
+    return `|MKT-${number}|公開資料${index + 1}|https://example.com/source-${index + 1}|2026-08-14|用途${index + 1}|`;
+  }).join('\n');
+  const unresearched = Array.from({ length: 6 }, (_, index) => (
+    `|未調査${index + 1}|未調査|再確認${index + 1}|`
+  )).join('\n');
+  return `# 市場調査サマリー
+
+> 版ID: MARKET-001
+> 調査基準日: 2026-08-14
+> 状態: 第一次調査
+
+## 30秒で分かる結論
+
+|項目|現在の判断|
+|---|---|
+|主読者|迷っている読者|
+|読者が抱える痛み|夢を諦めきれない|
+|競合に多い答え|専門家が答えを示す|
+|市場の空白（編集仮説）|成功前の本人が一緒に考える|
+|主USP|現在進行形の人生問答|
+|読後地点|もう一度望んでもよい|
+|避ける結論|成功を保証しない|
+
+## 読者が求めていること
+
+- 迷いを一緒に考えること。
+
+## 競合比較
+
+|競合|主な読者・問題|中心の約束・強み|本書が同じにしない点|本書との差別化|根拠状態|
+|---|---|---|---|---|---|
+${competitors}
+
+## 読者の反応から見えた空白
+
+|観察|企画への示唆|状態|
+|---|---|---|
+|観察1|示唆1|仮説・URL再確認待ち|
+|観察2|示唆2|仮説・URL再確認待ち|
+|観察3|示唆3|仮説・URL再確認待ち|
+|観察4|示唆4|形式の参考・レビュー再確認待ち|
+
+## この本が取る立ち位置
+
+### 主USP
+
+**現在進行形の人生問答。**
+
+### 一文の市場ポジション
+
+> 夢が叶う保証はなくても、迷いを一緒に考える本。
+
+### 編集時に守ること
+
+- 成功者として描かない。
+
+## 未調査・次回確認すること
+
+|項目|現在地|使う前の条件|
+|---|---|---|
+${unresearched}
+
+## 公開出典
+
+|ID|資料|URL|確認日|用途|
+|---|---|---|---|---|
+${sources}
+
+## この資料の使い方
+
+- まず市場ポジションを見る。
+`;
+}
+
+test('v1企画ノートを新フィールド未設定のv2へ安全に移行する', () => {
+  const legacy = createEmptyPlanningNotes();
+  legacy.version = 1;
+  delete legacy.marketSummary;
+  legacy.instructionVersions = [{
+    ...createPlanningRecord('instructionVersions', { name: '旧指示書' }, {
+      now: fixedNow,
+      idFactory: idFactory('instruction-v1', 'document-1'),
+    }),
+  }];
+  for (const field of ['audience', 'canonicalFor', 'firstReadFor', 'referenceStatus']) {
+    delete legacy.instructionVersions[0][field];
+  }
+  legacy.decisions = [{
+    ...createPlanningRecord('decisions', { decision: '旧判断' }, {
+      now: fixedNow,
+      idFactory: idFactory('decision-v1'),
+    }),
+  }];
+  for (const field of ['isCanonical', 'isFirstRead', 'decisionState', 'supersedesId', 'supersededById']) {
+    delete legacy.decisions[0][field];
+  }
+
+  const migrated = normalizePlanningNotes(legacy);
+  assert.equal(migrated.version, 2);
+  assert.equal(migrated.marketSummary.versionId, '');
+  assert.equal(migrated.instructionVersions[0].audience, 'unset');
+  assert.deepEqual(migrated.instructionVersions[0].canonicalFor, []);
+  assert.equal(migrated.decisions[0].decisionState, 'unset');
+  assert.equal(migrated.decisions[0].isCanonical, false);
+});
+
+test('市場調査サマリーは根拠IDを検証し、確認済み公開URLを重複なく数える', () => {
+  let data = createEmptyPlanningNotes();
+  const competitor = createPlanningRecord('competitors', {
+    bookTitle: '確認済み競合',
+    url: 'https://example.com/book',
+    checkedOn: '2026-08-13',
+    assessmentStatus: 'verified',
+    recheckStatus: 'checked',
+  }, { now: fixedNow, idFactory: idFactory('competitor-1') });
+  data = addRecord(data, 'competitors', competitor);
+  data = savePlanningMarketSummary(data, {
+    versionId: 'MARKET-TEST',
+    reviewedOn: '2026-08-14',
+    status: 'needs_confirmation',
+    readerNeeds: '迷いを一緒に考えたい',
+    readerNeedsEvidenceIds: ['MKT-001', 'competitor-1'],
+    publicSources: [{
+      id: 'MKT-001',
+      label: '公開資料',
+      url: 'https://example.com/book',
+      checkedOn: '2026-08-14',
+      purpose: '需要確認',
+      verificationStatus: 'verified',
+    }],
+  }, { expectedUpdatedAt: '', now: fixedNow });
+  assert.deepEqual(getPlanningMarketMetrics(data), {
+    reviewedOn: '2026-08-14',
+    competitorCount: 1,
+    verifiedSourceCount: 1,
+  });
+  assert.throws(
+    () => savePlanningMarketSummary(data, {
+      ...data.marketSummary,
+      readerNeedsEvidenceIds: ['missing'],
+    }, { expectedUpdatedAt: data.marketSummary.updatedAt, now: fixedNow }),
+    /存在しない根拠ID/,
+  );
+  assert.throws(
+    () => deletePlanningRecord(data, 'competitors', competitor.id, {
+      expectedUpdatedAt: competitor.updatedAt,
+    }),
+    /市場調査サマリーの根拠/,
+  );
+});
+
+test('指示書の正本と最初に見る対象を一意にし、新しい版へ指定を複製しない', () => {
+  let data = createEmptyPlanningNotes();
+  const first = createPlanningRecord('instructionVersions', {
+    name: '執筆指示書A', audience: 'codex', role: 'writing',
+  }, { now: fixedNow, idFactory: idFactory('instruction-a', 'document-a') });
+  const second = createPlanningRecord('instructionVersions', {
+    name: '執筆指示書B', audience: 'codex', role: 'writing',
+  }, { now: fixedNow, idFactory: idFactory('instruction-b', 'document-b') });
+  data = addRecord(data, 'instructionVersions', first);
+  data = addRecord(data, 'instructionVersions', second);
+  data = assignInstructionCanonical(data, first.id, 'codex', { now: fixedNow });
+  data = assignInstructionCanonical(data, second.id, 'codex', {
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+  });
+  assert.deepEqual(data.instructionVersions.find(record => record.id === first.id).canonicalFor, []);
+  assert.equal(data.instructionVersions.find(record => record.id === first.id).referenceStatus, 'old');
+  assert.deepEqual(data.instructionVersions.find(record => record.id === second.id).firstReadFor, ['codex']);
+
+  const duplicate = duplicatePlanningRecord(data, 'instructionVersions', second.id, {
+    now: fixedNow,
+    idFactory: idFactory('instruction-b-v2'),
+  });
+  assert.deepEqual(duplicate.canonicalFor, []);
+  assert.deepEqual(duplicate.firstReadFor, []);
+  assert.equal(duplicate.referenceStatus, 'active');
+  data = clearInstructionCanonical(data, second.id, 'codex', { now: fixedNow });
+  assert.deepEqual(data.instructionVersions.find(record => record.id === second.id).canonicalFor, []);
+});
+
+test('意思決定の正本差替えを相互参照し、撤回しても履歴を残す', () => {
+  let data = createEmptyPlanningNotes();
+  const first = createPlanningRecord('decisions', { decision: '最初の判断' }, {
+    now: fixedNow,
+    idFactory: idFactory('decision-a'),
+  });
+  const second = createPlanningRecord('decisions', { decision: '変更後の判断' }, {
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+    idFactory: idFactory('decision-b'),
+  });
+  assert.equal(first.decisionState, 'unset');
+  assert.equal(second.decisionState, 'unset');
+  data = addRecord(data, 'decisions', first);
+  data = addRecord(data, 'decisions', second);
+  data = assignDecisionCanonical(data, first.id, { now: fixedNow });
+  data = assignDecisionCanonical(data, second.id, {
+    now: () => new Date('2026-08-16T00:00:00.000Z'),
+  });
+  const oldDecision = data.decisions.find(record => record.id === first.id);
+  const currentDecision = data.decisions.find(record => record.id === second.id);
+  assert.equal(oldDecision.decisionState, 'changed');
+  assert.equal(oldDecision.supersededById, second.id);
+  assert.equal(currentDecision.supersedesId, first.id);
+  assert.equal(currentDecision.isCanonical, true);
+
+  data = withdrawPlanningDecision(data, second.id, {
+    now: () => new Date('2026-08-17T00:00:00.000Z'),
+  });
+  assert.equal(data.decisions.find(record => record.id === second.id).decisionState, 'withdrawn');
+  assert.equal(data.decisions.some(record => record.isCanonical), false);
+  assert.equal(data.decisions.length, 2);
+});
+
+test('履歴は更新日時・作成日時・IDで安定して並び、日本時間で表示する', () => {
+  const sorted = sortPlanningRecordsNewest([
+    { id: 'b', updatedAt: '2026-08-14T00:00:00.000Z', createdAt: '2026-08-13T00:00:00.000Z' },
+    { id: 'a', updatedAt: '2026-08-14T00:00:00.000Z', createdAt: '2026-08-13T00:00:00.000Z' },
+    { id: 'c', updatedAt: '2026-08-13T00:00:00.000Z', createdAt: '2026-08-14T00:00:00.000Z' },
+  ]);
+  assert.deepEqual(sorted.map(record => record.id), ['a', 'b', 'c']);
+  assert.match(formatPlanningDateTimeJst('2026-08-14T00:00:00.000Z'), /2026\/08\/14.*09:00/);
+  assert.equal(formatPlanningDateTimeJst(''), '—');
+});
+
+test('結合前に別IDの同一正本scopeと別の意思決定正本を検出する', () => {
+  let current = createEmptyPlanningNotes();
+  let incoming = createEmptyPlanningNotes();
+  const createInstruction = id => createPlanningRecord('instructionVersions', {
+    name: id, audience: 'codex', role: 'writing',
+  }, { now: fixedNow, idFactory: idFactory(id, `document-${id}`) });
+  current = addRecord(current, 'instructionVersions', createInstruction('instruction-current'));
+  incoming = addRecord(incoming, 'instructionVersions', createInstruction('instruction-incoming'));
+  current = assignInstructionCanonical(current, 'instruction-current', 'codex', { now: fixedNow });
+  incoming = assignInstructionCanonical(incoming, 'instruction-incoming', 'codex', { now: fixedNow });
+
+  assert.throws(
+    () => mergePlanningNotesValues(serializePlanningNotes(current), serializePlanningNotes(incoming)),
+    error => error instanceof PlanningNotesMergeConflictError
+      && error.conflicts.some(conflict => conflict.reason === 'instruction_canonical_scope_conflict'),
+  );
+});
+
+test('限定URLと市場調査欄の内部指示を保存前に検出する', () => {
+  assert.match(
+    findMarketResearchRestrictedData('https://example.com/file?X-Amz-Signature=secret')[0].label,
+    /期限付き・限定URL/,
+  );
+  assert.match(
+    findMarketResearchRestrictedData('システムプロンプト: 非公開の指示')[0].label,
+    /GPTs内部指示/,
+  );
+  assert.throws(
+    () => createPlanningRecord('competitors', {
+      bookTitle: '限定資料',
+      url: 'https://example.com/file?token=secret',
+    }, { now: fixedNow, idFactory: idFactory('competitor-secret') }),
+    /期限付き・限定URL/,
+  );
+});
+
+test('MARKET-001 Markdownを5競合・6公開出典へ厳格preview/applyし、同版再取込は冪等', () => {
+  const parsed = parseMarketResearchSummaryMarkdown(marketResearchMarkdown(), {
+    sourceName: 'market-research-summary.md',
+    now: fixedNow,
+  });
+  assert.equal(parsed.marketSummary.versionId, 'MARKET-001');
+  assert.equal(parsed.marketSummary.sourceName, 'market-research-summary.md');
+  assert.equal(parsed.marketSummary.status, 'needs_confirmation');
+  assert.equal(parsed.marketSummary.mainUsp, '現在進行形の人生問答。');
+  assert.equal(
+    parsed.marketSummary.bookPosition,
+    '夢が叶う保証はなくても、迷いを一緒に考える本。\n\n読後地点：もう一度望んでもよい',
+  );
+  assert.match(parsed.marketSummary.avoidDirections, /編集時に守ること：\n成功者として描かない。/);
+  assert.doesNotMatch(parsed.marketSummary.bookPosition, /###|\*\*|^>/m);
+  assert.equal(parsed.marketSummary.publicSources.length, 6);
+  assert.equal(parsed.unresearchedCount, 6);
+  assert.ok(parsed.marketSummary.publicSources.every(source => source.verificationStatus === 'verified'));
+  assert.equal(parsed.competitors.length, 5);
+  assert.ok(parsed.competitors.every(record => record.assessmentStatus === 'verified'));
+  assert.ok(parsed.competitors.every(record => record.claimKind === 'hypothesis'));
+  assert.equal(parsed.competitors.filter(record => record.recheckStatus === 'needs_recheck').length, 4);
+  assert.ok(parsed.competitors.every(record => !record.readerReactionGap.includes('review_recheck_pending')));
+  assert.doesNotMatch(parsed.marketSummary.reviewObservations, /review_recheck_pending/);
+  assert.match(parsed.marketSummary.reviewObservations, /再確認待ち/);
+  assert.equal(new Set([
+    ...parsed.competitors.map(record => record.id),
+    ...parsed.marketSummary.publicSources.map(source => source.id),
+  ]).size, 11);
+
+  const preview = previewMarketResearchImport(createEmptyPlanningNotes(), parsed);
+  assert.equal(preview.canApply, true);
+  assert.deepEqual(preview.summary, {
+    sourceName: 'market-research-summary.md',
+    versionId: 'MARKET-001',
+    reviewedOn: '2026-08-14',
+    status: 'needs_confirmation',
+    competitorCount: 5,
+    publicSourceCount: 6,
+    reviewRecheckCount: 4,
+    unresearchedCount: 6,
+  });
+  assert.deepEqual(preview.diff, { additions: 6, unchanged: 0, changes: 0, deletions: 0 });
+  const applied = applyMarketResearchImport(createEmptyPlanningNotes(), parsed, { now: fixedNow });
+  const repeatedPreview = previewMarketResearchImport(applied, parsed);
+  assert.equal(repeatedPreview.canApply, true);
+  assert.equal(repeatedPreview.summarySkipped, true);
+  assert.equal(repeatedPreview.skippedCompetitorIds.length, 5);
+  assert.deepEqual(repeatedPreview.diff, { additions: 0, unchanged: 6, changes: 0, deletions: 0 });
+  assert.deepEqual(
+    applyMarketResearchImport(applied, parsed, {
+      now: () => new Date('2026-08-20T00:00:00.000Z'),
+    }),
+    applied,
+  );
+  const share = buildPlanningNotesSharePackage(applied, { now: fixedNow });
+  assert.equal(share.schemaVersion, 1);
+  assert.equal(share.data.version, 2);
+  assert.match(planningNotesShareToMarkdown(share), /MARKET-001|市場調査サマリー/);
+});
+
+test('市場調査Markdownの絶対パス・限定URL・同版異内容・同ID異内容を競合停止する', () => {
+  assert.throws(
+    () => parseMarketResearchSummaryMarkdown(marketResearchMarkdown(), {
+      sourceName: 'C:\\private\\market-research-summary.md',
+      now: fixedNow,
+    }),
+    /ファイル名だけ/,
+  );
+  assert.throws(
+    () => parseMarketResearchSummaryMarkdown(
+      marketResearchMarkdown().replace(
+        'https://example.com/source-1',
+        'https://example.com/source-1?token=private',
+      ),
+      { now: fixedNow },
+    ),
+    /期限付き・限定URL/,
+  );
+  const parsed = parseMarketResearchSummaryMarkdown(marketResearchMarkdown(), { now: fixedNow });
+  const applied = applyMarketResearchImport(createEmptyPlanningNotes(), parsed, { now: fixedNow });
+  const changedSummary = {
+    ...parsed,
+    marketSummary: { ...parsed.marketSummary, mainUsp: '別のUSP' },
+  };
+  const summaryConflict = previewMarketResearchImport(applied, changedSummary);
+  assert.equal(summaryConflict.canApply, false);
+  assert.equal(summaryConflict.conflicts[0].type, 'same_version_different_content');
+  assert.throws(
+    () => applyMarketResearchImport(applied, changedSummary, { now: fixedNow }),
+    PlanningNotesImportConflictError,
+  );
+
+  const changedRecord = {
+    ...parsed,
+    marketSummary: createEmptyPlanningNotes().marketSummary,
+    competitors: parsed.competitors.map((record, index) => index === 0
+      ? { ...record, bookTitle: '同じIDの別書名' }
+      : record),
+  };
+  const currentWithoutSummary = { ...applied, marketSummary: createEmptyPlanningNotes().marketSummary };
+  const recordConflict = previewMarketResearchImport(currentWithoutSummary, changedRecord);
+  assert.ok(recordConflict.conflicts.some(conflict => conflict.type === 'same_id_different_content'));
 });
