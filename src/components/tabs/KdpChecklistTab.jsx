@@ -277,6 +277,62 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
             <ExternalLink className="w-3.5 h-3.5" />KDP公式の配信日オプション
           </a>
         </div>
+
+        <details id="ebook-release-guide" className="mt-3 border-t border-white/10 pt-3 group" data-kdp-release-guide>
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-neon-cyan/30 bg-neon-cyan/5 px-3 py-2 font-bold text-neon-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan [&::-webkit-details-marker]:hidden">
+            <span>電子書籍の予約注文・ランキング・Kindle Unlimited</span>
+            <span className="shrink-0 text-[11px] font-normal text-muted-foreground group-open:hidden">解説を開く</span>
+            <span className="hidden shrink-0 text-[11px] font-normal text-muted-foreground group-open:inline">閉じる</span>
+          </summary>
+
+          <div className="mt-3 space-y-3" data-kdp-release-guide-content>
+            <p className="text-muted-foreground">
+              発売時刻・予約注文・KUは仕組みが別です。ランキングだけを目的にせず、読者へ分かりやすく案内するための基礎として確認してください。
+            </p>
+
+            <div className="grid gap-2 md:grid-cols-3">
+              <section className="rounded-lg border border-white/10 bg-black/20 p-3">
+                <h3 className="font-bold text-white">発売日は日本時間0:00固定ではありません</h3>
+                <p className="mt-1 text-muted-foreground">
+                  予約注文の発売日はGMT基準です。マーケットプレイスや処理状況で表示・計上時刻が前後するため、発売日に商品ページが購入可能になったことを確認してから案内しましょう。
+                </p>
+              </section>
+
+              <section className="rounded-lg border border-white/10 bg-black/20 p-3">
+                <h3 className="font-bold text-white">予約注文は発売前から反映されます</h3>
+                <p className="mt-1 text-muted-foreground">
+                  予約注文を設定すると商品ページが発売前に公開され、読者は発売日まで注文できます。KDP公式では、予約注文は発売前から販売ランキングやストア内表示へ影響すると説明されています。予約分が発売日にすべてまとめて加算される前提にはせず、発売後に購入できる案内も用意してください。順位は相対評価で、保証されません。
+                </p>
+              </section>
+
+              <section className="rounded-lg border border-white/10 bg-black/20 p-3">
+                <h3 className="font-bold text-white">KUはKENPで「読まれた量」を確認</h3>
+                <p className="mt-1 text-muted-foreground">
+                  Kindle Unlimitedでは、読者が初めて読んだページがKENPとして記録され、KUロイヤリティの計算に使われます。ダウンロードだけとは異なり、ランキングへの具体的な換算方法は公開されていません。
+                </p>
+              </section>
+            </div>
+
+            <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-amber-200">
+              購入・借り入れ・読書を、報酬などと引き換えに依頼してランキングを操作しないでください。誠実な案内と、読者に役立つ内容を優先します。
+            </div>
+
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/G201575300" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1 text-neon-cyan hover:text-neon-pink">
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />KDP公式：予約注文の設定
+              </a>
+              <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/G201499380" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1 text-neon-cyan hover:text-neon-pink">
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />KDP公式：電子書籍の予約注文
+              </a>
+              <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/G201648140" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1 text-neon-cyan hover:text-neon-pink">
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />KDP公式：販売ランキング
+              </a>
+              <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/G201541130" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1 text-neon-cyan hover:text-neon-pink">
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />KDP公式：KUロイヤリティ
+              </a>
+            </div>
+          </div>
+        </details>
       </div>
 
       {/* 進捗バー */}

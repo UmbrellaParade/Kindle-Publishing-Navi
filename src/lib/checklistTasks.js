@@ -52,7 +52,7 @@ export const KDP_PHASES = [
     label: 'フェーズ4：KDP登録',
     color: 'cyan',
     tasks: [
-      { id: 't40', title: 'KDPアカウントの本人情報・税務・支払設定と、配信方法を確認する', tool: 'KDPアカウント / 配信日オプション', note_default: '初出版の場合は早めに準備。発売日を指定する電子書籍は予約注文を確認', important: true },
+      { id: 't40', title: 'KDPアカウントの本人情報・税務・支払設定と、配信方法を確認する', tool: 'KDPアカウント / 配信日オプション', note_default: '初出版の場合は早めに準備。電子書籍の予約注文は発売前からランキングへ影響し、発売日に一括加算される前提ではない点も確認', important: true },
       { id: 't41', title: 'KDPにログインし「タイトルの新規作成」', tool: 'KDP公式サイト', note_default: '', important: false },
       { id: 't42', title: '本の詳細（タイトル、著者名、内容紹介など）を入力', tool: 'Gem1の出力をコピペ', note_default: '', important: false },
       { id: 't43a', title: '内容に合うカテゴリー候補（最大3つ）を設定', tool: 'カテゴリーチェック / KDP公式画面', note_default: '関連性を優先し、KDP画面で最終確認', important: false },
