@@ -1,4 +1,7 @@
 export const RELEASE_SCHEDULE_VERSION = 1;
+export const SCHEDULE_DATE_SOURCE_RELEASE_TARGET = 'release_target';
+export const SCHEDULE_DATE_SOURCE_PROVISIONAL = 'provisional';
+const CUSTOM_TASK_LIST_KEYS = ['_creation_custom', '_kdp_custom', '_custom'];
 
 // 発売日を 0 日目とした標準 8 週間プラン。
 // KDP の審査期間に余裕を持たせるため、出版申請は発売日の 14 日前を目安にする。
@@ -77,6 +80,48 @@ export function offsetDate(dateValue, offsetDays) {
   return formatDateOnly(date);
 }
 
+export function addCalendarMonths(dateValue, months = 1) {
+  const date = parseDateOnly(dateValue);
+  if (!date || !Number.isInteger(months)) {
+    throw new Error('正しい日付と月数を指定してください');
+  }
+
+  const originalDay = date.getUTCDate();
+  const firstDayOfTargetMonth = new Date(Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth() + months,
+    1,
+  ));
+  const lastDayOfTargetMonth = new Date(Date.UTC(
+    firstDayOfTargetMonth.getUTCFullYear(),
+    firstDayOfTargetMonth.getUTCMonth() + 1,
+    0,
+  )).getUTCDate();
+
+  firstDayOfTargetMonth.setUTCDate(Math.min(originalDay, lastDayOfTargetMonth));
+  return formatDateOnly(firstDayOfTargetMonth);
+}
+
+export function syncReleaseScheduleDrafts(currentDrafts, previousSaved, nextSaved) {
+  if (previousSaved.projectId !== nextSaved.projectId) {
+    return { ...nextSaved };
+  }
+
+  return {
+    ...currentDrafts,
+    projectId: nextSaved.projectId,
+    releaseDate: currentDrafts.releaseDate === previousSaved.releaseDate
+      ? nextSaved.releaseDate
+      : currentDrafts.releaseDate,
+    provisionalDate: currentDrafts.provisionalDate === previousSaved.provisionalDate
+      ? nextSaved.provisionalDate
+      : currentDrafts.provisionalDate,
+    releaseMethod: currentDrafts.releaseMethod === previousSaved.releaseMethod
+      ? nextSaved.releaseMethod
+      : currentDrafts.releaseMethod,
+  };
+}
+
 export function getScheduleWindow(releaseDate) {
   if (!parseDateOnly(releaseDate)) return null;
   const offsets = Object.values(RELEASE_TASK_OFFSETS);
@@ -141,6 +186,9 @@ export function applyReleaseSchedule(checklistData, releaseDate, options = {}) {
   }
 
   const overwriteManual = options.overwriteManual === true;
+  const scheduleSource = options.scheduleSource === SCHEDULE_DATE_SOURCE_PROVISIONAL
+    ? SCHEDULE_DATE_SOURCE_PROVISIONAL
+    : SCHEDULE_DATE_SOURCE_RELEASE_TARGET;
   const current = checklistData && typeof checklistData === 'object' ? checklistData : {};
   const next = { ...current };
   let updatedCount = 0;
@@ -167,11 +215,208 @@ export function applyReleaseSchedule(checklistData, releaseDate, options = {}) {
       due_date: offsetDate(releaseDate, offset),
       due_date_source: 'auto',
       due_date_offset: offset,
+      due_date_schedule_source: scheduleSource,
+      due_date_schedule_for: releaseDate,
     };
     updatedCount += 1;
   }
 
   return { data: next, updatedCount, preservedCount };
+}
+
+function resetTaskDateState(state, clearAll, targetScheduleSource) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    return { state, changed: false, preserved: false };
+  }
+
+  const hasDateMetadata = Boolean(state.due_date)
+    || Object.prototype.hasOwnProperty.call(state, 'due_date_source')
+    || Object.prototype.hasOwnProperty.call(state, 'due_date_offset')
+    || Object.prototype.hasOwnProperty.call(state, 'due_date_schedule_source')
+    || Object.prototype.hasOwnProperty.call(state, 'due_date_schedule_for');
+  if (!hasDateMetadata) return { state, changed: false, preserved: false };
+
+  const hasAutoMarker = state.due_date_source === 'auto'
+    || (!state.due_date_source && Number.isInteger(state.due_date_offset));
+  const storedScheduleSource = state.due_date_schedule_source === SCHEDULE_DATE_SOURCE_PROVISIONAL
+    ? SCHEDULE_DATE_SOURCE_PROVISIONAL
+    : SCHEDULE_DATE_SOURCE_RELEASE_TARGET;
+  const shouldClear = clearAll || (
+    hasAutoMarker
+    && (!targetScheduleSource || storedScheduleSource === targetScheduleSource)
+  );
+  if (!shouldClear) return { state, changed: false, preserved: Boolean(state.due_date) };
+
+  const nextState = { ...state, due_date: '' };
+  delete nextState.due_date_source;
+  delete nextState.due_date_offset;
+  delete nextState.due_date_schedule_source;
+  delete nextState.due_date_schedule_for;
+  return {
+    state: nextState,
+    changed: true,
+    clearedDate: Boolean(state.due_date),
+    preserved: false,
+  };
+}
+
+function resetCustomTaskList(tasks, clearAll, targetScheduleSource) {
+  if (!Array.isArray(tasks)) return { tasks, clearedCount: 0, preservedCount: 0 };
+
+  let clearedCount = 0;
+  let preservedCount = 0;
+  const nextTasks = tasks.map((task) => {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) return task;
+    const result = resetTaskDateState(task.state, clearAll, targetScheduleSource);
+    if (result.clearedDate) clearedCount += 1;
+    if (result.preserved) preservedCount += 1;
+    return result.changed ? { ...task, state: result.state } : task;
+  });
+
+  return { tasks: nextTasks, clearedCount, preservedCount };
+}
+
+export function resetReleaseScheduleDates(
+  checklistData,
+  {
+    clearAll = false,
+    customTaskLists = {},
+    scheduleSource = '',
+  } = {},
+) {
+  const current = checklistData && typeof checklistData === 'object' ? checklistData : {};
+  const next = { ...current };
+  let clearedCount = 0;
+  let preservedCount = 0;
+
+  for (const taskId of Object.keys(RELEASE_TASK_OFFSETS)) {
+    const state = current[taskId];
+    const result = resetTaskDateState(state, clearAll, scheduleSource);
+    if (result.changed) {
+      next[taskId] = result.state;
+      if (result.clearedDate) clearedCount += 1;
+    }
+    if (result.preserved) preservedCount += 1;
+  }
+
+  const nextCustomTaskLists = {};
+  for (const [key, tasks] of Object.entries(customTaskLists || {})) {
+    const result = resetCustomTaskList(tasks, clearAll, scheduleSource);
+    nextCustomTaskLists[key] = result.tasks;
+    clearedCount += result.clearedCount;
+    preservedCount += result.preservedCount;
+  }
+
+  return {
+    data: next,
+    customTaskLists: nextCustomTaskLists,
+    clearedCount,
+    preservedCount,
+  };
+}
+
+export function getReleaseScheduleSource(project) {
+  if (
+    project?.schedule_date_source === SCHEDULE_DATE_SOURCE_RELEASE_TARGET
+    || project?.schedule_date_source === SCHEDULE_DATE_SOURCE_PROVISIONAL
+  ) {
+    return project.schedule_date_source;
+  }
+  // 仮リリース日が存在しなかった旧版の逆算結果は正式日由来。
+  return project?.schedule_calculated_for ? SCHEDULE_DATE_SOURCE_RELEASE_TARGET : '';
+}
+
+function getEnvelopeCustomTaskLists(envelope) {
+  return Object.fromEntries(
+    CUSTOM_TASK_LIST_KEYS
+      .filter(key => Array.isArray(envelope?.[key]))
+      .map(key => [key, envelope[key]]),
+  );
+}
+
+export function buildReleaseScheduleUpdate(project, {
+  date,
+  source,
+  releaseMethod = '',
+  overwriteManual = false,
+  generatedAt = new Date().toISOString(),
+} = {}) {
+  if (!parseDateOnly(date)) throw new Error('逆算する日付を正しく入力してください');
+  if (
+    source !== SCHEDULE_DATE_SOURCE_RELEASE_TARGET
+    && source !== SCHEDULE_DATE_SOURCE_PROVISIONAL
+  ) {
+    throw new Error('日程の基準が正しくありません');
+  }
+  if (source === SCHEDULE_DATE_SOURCE_RELEASE_TARGET && !releaseMethod) {
+    throw new Error('正式な発売目標日で逆算する前に、配信方法を選んでください');
+  }
+
+  const { data, error } = readChecklistEnvelope(project?.checklist_data);
+  if (error) throw error;
+  const result = applyReleaseSchedule(data, date, {
+    overwriteManual,
+    scheduleSource: source,
+  });
+  const metadata = {
+    _schedule_version: RELEASE_SCHEDULE_VERSION,
+    _schedule_calculated_for: date,
+    _schedule_date_source: source,
+    _schedule_generated_at: generatedAt,
+    ...(source === SCHEDULE_DATE_SOURCE_RELEASE_TARGET ? { _schedule_mode: releaseMethod } : {}),
+  };
+  const updates = {
+    schedule_calculated_for: date,
+    schedule_date_source: source,
+    schedule_generated_at: generatedAt,
+    checklist_data: writeChecklistEnvelope(project?.checklist_data, result.data, metadata),
+  };
+
+  if (source === SCHEDULE_DATE_SOURCE_RELEASE_TARGET) {
+    updates.release_target_date = date;
+    updates.release_method = releaseMethod;
+    updates.schedule_mode = releaseMethod;
+  } else {
+    // 仮日からの逆算では正式日・KDP日付・配信方法を決定しない。
+    updates.provisional_release_date = date;
+  }
+
+  return { updates, result };
+}
+
+export function buildReleaseDateClearUpdate({ kind } = {}) {
+  if (kind !== 'official' && kind !== 'provisional') {
+    throw new Error('未設定に戻す日付の種類が正しくありません');
+  }
+
+  const updates = kind === 'provisional'
+    ? { provisional_release_date: '' }
+    : { release_target_date: '' };
+
+  return { updates };
+}
+
+export function buildReleaseTaskDatesResetUpdate(project, { clearAll = false } = {}) {
+  const { envelope, data, error } = readChecklistEnvelope(project?.checklist_data);
+  if (error) throw error;
+  const result = resetReleaseScheduleDates(data, {
+    clearAll,
+    customTaskLists: getEnvelopeCustomTaskLists(envelope),
+  });
+  return {
+    updates: {
+      schedule_calculated_for: '',
+      schedule_date_source: '',
+      schedule_generated_at: '',
+      checklist_data: writeChecklistEnvelope(project?.checklist_data, result.data, {
+        ...result.customTaskLists,
+        _schedule_calculated_for: '',
+        _schedule_date_source: '',
+        _schedule_generated_at: '',
+      }),
+    },
+    result,
+  };
 }
 
 export function countOverdueTasks(checklistData, todayValue) {

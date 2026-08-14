@@ -122,6 +122,9 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
       name: '一般向けガイド',
       manuscript: '本文',
       critique_context: critiqueContext(),
+      provisional_release_date: '2026-09-14',
+      schedule_calculated_for: '2026-09-14',
+      schedule_date_source: 'provisional',
       post_publication_notes: 'オーディオブック化と続編を検討',
       categories: JSON.stringify([{ value: 'ノンフィクション', custom: '', memo: '', book_type: '実用・ビジネス', theme: '仕事術' }]),
       aplus_image_url: 'local-image:img1',
@@ -148,6 +151,8 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
   assert.equal(result.data.projects[0].manuscript, '本文');
   assert.equal(JSON.parse(result.data.projects[0].critique_context).plannedPrice, '500円を検討');
   assert.equal(result.data.projects[0].post_publication_notes, 'オーディオブック化と続編を検討');
+  assert.equal(result.data.projects[0].provisional_release_date, '2026-09-14');
+  assert.equal(result.data.projects[0].schedule_date_source, 'provisional');
   assert.equal(JSON.parse(result.data.projects[0].categories)[0].theme, '仕事術');
   assert.equal(result.data.projects[0].aplus_image_url, 'local-image:img1');
   assert.equal(JSON.parse(result.data.projects[0].kdp_meta).aplus.version, 1);
@@ -171,6 +176,21 @@ test('不明な構造や不正な画像をimport前に拒否する', () => {
   assert.throws(
     () => validateDataBackup(backup({ selectedProjectId: '存在しないID' })),
     BackupValidationError,
+  );
+  assert.throws(
+    () => validateDataBackup(backup({ projects: [{ id: 'p1', name: '本', provisional_release_date: '2026-02-30' }] })),
+    error => error instanceof BackupValidationError
+      && error.path === 'backup.data.projects[0].provisional_release_date',
+  );
+  assert.throws(
+    () => validateDataBackup(backup({ projects: [{ id: 'p1', name: '本', schedule_date_source: 'unknown' }] })),
+    error => error instanceof BackupValidationError
+      && error.path === 'backup.data.projects[0].schedule_date_source',
+  );
+  assert.throws(
+    () => validateDataBackup(backup({ projects: [{ id: 'p1', name: '本', schedule_date_source: 'provisional' }] })),
+    error => error instanceof BackupValidationError
+      && error.path === 'backup.data.projects[0].schedule_calculated_for',
   );
   assert.throws(
     () => validateDataBackup(backup({ images: [{ ...image('img1'), dataUrl: 'https://example.com/a.png' }] })),
@@ -296,6 +316,219 @@ test('本の前提はバックアップのmerge・replace・旧版互換で保�
   });
   const roundTrip = await createDataBackup({ storage, imageStore, now });
   assert.equal(roundTrip.data.projects[0].critique_context, incomingRaw);
+});
+
+test('仮リリース日はバックアップのmerge・replace・旧版互換で保持される', async () => {
+  const current = backup({
+    projects: [{
+      id: 'p1',
+      name: '現在の本',
+      provisional_release_date: '2026-09-14',
+      schedule_calculated_for: '2026-09-14',
+      schedule_date_source: 'provisional',
+    }],
+  });
+  const oldBackup = backup({ projects: [{ id: 'p1', name: '旧版の本' }] });
+  const mergedWithOld = buildDataRestorePlan(current, oldBackup, 'merge');
+  assert.equal(mergedWithOld.projects[0].provisional_release_date, '2026-09-14');
+  assert.equal(mergedWithOld.projects[0].schedule_date_source, 'provisional');
+
+  const incoming = backup({
+    projects: [{
+      id: 'p1',
+      name: '復元する本',
+      provisional_release_date: '2026-10-31',
+      schedule_calculated_for: '2026-10-31',
+      schedule_date_source: 'release_target',
+    }],
+  });
+  const merged = buildDataRestorePlan(current, incoming, 'merge');
+  assert.equal(merged.projects[0].provisional_release_date, '2026-10-31');
+  assert.equal(merged.projects[0].schedule_date_source, 'release_target');
+
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify(current.data.projects),
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  await importDataBackup(incoming, { mode: 'replace', storage, imageStore, now });
+  const roundTrip = await createDataBackup({ storage, imageStore, now });
+  assert.equal(roundTrip.data.projects[0].provisional_release_date, '2026-10-31');
+  assert.equal(roundTrip.data.projects[0].schedule_date_source, 'release_target');
+});
+
+test('旧バックアップの正式日程をmergeすると仮日由来の印だけを残さない', () => {
+  const current = backup({
+    projects: [{
+      id: 'p1',
+      name: '現在の本',
+      provisional_release_date: '2026-09-14',
+      schedule_calculated_for: '2026-09-14',
+      schedule_date_source: 'provisional',
+      schedule_generated_at: '2026-08-14T00:00:00.000Z',
+      checklist_data: JSON.stringify({
+        _data: { t01: { due_date: '2026-07-20', due_date_source: 'auto' } },
+        _schedule_calculated_for: '2026-09-14',
+        _schedule_date_source: 'provisional',
+      }),
+    }],
+  });
+  const legacyOfficial = backup({
+    projects: [{
+      id: 'p1',
+      name: '旧版の正式日程',
+      release_target_date: '2026-10-14',
+      schedule_calculated_for: '2026-10-14',
+      checklist_data: JSON.stringify({
+        _data: { t01: { due_date: '2026-08-19', due_date_source: 'auto' } },
+        _schedule_calculated_for: '2026-10-14',
+      }),
+    }],
+  });
+
+  const merged = buildDataRestorePlan(current, legacyOfficial, 'merge').projects[0];
+  assert.equal(merged.schedule_calculated_for, '2026-10-14');
+  assert.equal(merged.schedule_date_source, 'release_target');
+  assert.equal(merged.schedule_generated_at, '');
+  assert.equal(JSON.parse(merged.checklist_data)._data.t01.due_date, '2026-08-19');
+
+  const legacyReset = backup({
+    projects: [{ id: 'p1', name: '旧版のリセット済み本', schedule_calculated_for: '' }],
+  });
+  const resetMerged = buildDataRestorePlan(current, legacyReset, 'merge').projects[0];
+  assert.equal(resetMerged.schedule_calculated_for, '');
+  assert.equal(resetMerged.schedule_date_source, '');
+  assert.equal(resetMerged.schedule_generated_at, '');
+
+  const beforeScheduleFeature = backup({
+    projects: [{
+      id: 'p1',
+      name: '逆算機能導入前の本',
+      checklist_data: JSON.stringify({ t01: { due_date: '', note: '旧チェックリスト' } }),
+    }],
+  });
+  const mergedWithoutSchedule = buildDataRestorePlan(current, beforeScheduleFeature, 'merge').projects[0];
+  assert.equal(mergedWithoutSchedule.schedule_calculated_for, '');
+  assert.equal(mergedWithoutSchedule.schedule_date_source, '');
+  assert.equal(mergedWithoutSchedule.schedule_generated_at, '');
+  assert.equal(JSON.parse(mergedWithoutSchedule.checklist_data).t01.note, '旧チェックリスト');
+
+  const downgradedProvisional = backup({
+    projects: [{
+      id: 'p1',
+      name: '旧版で再書き出した本',
+      schedule_calculated_for: '2026-09-14',
+      checklist_data: JSON.stringify({
+        _data: { t01: { due_date: '2026-07-20', due_date_source: 'auto' } },
+        _schedule_calculated_for: '2026-09-14',
+        _schedule_date_source: 'provisional',
+        _schedule_generated_at: '2026-08-14T01:00:00.000Z',
+      }),
+    }],
+  });
+  const downgradedMerged = buildDataRestorePlan(current, downgradedProvisional, 'merge').projects[0];
+  assert.equal(downgradedMerged.schedule_calculated_for, '2026-09-14');
+  assert.equal(downgradedMerged.schedule_date_source, 'provisional');
+  assert.equal(downgradedMerged.schedule_generated_at, '2026-08-14T01:00:00.000Z');
+});
+
+test('旧版で再書き出した仮日程はreplaceでもchecklistから逆算元を復元する', async () => {
+  const downgradedProvisional = backup({
+    projects: [{
+      id: 'p1',
+      name: '旧版で再書き出した本',
+      provisional_release_date: '2026-09-14',
+      schedule_calculated_for: '2026-09-14',
+      checklist_data: JSON.stringify({
+        _data: { t01: { due_date: '2026-07-20', due_date_source: 'auto' } },
+        _schedule_calculated_for: '2026-09-14',
+        _schedule_date_source: 'provisional',
+        _schedule_generated_at: '2026-08-14T01:00:00.000Z',
+      }),
+    }],
+  });
+
+  const validated = validateDataBackup(downgradedProvisional).data.projects[0];
+  assert.equal(validated.schedule_calculated_for, '2026-09-14');
+  assert.equal(validated.schedule_date_source, 'provisional');
+  assert.equal(validated.schedule_generated_at, '2026-08-14T01:00:00.000Z');
+
+  const current = backup({ projects: [{ id: 'old', name: '置換前の本' }] });
+  const replaced = buildDataRestorePlan(current, downgradedProvisional, 'replace').projects[0];
+  assert.equal(replaced.schedule_calculated_for, '2026-09-14');
+  assert.equal(replaced.schedule_date_source, 'provisional');
+  assert.equal(replaced.schedule_generated_at, '2026-08-14T01:00:00.000Z');
+
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify(current.data.projects),
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  await importDataBackup(downgradedProvisional, { mode: 'replace', storage, imageStore, now });
+  const roundTrip = await createDataBackup({ storage, imageStore, now });
+  assert.equal(roundTrip.data.projects[0].schedule_calculated_for, '2026-09-14');
+  assert.equal(roundTrip.data.projects[0].schedule_date_source, 'provisional');
+  assert.equal(roundTrip.data.projects[0].schedule_generated_at, '2026-08-14T01:00:00.000Z');
+});
+
+test('checklistからの逆算元復元は旧正式日と明示リセットを誤分類しない', () => {
+  const legacyOfficial = backup({
+    projects: [{
+      id: 'p1',
+      name: '仮日機能より前の正式日程',
+      release_target_date: '2026-10-14',
+      schedule_calculated_for: '2026-10-14',
+      checklist_data: JSON.stringify({
+        _data: {},
+        _schedule_calculated_for: '2026-10-14',
+      }),
+    }],
+  });
+  const legacyReplaced = buildDataRestorePlan(
+    backup({ projects: [{ id: 'old', name: '置換前の本' }] }),
+    legacyOfficial,
+    'replace',
+  ).projects[0];
+  assert.equal(legacyReplaced.schedule_calculated_for, '2026-10-14');
+  assert.equal(legacyReplaced.schedule_date_source, undefined);
+
+  const explicitlyReset = validateDataBackup(backup({
+    projects: [{
+      id: 'p1',
+      name: '明示リセット済みの本',
+      schedule_calculated_for: '',
+      schedule_date_source: '',
+      schedule_generated_at: '',
+      checklist_data: JSON.stringify({
+        _data: {},
+        _schedule_calculated_for: '2026-09-14',
+        _schedule_date_source: 'provisional',
+        _schedule_generated_at: '2026-08-14T01:00:00.000Z',
+      }),
+    }],
+  })).data.projects[0];
+  assert.equal(explicitlyReset.schedule_calculated_for, '');
+  assert.equal(explicitlyReset.schedule_date_source, '');
+  assert.equal(explicitlyReset.schedule_generated_at, '');
+
+  const staleChecklist = validateDataBackup(backup({
+    projects: [{
+      id: 'p1',
+      name: '食い違う旧メタデータの本',
+      schedule_calculated_for: '2026-10-14',
+      checklist_data: JSON.stringify({
+        _data: {},
+        _schedule_calculated_for: '2026-09-14',
+        _schedule_date_source: 'provisional',
+      }),
+    }],
+  })).data.projects[0];
+  assert.equal(staleChecklist.schedule_calculated_for, '2026-10-14');
+  assert.equal(staleChecklist.schedule_date_source, undefined);
 });
 
 test('読み込めない本の前提は通常バックアップから分離し、正常データで復旧できる', async () => {

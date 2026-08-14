@@ -6,6 +6,11 @@ import {
   serializeCritiqueHistory,
 } from './critiqueHistory.js';
 import { readCritiqueContext } from './critiqueContext.js';
+import {
+  SCHEDULE_DATE_SOURCE_PROVISIONAL,
+  SCHEDULE_DATE_SOURCE_RELEASE_TARGET,
+  parseDateOnly,
+} from './releaseSchedule.js';
 
 export const BACKUP_SCHEMA_VERSION = 1;
 export const CRITIQUE_RECOVERY_SCHEMA_VERSION = 1;
@@ -45,11 +50,13 @@ export const PROJECT_FIELD_ALLOWLIST = Object.freeze([
   'cover_image_url',
   'aplus_image_url',
   'kdp_meta',
+  'provisional_release_date',
   'release_target_date',
   'release_method',
   'release_date',
   'schedule_calculated_for',
   'schedule_generated_at',
+  'schedule_date_source',
   'schedule_mode',
   'created_date',
   'updated_date',
@@ -210,6 +217,55 @@ export class BackupRecoveryRequiredError extends BackupValidationError {
   }
 }
 
+function readChecklistScheduleMetadata(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+
+  let envelope;
+  try {
+    envelope = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(envelope)) return null;
+
+  const source = envelope._schedule_date_source;
+  const calculatedFor = envelope._schedule_calculated_for;
+  if (
+    source !== SCHEDULE_DATE_SOURCE_RELEASE_TARGET
+    && source !== SCHEDULE_DATE_SOURCE_PROVISIONAL
+  ) {
+    return null;
+  }
+  if (typeof calculatedFor !== 'string' || !parseDateOnly(calculatedFor)) return null;
+
+  return {
+    source,
+    calculatedFor,
+    generatedAt: typeof envelope._schedule_generated_at === 'string'
+      ? envelope._schedule_generated_at
+      : '',
+  };
+}
+
+function restoreDowngradedScheduleMetadata(project) {
+  if (Object.prototype.hasOwnProperty.call(project, 'schedule_date_source')) return;
+
+  const checklistSchedule = readChecklistScheduleMetadata(project.checklist_data);
+  if (!checklistSchedule) return;
+
+  const topCalculatedFor = typeof project.schedule_calculated_for === 'string'
+    && parseDateOnly(project.schedule_calculated_for)
+    ? project.schedule_calculated_for
+    : '';
+  if (topCalculatedFor && topCalculatedFor !== checklistSchedule.calculatedFor) return;
+
+  project.schedule_calculated_for = topCalculatedFor || checklistSchedule.calculatedFor;
+  project.schedule_date_source = checklistSchedule.source;
+  if (!Object.prototype.hasOwnProperty.call(project, 'schedule_generated_at')) {
+    project.schedule_generated_at = checklistSchedule.generatedAt;
+  }
+}
+
 function normalizeProject(
   project,
   path,
@@ -240,6 +296,18 @@ function normalizeProject(
       normalized[field] = normalizeCritiqueContextField(value, `${path}.${field}`, {
         allowCorruptCritiqueContext,
       });
+    } else if (field === 'provisional_release_date') {
+      if (value && !parseDateOnly(value)) fail(`${path}.${field}`, '日付は YYYY-MM-DD 形式の実在日で指定してください');
+      normalized[field] = value;
+    } else if (field === 'schedule_date_source') {
+      if (
+        value
+        && value !== SCHEDULE_DATE_SOURCE_RELEASE_TARGET
+        && value !== SCHEDULE_DATE_SOURCE_PROVISIONAL
+      ) {
+        fail(`${path}.${field}`, '日程の基準は release_target または provisional で指定してください');
+      }
+      normalized[field] = value;
     } else {
       normalized[field] = value;
     }
@@ -247,6 +315,19 @@ function normalizeProject(
 
   assertString(normalized.id, `${path}.id`, { allowEmpty: false });
   assertString(normalized.name, `${path}.name`, { allowEmpty: false });
+  // 旧版アプリは新しい top-level source を書き出せなくても、
+  // checklist_data 内の逆算メタデータは文字列のまま保持します。
+  // 全置換でも仮日由来を正式日由来へ誤分類しないよう、安全に復元します。
+  restoreDowngradedScheduleMetadata(normalized);
+  if (
+    normalized.schedule_date_source
+    && !parseDateOnly(normalized.schedule_calculated_for)
+  ) {
+    fail(
+      `${path}.schedule_calculated_for`,
+      '日程の基準を保存する場合は、実在する基準日も YYYY-MM-DD 形式で指定してください',
+    );
+  }
   return normalized;
 }
 
@@ -642,8 +723,50 @@ function mergeProjectKdpMeta(currentValue, incomingValue) {
   return JSON.stringify({ ...current, ...incoming });
 }
 
+function mergeProjectScheduleBundle(right, merged) {
+  const hasIncomingCalculatedFor = Object.prototype.hasOwnProperty.call(
+    right,
+    'schedule_calculated_for',
+  );
+  const hasIncomingChecklist = Object.prototype.hasOwnProperty.call(right, 'checklist_data');
+  if (!hasIncomingCalculatedFor && !hasIncomingChecklist) return;
+
+  const incomingEnvelope = hasIncomingChecklist
+    ? parsePlainJsonObject(right.checklist_data)
+    : null;
+  const rawCalculatedFor = hasIncomingCalculatedFor
+    ? right.schedule_calculated_for
+    : incomingEnvelope?._schedule_calculated_for;
+  const incomingCalculatedFor = typeof rawCalculatedFor === 'string' && parseDateOnly(rawCalculatedFor)
+    ? rawCalculatedFor
+    : '';
+  const topLevelSource = right.schedule_date_source;
+  const incomingSource = (
+    topLevelSource === SCHEDULE_DATE_SOURCE_RELEASE_TARGET
+    || topLevelSource === SCHEDULE_DATE_SOURCE_PROVISIONAL
+  ) ? topLevelSource : incomingEnvelope?._schedule_date_source;
+  const rawGeneratedAt = Object.prototype.hasOwnProperty.call(right, 'schedule_generated_at')
+    ? right.schedule_generated_at
+    : incomingEnvelope?._schedule_generated_at;
+
+  merged.schedule_calculated_for = incomingCalculatedFor;
+  if (
+    incomingSource === SCHEDULE_DATE_SOURCE_RELEASE_TARGET
+    || incomingSource === SCHEDULE_DATE_SOURCE_PROVISIONAL
+  ) {
+    merged.schedule_date_source = incomingSource;
+  } else {
+    // 仮日が存在しなかった旧バックアップの逆算結果は正式日由来。
+    merged.schedule_date_source = incomingCalculatedFor
+      ? SCHEDULE_DATE_SOURCE_RELEASE_TARGET
+      : '';
+  }
+  merged.schedule_generated_at = typeof rawGeneratedAt === 'string' ? rawGeneratedAt : '';
+}
+
 function mergeProject(left, right) {
   const merged = { ...left, ...right };
+  mergeProjectScheduleBundle(right, merged);
   if (Object.prototype.hasOwnProperty.call(right, 'kdp_meta')) {
     merged.kdp_meta = mergeProjectKdpMeta(left.kdp_meta, right.kdp_meta);
   }
