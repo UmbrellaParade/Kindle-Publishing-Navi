@@ -48,6 +48,7 @@ import { normalizePlanningViewSection } from '@/lib/viewResumeState';
 import {
   PLANNING_NOTE_STATUSES,
   PLANNING_CHAPTER_NODE_TYPES,
+  PLANNING_OUTLINE_SNAPSHOT_KINDS,
   PLANNING_NOTES_WARNING_BYTES,
   PLANNING_SOURCE_PRIORITIES,
   applyMarketResearchImport,
@@ -57,6 +58,7 @@ import {
   clearInstructionCanonical,
   createPlanningRecord,
   createPlanningChapterRecord,
+  createPlanningOutlineSnapshot,
   deletePlanningRecord,
   duplicatePlanningRecord,
   estimatePlanningNotesBytes,
@@ -64,20 +66,24 @@ import {
   findMarketResearchRestrictedData,
   findPlanningNotesSensitiveData,
   flattenPlanningChapterTree,
+  flattenPlanningOutlineSnapshot,
   formatPlanningDateTimeJst,
   getPlanningMarketMetrics,
+  getConfirmedPlanningOutline,
   getNextPlanningChapterOrder,
   getPlanningChapterNodeLabel,
   getPlanningChapterParentOptions,
   movePlanningChapter,
   parseMarketResearchSummaryMarkdown,
   planningNotesShareToMarkdown,
+  planningOutlineMatchesSnapshot,
   previewMarketResearchImport,
   readPlanningNotes,
   savePlanningMarketSummary,
   savePlanningConcept,
   serializePlanningNotes,
   sortPlanningRecordsNewest,
+  sortPlanningOutlineSnapshotsNewest,
   upsertPlanningRecord,
   withdrawPlanningDecision,
 } from '@/lib/planningNotes';
@@ -95,6 +101,12 @@ const SECTION_META = {
   instructionVersions: { label: '執筆設計・GPTs指示書', icon: FileText },
   decisions: { label: '意思決定・版履歴', icon: History },
 };
+
+const OUTLINE_VIEW_META = Object.freeze({
+  draft: { label: '仮目次', description: '編集中', icon: Pencil },
+  confirmed: { label: '確定目次', description: '現在使う目次', icon: ShieldCheck },
+  history: { label: '過去の目次', description: '保存履歴', icon: History },
+});
 
 const FORM_FIELDS = {
   concept: [
@@ -385,6 +397,111 @@ function RecordDetailDialog({ detail, chapters, onClose }) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function OutlineSnapshotDialog({ value, busy, onChange, onSave, onClose }) {
+  const kindLabel = PLANNING_OUTLINE_SNAPSHOT_KINDS[value?.kind] || '目次';
+  return (
+    <Dialog open={Boolean(value)} onOpenChange={open => { if (!open && !busy) onClose(); }}>
+      <DialogContent className="max-w-xl" style={{ background: '#151527', border: '1px solid #2a2a4a' }}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-neon-cyan">
+            {value?.kind === 'confirmed' ? <ShieldCheck className="h-5 w-5" aria-hidden="true" /> : <History className="h-5 w-5" aria-hidden="true" />}
+            {value?.kind === 'confirmed' ? 'この仮目次を確定目次にする' : '今の仮目次を履歴に保存'}
+          </DialogTitle>
+          <DialogDescription>
+            {value?.kind === 'confirmed'
+              ? '今の階層を読み取り専用の確定目次として保存します。仮目次と過去の目次は消えません。'
+              : 'あとで見返せる読み取り専用の保存版を作ります。現在の仮目次はそのまま編集できます。'}
+          </DialogDescription>
+        </DialogHeader>
+        {value && <div className="space-y-4">
+          <div className="rounded-lg border border-neon-cyan/20 bg-neon-cyan/5 p-3 text-xs leading-relaxed text-muted-foreground">
+            <p><span className="font-bold text-foreground">現在採用中の内容：</span>{value.chapterCount}件の部・章・話・節</p>
+            <p className="mt-1"><span className="font-bold text-foreground">履歴として残るもの：</span>「採用しない」にした項目も含む、今の目次全体</p>
+            <p className="mt-1"><span className="font-bold text-foreground">消えるもの：</span>ありません</p>
+            {value.kind === 'confirmed' && <p className="mt-1"><span className="font-bold text-foreground">変わるもの：</span>「現在使う確定目次」の指定だけです。前の確定目次は履歴へ残ります。</p>}
+          </div>
+          <label className="block space-y-1 text-sm font-bold text-foreground">
+            <span>版の名前（空欄でもOK）</span>
+            <input
+              value={value.label}
+              onChange={event => onChange({ ...value, label: event.target.value })}
+              className={INPUT_CLASS}
+              maxLength={200}
+              placeholder={kindLabel}
+            />
+          </label>
+          <label className="block space-y-1 text-sm font-bold text-foreground">
+            <span>変更メモ（任意）</span>
+            <textarea
+              value={value.note}
+              onChange={event => onChange({ ...value, note: event.target.value })}
+              className={TEXTAREA_CLASS}
+              placeholder="例：第二部を追加し、第一話と第二話の順番を見直した"
+            />
+          </label>
+          <p className="text-xs leading-relaxed text-amber-200">
+            各項目の「本人承認済み」は内容確認です。ここで作る「確定目次」は、本全体で現在使う目次の保存版です。
+          </p>
+        </div>}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={busy} className="min-h-11">キャンセル</Button>
+          <Button type="button" onClick={onSave} disabled={busy} className="min-h-11 bg-neon-cyan/20 text-neon-cyan">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}
+            {value?.kind === 'confirmed' ? '確定目次として保存' : '履歴に保存'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OutlineSnapshotTree({ snapshot, current = false, includeRejected = false }) {
+  if (!snapshot) return null;
+  const rows = flattenPlanningOutlineSnapshot(snapshot, { includeRejected });
+  const visibleRecords = rows.filter(({ record }) => includeRejected || record.status !== 'rejected');
+  const counts = visibleRecords.reduce((result, { record }) => ({
+    ...result,
+    [record.nodeType]: (result[record.nodeType] || 0) + 1,
+  }), {});
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <MetaBadge icon={snapshot.kind === 'confirmed' ? ShieldCheck : History} tone={current ? 'canonical' : 'latest'}>
+          {current ? '現在使う確定目次' : PLANNING_OUTLINE_SNAPSHOT_KINDS[snapshot.kind]}
+        </MetaBadge>
+        <span className="text-sm font-black text-foreground">{snapshot.label}</span>
+        <span className="text-[11px] text-muted-foreground">保存日時：{formatPlanningDateTimeJst(snapshot.createdAt)}</span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        部 {counts.part || 0}・章 {counts.chapter || 0}・話 {counts.episode || 0}・節 {counts.section || 0}
+      </p>
+      {snapshot.note && <p className="whitespace-pre-wrap rounded-lg border border-white/10 bg-black/10 p-3 text-sm leading-relaxed text-foreground">{snapshot.note}</p>}
+      {visibleRecords.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-white/15 p-4 text-center text-sm text-muted-foreground">表示する構成項目はありません。</p>
+      ) : (
+        <div className="space-y-2">
+          {visibleRecords.map(({ record, depth }) => (
+            <article
+              key={record.id}
+              className="rounded-lg border border-white/10 bg-white/[0.025] p-3"
+              style={{ marginLeft: `${Math.min(depth, 3) * 8}px` }}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
+                  {getPlanningChapterNodeLabel(record.nodeType)}
+                </span>
+                <span className="font-bold text-foreground">{record.title || '無題'}</span>
+                {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
+              </div>
+              {record.role && <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{record.role}</p>}
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1371,6 +1488,8 @@ export default function PlanningNotesTab({
   const [marketEditor, setMarketEditor] = useState(null);
   const [marketImport, setMarketImport] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [outlineView, setOutlineView] = useState('draft');
+  const [outlineDialog, setOutlineDialog] = useState(null);
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [query, setQuery] = useState('');
@@ -1385,6 +1504,8 @@ export default function PlanningNotesTab({
   const sectionNavScrollRef = useRef(null);
   const sectionButtonRefs = useRef(new Map());
   const marketImportInputRef = useRef(null);
+  const outlineTablistScrollRef = useRef(null);
+  const outlineTabRefs = useRef(new Map());
   const activeSectionRef = useRef(activeSection);
 
   const selectActiveSection = section => {
@@ -1407,6 +1528,8 @@ export default function PlanningNotesTab({
     setMarketEditor(null);
     setMarketImport(null);
     setDetail(null);
+    setOutlineView('draft');
+    setOutlineDialog(null);
     const restoredSection = normalizePlanningViewSection(initialSection);
     activeSectionRef.current = restoredSection;
     setActiveSection(restoredSection);
@@ -1487,8 +1610,58 @@ export default function PlanningNotesTab({
     };
   }, [activeSection]);
 
+  useEffect(() => {
+    if (activeSection !== 'chapters') return undefined;
+    const container = outlineTablistScrollRef.current;
+    const button = outlineTabRefs.current.get(outlineView);
+    if (!container || !button) return undefined;
+    const scrollActiveOutlineTab = () => {
+      const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+      const targetLeft = button.offsetLeft - ((container.clientWidth - button.offsetWidth) / 2);
+      container.scrollTo({
+        left: Math.min(maxLeft, Math.max(0, targetLeft)),
+        top: container.scrollTop,
+        behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      });
+    };
+    const animationFrameId = window.requestAnimationFrame(scrollActiveOutlineTab);
+    window.addEventListener('resize', scrollActiveOutlineTab);
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+      window.removeEventListener('resize', scrollActiveOutlineTab);
+    };
+  }, [activeSection, outlineView]);
+
   const chapterRows = useMemo(() => flattenPlanningChapterTree(data), [data]);
   const chapters = useMemo(() => chapterRows.map(({ record }) => record), [chapterRows]);
+  const outlineSnapshots = useMemo(
+    () => sortPlanningOutlineSnapshotsNewest(data),
+    [data],
+  );
+  const pastOutlineSnapshots = useMemo(
+    () => outlineSnapshots.filter(snapshot => snapshot.id !== data.confirmedOutlineId),
+    [data.confirmedOutlineId, outlineSnapshots],
+  );
+  const confirmedOutline = useMemo(
+    () => getConfirmedPlanningOutline(data),
+    [data],
+  );
+  const draftMatchesConfirmed = useMemo(
+    () => Boolean(confirmedOutline && planningOutlineMatchesSnapshot(data, confirmedOutline)),
+    [data, confirmedOutline],
+  );
+  const latestDraftSnapshot = useMemo(
+    () => outlineSnapshots.find(snapshot => snapshot.kind === 'draft') || null,
+    [outlineSnapshots],
+  );
+  const draftMatchesLatestSavedDraft = useMemo(
+    () => Boolean(latestDraftSnapshot && planningOutlineMatchesSnapshot(data, latestDraftSnapshot)),
+    [data, latestDraftSnapshot],
+  );
+  const activeOutlineChapterCount = useMemo(
+    () => data.chapters.filter(chapter => chapter.status !== 'rejected').length,
+    [data.chapters],
+  );
   const usageBytes = useMemo(
     () => estimatePlanningNotesBytes(project?.planning_notes || serializePlanningNotes(data)),
     [project?.planning_notes, data],
@@ -1573,6 +1746,26 @@ export default function PlanningNotesTab({
   const canApplyResult = (projectId, generation) => (
     activeProjectIdRef.current === projectId && operationGenerationRef.current === generation
   );
+
+  const selectOutlineView = (view, { focus = false } = {}) => {
+    if (!OUTLINE_VIEW_META[view]) return;
+    setOutlineView(view);
+    setStatusMessage(`${OUTLINE_VIEW_META[view].label}を表示しました`);
+    if (focus) window.requestAnimationFrame(() => outlineTabRefs.current.get(view)?.focus());
+  };
+
+  const handleOutlineTabKeyDown = (event, currentView) => {
+    const views = Object.keys(OUTLINE_VIEW_META);
+    const currentIndex = views.indexOf(currentView);
+    let nextIndex = currentIndex;
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % views.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + views.length) % views.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = views.length - 1;
+    else return;
+    event.preventDefault();
+    selectOutlineView(views[nextIndex], { focus: true });
+  };
 
   const persist = async (buildNext, successMessage, { closeEditor = true } = {}) => {
     if (!project?.id || busy) return null;
@@ -1786,6 +1979,41 @@ export default function PlanningNotesTab({
       expectedRevision: data.chapterOrderRevision,
     }), `「${record.title || '無題の構成項目'}」を${direction === 'up' ? '上' : '下'}へ移動しました`, { closeEditor: false });
     if (next) setData(next);
+  };
+
+  const openOutlineSnapshotDialog = kind => {
+    if (activeOutlineChapterCount === 0) {
+      toast.error('採用する部・章・話・節を1件以上作ってから保存してください');
+      return;
+    }
+    const nextKindNumber = outlineSnapshots.filter(snapshot => snapshot.kind === kind).length + 1;
+    setOutlineDialog({
+      projectId: project.id,
+      kind,
+      label: kind === 'confirmed' ? `確定目次 v${nextKindNumber}` : `仮目次メモ ${nextKindNumber}`,
+      note: '',
+      chapterCount: activeOutlineChapterCount,
+      expectedOutlineRevision: data.outlineRevision,
+      expectedChapterOrderRevision: data.chapterOrderRevision,
+    });
+  };
+
+  const saveOutlineSnapshot = async () => {
+    if (!outlineDialog || outlineDialog.projectId !== project.id) return;
+    const kind = outlineDialog.kind;
+    const next = await persist(current => createPlanningOutlineSnapshot(current, {
+      kind,
+      label: outlineDialog.label,
+      note: outlineDialog.note,
+    }, {
+      expectedOutlineRevision: outlineDialog.expectedOutlineRevision,
+      expectedChapterOrderRevision: outlineDialog.expectedChapterOrderRevision,
+    }), kind === 'confirmed'
+      ? 'この仮目次を、現在使う確定目次として保存しました'
+      : '今の仮目次を過去の目次へ保存しました', { closeEditor: false });
+    if (!next) return;
+    setOutlineDialog(null);
+    selectOutlineView(kind === 'confirmed' ? 'confirmed' : 'history', { focus: true });
   };
 
   const exportShare = (format) => {
@@ -2055,7 +2283,7 @@ export default function PlanningNotesTab({
               <p className="mt-2 text-sm text-muted-foreground">おすすめは「企画メモを書く」から。決まっていない項目は空欄のまま保存できます。</p>
               <div className="mx-auto mt-5 grid max-w-3xl gap-3 sm:grid-cols-3">
                 <Button type="button" onClick={() => { selectActiveSection('concept'); openConcept(); }} className="min-h-14 bg-neon-cyan/20 text-neon-cyan"><Lightbulb />企画メモを書く</Button>
-                <Button type="button" variant="outline" onClick={() => { selectActiveSection('chapters'); openNewRecord('chapters', { nodeType: 'part' }); }} className="min-h-14 border-neon-pink/35 text-neon-pink"><ClipboardList />目次の構成を作る</Button>
+                <Button type="button" variant="outline" onClick={() => { selectActiveSection('chapters'); selectOutlineView('draft'); openNewRecord('chapters', { nodeType: 'part' }); }} className="min-h-14 border-neon-pink/35 text-neon-pink"><ClipboardList />目次の構成を作る</Button>
                 <Button type="button" variant="outline" onClick={() => { selectActiveSection('interviews'); openNewRecord('interviews'); }} className="min-h-14 border-amber-400/35 text-amber-200"><MessageSquareText />取材を1問記録</Button>
               </div>
             </div>
@@ -2184,21 +2412,161 @@ export default function PlanningNotesTab({
                   : '本人承認済みは直接上書きせず、新しい案として残します。'}
               </p>
             </div>
-            {activeSection === 'chapters' ? (
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" onClick={() => openNewRecord('chapters', { nodeType: 'part' })} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus />部を追加</Button>
-                <Button type="button" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: 'chapter' })} className="min-h-11 gap-2 border-neon-pink/35 text-neon-pink"><Plus />章だけで始める</Button>
-              </div>
-            ) : (
+            {activeSection !== 'chapters' && (
               <Button type="button" onClick={() => openNewRecord('interviews')} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus />次の1問を記録</Button>
             )}
           </div>
 
-          {sectionRows.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-white/15 p-8 text-center text-sm text-muted-foreground">
-              {activeSection === 'chapters' ? 'まだ構成はありません。「部」からでも「章」だけでも始められます。' : 'まだ記録はありません。1件から始めてください。'}
+          {activeSection === 'chapters' && (
+            <div className="space-y-3 rounded-xl p-3 sm:p-4" style={CARD_STYLE}>
+              <div ref={outlineTablistScrollRef} className="overflow-x-auto overscroll-x-contain">
+                <div
+                  role="tablist"
+                  aria-label="目次の表示を切り替える"
+                  className="flex min-w-max gap-2 sm:min-w-0 sm:grid sm:grid-cols-3"
+                >
+                  {Object.entries(OUTLINE_VIEW_META).map(([view, meta]) => {
+                    const Icon = meta.icon;
+                    const isActive = outlineView === view;
+                    const detail = view === 'history' ? `${pastOutlineSnapshots.length}件` : meta.description;
+                    return (
+                      <button
+                        key={view}
+                        ref={node => {
+                          if (node) outlineTabRefs.current.set(view, node);
+                          else outlineTabRefs.current.delete(view);
+                        }}
+                        id={`planning-outline-tab-${view}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        aria-controls={`planning-outline-panel-${view}`}
+                        tabIndex={isActive ? 0 : -1}
+                        onClick={() => selectOutlineView(view)}
+                        onKeyDown={event => handleOutlineTabKeyDown(event, view)}
+                        className={`flex min-h-12 min-w-[7.5rem] items-center gap-2 rounded-lg border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 ${isActive ? 'border-neon-cyan/55 bg-neon-cyan/10 text-neon-cyan shadow-[inset_0_-2px_0_rgba(0,245,255,0.72)]' : 'border-white/10 bg-black/10 text-muted-foreground hover:border-white/20 hover:text-foreground'}`}
+                      >
+                        {isActive ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <Icon className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+                        <span className="min-w-0">
+                          <span className="block text-xs font-black">{meta.label}</span>
+                          <span className="block text-[10px] font-bold">{detail}</span>
+                        </span>
+                        {isActive && <span className="sr-only">（表示中）</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                <span className="font-bold text-foreground">仮目次</span>は何度でも編集できます。<span className="font-bold text-foreground">確定目次</span>は本全体で現在使う読み取り専用の保存版です。各項目の「本人承認済み」とは別です。
+              </p>
+              {outlineView === 'draft' && (
+                <div className="flex flex-wrap gap-2 border-t border-white/10 pt-3">
+                  <Button type="button" onClick={() => openNewRecord('chapters', { nodeType: 'part' })} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus />部を追加</Button>
+                  <Button type="button" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: 'chapter' })} className="min-h-11 gap-2 border-neon-pink/35 text-neon-pink"><Plus />章だけで始める</Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => openOutlineSnapshotDialog('draft')}
+                    disabled={busy || activeOutlineChapterCount === 0 || draftMatchesLatestSavedDraft}
+                    className="min-h-11 gap-2 border-slate-400/30 text-slate-200"
+                  >
+                    <History className="h-4 w-4" aria-hidden="true" />
+                    {draftMatchesLatestSavedDraft ? '履歴へ保存済み' : '今の仮目次を履歴に保存'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => openOutlineSnapshotDialog('confirmed')}
+                    disabled={busy || activeOutlineChapterCount === 0 || draftMatchesConfirmed}
+                    className="min-h-11 gap-2 border-emerald-400/35 text-emerald-200"
+                  >
+                    <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                    {draftMatchesConfirmed ? '確定目次へ反映済み' : 'この仮目次を確定目次にする'}
+                  </Button>
+                </div>
+              )}
             </div>
-          ) : sectionRows.map(({ record, depth }) => {
+          )}
+
+          {activeSection === 'chapters' && Object.keys(OUTLINE_VIEW_META)
+            .filter(view => view !== outlineView)
+            .map(view => (
+              <div
+                key={view}
+                id={`planning-outline-panel-${view}`}
+                role="tabpanel"
+                aria-labelledby={`planning-outline-tab-${view}`}
+                hidden
+              />
+            ))}
+
+          {activeSection === 'chapters' && outlineView === 'confirmed' ? (
+            <div
+              id="planning-outline-panel-confirmed"
+              role="tabpanel"
+              aria-labelledby="planning-outline-tab-confirmed"
+              className="rounded-xl p-4"
+              style={CARD_STYLE}
+            >
+              {!confirmedOutline ? (
+                <div className="py-6 text-center">
+                  <ShieldCheck className="mx-auto h-9 w-9 text-emerald-300/70" aria-hidden="true" />
+                  <h3 className="mt-3 font-black text-foreground">確定目次はまだありません</h3>
+                  <p className="mt-2 text-sm text-muted-foreground">仮目次がまとまった段階で保存できます。あとから新しい確定版へ切り替えても、以前の版は履歴に残ります。</p>
+                  <Button type="button" variant="outline" onClick={() => selectOutlineView('draft', { focus: true })} className="mt-4 min-h-11 border-neon-cyan/35 text-neon-cyan"><Pencil className="h-4 w-4" />仮目次へ戻る</Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {!draftMatchesConfirmed && (
+                    <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs font-bold text-amber-200">
+                      仮目次に、まだ確定目次へ反映していない変更があります。確定目次はそのまま残っています。
+                    </p>
+                  )}
+                  <p className="text-xs leading-relaxed text-muted-foreground">読み取り専用です。変更するときは仮目次を編集し、改めて「この仮目次を確定目次にする」を押します。</p>
+                  <OutlineSnapshotTree snapshot={confirmedOutline} current />
+                </div>
+              )}
+            </div>
+          ) : activeSection === 'chapters' && outlineView === 'history' ? (
+            <div
+              id="planning-outline-panel-history"
+              role="tabpanel"
+              aria-labelledby="planning-outline-tab-history"
+              className="space-y-3"
+            >
+              {pastOutlineSnapshots.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/15 p-8 text-center text-sm text-muted-foreground">
+                  過去の目次はまだありません。「今の仮目次を履歴に保存」したときや、確定目次を新しい版へ更新したときに、以前の目次が読み取り専用で残ります。
+                </div>
+              ) : pastOutlineSnapshots.map(snapshot => (
+                <details key={snapshot.id} className="rounded-xl p-4" style={CARD_STYLE}>
+                  <summary className="min-h-11 cursor-pointer list-none py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <MetaBadge icon={snapshot.kind === 'confirmed' ? ShieldCheck : History} tone={snapshot.kind === 'confirmed' ? 'canonical' : 'latest'}>{PLANNING_OUTLINE_SNAPSHOT_KINDS[snapshot.kind]}</MetaBadge>
+                      <span className="font-black text-foreground">{snapshot.label}</span>
+                      <span className="text-[11px] text-muted-foreground">保存日時：{formatPlanningDateTimeJst(snapshot.createdAt)} ／ {snapshot.chapters.length}項目</span>
+                    </span>
+                    <span className="mt-1 block text-xs text-neon-cyan">内容を見る（読み取り専用）</span>
+                  </summary>
+                  <div className="mt-3 border-t border-white/10 pt-3">
+                    <OutlineSnapshotTree snapshot={snapshot} includeRejected />
+                  </div>
+                </details>
+              ))}
+            </div>
+          ) : (
+            <div
+              id={activeSection === 'chapters' ? 'planning-outline-panel-draft' : undefined}
+              role={activeSection === 'chapters' ? 'tabpanel' : undefined}
+              aria-labelledby={activeSection === 'chapters' ? 'planning-outline-tab-draft' : undefined}
+              className="space-y-3"
+            >
+              {sectionRows.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/15 p-8 text-center text-sm text-muted-foreground">
+                  {activeSection === 'chapters' ? 'まだ仮目次はありません。まずは「部」または「章」から、決まっているところだけ作れば大丈夫です。' : 'まだ記録はありません。1件から始めてください。'}
+                </div>
+              ) : sectionRows.map(({ record, depth }) => {
             const siblings = activeSection === 'chapters'
               ? chapters
                 .filter(chapter => chapter.status !== 'rejected' && chapter.parentId === record.parentId)
@@ -2285,8 +2653,10 @@ export default function PlanningNotesTab({
                   </div>
                 </div>
               </article>
-            );
-          })}
+                );
+              })}
+            </div>
+          )}
         </section>
       )}
 
@@ -2352,6 +2722,13 @@ export default function PlanningNotesTab({
         busy={busy}
         onApply={applyMarketImport}
         onClose={() => setMarketImport(null)}
+      />
+      <OutlineSnapshotDialog
+        value={outlineDialog?.projectId === project.id ? outlineDialog : null}
+        busy={busy}
+        onChange={setOutlineDialog}
+        onSave={saveOutlineSnapshot}
+        onClose={() => setOutlineDialog(null)}
       />
       <RecordDetailDialog
         detail={detail?.projectId === project.id ? detail : null}

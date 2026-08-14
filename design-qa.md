@@ -62,6 +62,36 @@ final result: passed
 
 ---
 
+# Design QA: 仮目次・確定目次・過去の目次
+
+## Visual evidence
+
+- PC: `C:\Users\myabe\AppData\Local\Temp\kindle-toc-draft-confirmed-history-v15-pc.png`（1920 x 1080）
+- Mobile: `C:\Users\myabe\AppData\Local\Temp\kindle-toc-draft-confirmed-history-v15-mobile.png`（390 x 844）
+- State: 「部 → 話」の階層を持つ仮目次から確定目次v1を作成し、第二話を追加後に確定目次v2へ更新。現在の確定目次はv2、過去の目次には確定v1と仮目次メモが残る状態。
+
+## Workflow checks
+
+- 仮目次だけが編集可能で、確定目次と過去の目次は読み取り専用。
+- 仮目次を編集しても既存の確定目次v1は変わらず、「未反映変更あり」と表示。
+- 確定目次v2の保存後、v1は過去の目次へ残り、現在の確定目次だけがv2へ切り替わる。
+- 履歴保存／確定保存の確認画面は「消えるもの：ありません」と明示し、空欄の版名には安全な既定名を付与。
+- 再読み込み後も、仮目次3項目、確定v2、過去2件を保持。
+- 共有JSON／Markdownと通常バックアップ／結合復元／全置換は自動テストでv4データを往復確認。
+
+## Responsive and accessibility checks
+
+- 1920px: 3タブを横一列で表示し、確定目次の階層と版情報を読み取れる。
+- 390px: document 385px / viewport 390px、横あふれなし。各目次タブは49px高。
+- 320px: タブ列は横スクロールになり、選択した「過去の目次」は自動で表示範囲へ移動。
+- ArrowLeftで「過去の目次」から「確定目次」へ移動し、選択・フォーカス・`tabIndex`が一致。
+- 保存後は対応するタブへフォーカスを戻し、ダイアログ消滅によるフォーカス喪失なし。
+- Console warnings/errors: 0（Vite debugとReact DevTools案内のみ）。
+
+final result: passed
+
+---
+
 # Design QA: 企画・取材・構成ノート v2
 
 ## Visual source

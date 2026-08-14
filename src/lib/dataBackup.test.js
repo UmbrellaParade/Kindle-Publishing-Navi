@@ -24,7 +24,9 @@ import {
   assignDecisionCanonical,
   assignInstructionCanonical,
   createEmptyPlanningNotes,
+  createPlanningOutlineSnapshot,
   createPlanningRecord,
+  getConfirmedPlanningOutline,
   PlanningNotesMergeConflictError,
   readPlanningNotes,
   savePlanningMarketSummary,
@@ -1418,7 +1420,7 @@ test('企画・取材・構成ノートを厳格に正規化してバックア�
   );
 });
 
-test('企画ノートv3の市場サマリー・正本・意思決定参照をバックアップと結合復元で保つ', async () => {
+test('企画ノートv4の市場サマリー・正本・意思決定参照をバックアップと結合復元で保つ', async () => {
   let notes = createEmptyPlanningNotes();
   const add = (section, record) => {
     notes = upsertPlanningRecord(notes, section, record, { expectedUpdatedAt: null, now });
@@ -1479,6 +1481,18 @@ test('企画ノートv3の市場サマリー・正本・意思決定参照をバ
   notes = assignInstructionCanonical(notes, instruction.id, 'codex', { now });
   notes = assignInstructionCanonical(notes, instruction.id, 'author', { now });
   notes = assignDecisionCanonical(notes, decision.id, { now });
+  notes = createPlanningOutlineSnapshot(notes, { kind: 'draft', label: 'バックアップする仮目次' }, {
+    expectedOutlineRevision: notes.outlineRevision,
+    expectedChapterOrderRevision: notes.chapterOrderRevision,
+    now,
+    idFactory: () => 'outline-backup-draft',
+  });
+  notes = createPlanningOutlineSnapshot(notes, { kind: 'confirmed', label: 'バックアップする確定目次' }, {
+    expectedOutlineRevision: notes.outlineRevision,
+    expectedChapterOrderRevision: notes.chapterOrderRevision,
+    now,
+    idFactory: () => 'outline-backup-confirmed',
+  });
 
   const storage = new MemoryStorage({
     [PROJECTS_STORAGE_KEY]: JSON.stringify([{
@@ -1490,11 +1504,18 @@ test('企画ノートv3の市場サマリー・正本・意思決定参照をバ
   const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => {} };
   const exported = await createDataBackup({ storage, imageStore, now });
   const restored = readPlanningNotes(exported.data.projects[0].planning_notes).data;
-  assert.equal(restored.version, 3);
+  assert.equal(restored.version, 4);
   assert.equal(restored.chapters.find(record => record.id === 'episode-backup').parentId, 'part-backup');
   assert.equal(restored.marketSummary.versionId, 'MARKET-BACKUP');
   assert.deepEqual(restored.instructionVersions[0].canonicalFor, ['codex', 'author']);
   assert.equal(restored.decisions[0].isCanonical, true);
+  assert.equal(restored.outlineSnapshots.length, 2);
+  assert.equal(getConfirmedPlanningOutline(restored).id, 'outline-backup-confirmed');
+  assert.equal(
+    restored.outlineSnapshots.find(snapshot => snapshot.id === 'outline-backup-draft')
+      .chapters.find(record => record.id === 'episode-backup').title,
+    '第一話',
+  );
 
   const merged = buildDataRestorePlan(
     backup({ projects: [{ id: 'p1', name: 'v2企画ノートの本' }] }),
@@ -1506,6 +1527,130 @@ test('企画ノートv3の市場サマリー・正本・意思決定参照をバ
   assert.equal(mergedNotes.chapters.find(record => record.id === 'episode-backup').nodeType, 'episode');
   assert.equal(mergedNotes.instructionVersions[0].firstReadFor.includes('author'), true);
   assert.equal(mergedNotes.decisions[0].decisionState, 'current');
+  assert.equal(mergedNotes.confirmedOutlineId, 'outline-backup-confirmed');
+  assert.deepEqual(
+    mergedNotes.outlineSnapshots.map(snapshot => snapshot.id),
+    ['outline-backup-draft', 'outline-backup-confirmed'],
+  );
+
+  const replaced = buildDataRestorePlan(
+    backup({ projects: [{ id: 'other', name: '置換前だけにある本' }] }),
+    exported,
+    'replace',
+  );
+  const replacedNotes = readPlanningNotes(replaced.projects[0].planning_notes).data;
+  assert.equal(replacedNotes.confirmedOutlineId, 'outline-backup-confirmed');
+  assert.deepEqual(
+    replacedNotes.outlineSnapshots.map(snapshot => [snapshot.id, snapshot.kind]),
+    [
+      ['outline-backup-draft', 'draft'],
+      ['outline-backup-confirmed', 'confirmed'],
+    ],
+  );
+  assert.equal(replaced.projects.some(project => project.id === 'other'), false);
+
+  const legacyV3 = clone(notes);
+  legacyV3.version = 3;
+  delete legacyV3.outlineRevision;
+  delete legacyV3.confirmedOutlineId;
+  delete legacyV3.outlineSnapshots;
+  const normalizedLegacy = validateDataBackup(backup({
+    projects: [{ id: 'legacy-v3', name: '旧v3企画ノート', planning_notes: JSON.stringify(legacyV3) }],
+  }));
+  const migratedLegacy = readPlanningNotes(normalizedLegacy.data.projects[0].planning_notes).data;
+  assert.equal(migratedLegacy.version, 4);
+  assert.equal(migratedLegacy.confirmedOutlineId, '');
+  assert.deepEqual(migratedLegacy.outlineSnapshots, []);
+  assert.equal(migratedLegacy.chapters.find(record => record.id === 'episode-backup').parentId, 'part-backup');
+});
+
+test('完全バックアップの結合前に目次保存版の同一ID異内容を表示して適用を止める', () => {
+  let notes = createEmptyPlanningNotes();
+  const chapter = createPlanningRecord('chapters', {
+    id: 'outline-conflict-chapter', title: '競合確認の目次', order: 0,
+  }, { now, idFactory: () => 'outline-conflict-chapter' });
+  notes = upsertPlanningRecord(notes, 'chapters', chapter, { expectedUpdatedAt: null, now });
+  notes = createPlanningOutlineSnapshot(notes, { kind: 'draft', label: '共有IDの保存版' }, {
+    expectedOutlineRevision: notes.outlineRevision,
+    expectedChapterOrderRevision: notes.chapterOrderRevision,
+    now,
+    idFactory: () => 'outline-shared',
+  });
+  const conflictingNotes = {
+    ...notes,
+    outlineSnapshots: notes.outlineSnapshots.map(snapshot => ({
+      ...snapshot,
+      note: 'バックアップ側だけ異なる変更メモ',
+    })),
+  };
+  const current = backup({ projects: [{
+    id: 'p1', name: '現在の本', planning_notes: serializePlanningNotes(notes),
+  }] });
+  const incoming = backup({ projects: [{
+    id: 'p1', name: '入力側の本', planning_notes: serializePlanningNotes(conflictingNotes),
+  }] });
+
+  assert.deepEqual(previewDataBackupPlanningNotesConflicts(current, incoming), [{
+    projectId: 'p1',
+    projectName: '入力側の本',
+    section: 'outlineSnapshots',
+    id: 'outline-shared',
+    reason: 'outline_snapshot_requires_review',
+  }]);
+  assert.throws(
+    () => buildDataRestorePlan(current, incoming, 'merge'),
+    error => error instanceof PlanningNotesMergeConflictError
+      && error.conflicts.some(conflict => conflict.reason === 'outline_snapshot_requires_review'),
+  );
+});
+
+test('各入力が容量内でも企画ノートの結合後が約2MBを超える場合は書込み前に停止する', async () => {
+  const makeLargePlanningNotes = (prefix, character) => {
+    let notes = createEmptyPlanningNotes();
+    for (let index = 0; index < 3; index += 1) {
+      const id = `${prefix}-${index + 1}`;
+      const record = createPlanningRecord('instructionVersions', {
+        id,
+        documentId: `document-${id}`,
+        versionNumber: 1,
+        name: `容量確認${id}`,
+        markdown: character.repeat(360_000),
+      }, { now, idFactory: () => id });
+      notes = upsertPlanningRecord(notes, 'instructionVersions', record, {
+        expectedUpdatedAt: null,
+        now,
+      });
+    }
+    return serializePlanningNotes(notes, { enforceStorageBudget: true });
+  };
+  const currentRaw = makeLargePlanningNotes('current-large', 'a');
+  const incomingRaw = makeLargePlanningNotes('incoming-large', 'b');
+  const current = backup({ projects: [{
+    id: 'p1', name: '結合前の本', planning_notes: currentRaw,
+  }] });
+  const incoming = backup({ projects: [{
+    id: 'p1', name: '結合後の本', planning_notes: incomingRaw,
+  }] });
+  assert.doesNotThrow(() => validateDataBackup(current));
+  assert.doesNotThrow(() => validateDataBackup(incoming));
+  assert.throws(
+    () => buildDataRestorePlan(current, incoming, 'merge'),
+    /約2MB/,
+  );
+
+  const originalProjectsRaw = JSON.stringify(current.data.projects);
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: originalProjectsRaw,
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  await assert.rejects(
+    () => importDataBackup(incoming, { mode: 'merge', storage, imageStore, now }),
+    /約2MB/,
+  );
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
 });
 
 test('空白だけ・将来版の現在企画ノートも通常バックアップを妨げず原文回収する', async () => {
