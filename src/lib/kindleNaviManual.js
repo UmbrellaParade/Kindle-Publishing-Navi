@@ -1,4 +1,4 @@
-export const KINDLE_NAVI_MANUAL_UPDATED_AT = '2026年8月10日';
+export const KINDLE_NAVI_MANUAL_UPDATED_AT = '2026年8月14日';
 
 const KINDLE_NAVI_MANUAL_GROUPS_SOURCE = [
   {
@@ -6,7 +6,7 @@ const KINDLE_NAVI_MANUAL_GROUPS_SOURCE = [
     sections: [
       'このマニュアルの使い方',
       'ゴリアスさんの教材・スプレッドシートとの関係',
-      '発売目標日から始める初回ガイド',
+      '仮日または発売目標日から始める初回ガイド',
       '出版までのおすすめ順',
       '画面上部と自動保存',
     ],

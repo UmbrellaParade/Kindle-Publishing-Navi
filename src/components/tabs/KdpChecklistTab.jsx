@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { readChecklistEnvelope, writeChecklistEnvelope } from '@/lib/releaseSchedule';
 import { KDP_PHASES } from '@/lib/checklistTasks';
 import { scheduleCoordinatedSave } from '@/lib/saveCoordinator';
-import { DEFAULT_RELEASE_METHOD, getReleaseMethod } from '@/lib/releaseMethods';
+import { getReleaseMethod } from '@/lib/releaseMethods';
 import { mutatePublishingProject } from '@/lib/projectMutation';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
@@ -256,7 +256,8 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
   const totalTasks = ALL_KDP_IDS.length + customTasks.length;
   const doneTasks = ALL_KDP_IDS.filter(id => checklistData[id]?.is_done).length + allCustomDone;
   const pct = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
-  const releaseMethod = getReleaseMethod(project?.release_method || DEFAULT_RELEASE_METHOD);
+  const savedReleaseMethod = project?.release_method || project?.schedule_mode || '';
+  const releaseMethod = savedReleaseMethod ? getReleaseMethod(savedReleaseMethod) : null;
 
   if (!project) {
     return <div className="text-center py-20 text-muted-foreground"><span className="text-4xl">📝</span><p className="mt-3 text-sm">プロジェクトを選択してください</p></div>;
@@ -267,8 +268,10 @@ export default function KdpChecklistTab({ project, onProjectUpdate, saving, save
       <div className="rounded-xl p-4 text-xs leading-relaxed" style={CARD_STYLE}>
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <p className="font-bold text-neon-cyan">配信方法：{releaseMethod.shortLabel}</p>
-            <p className="mt-1 text-muted-foreground">{releaseMethod.guidance}</p>
+            <p className="font-bold text-neon-cyan">配信方法：{releaseMethod?.shortLabel || '未設定'}</p>
+            <p className="mt-1 text-muted-foreground">
+              {releaseMethod?.guidance || '仮リリース日だけでは配信方法は決まりません。正式な発売目標日を設定するときに選んでください。'}
+            </p>
           </div>
           <a href="https://kdp.amazon.co.jp/ja_JP/help/topic/GZUV7SNV728WT4QE" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-neon-cyan hover:text-neon-pink">
             <ExternalLink className="w-3.5 h-3.5" />KDP公式の配信日オプション
