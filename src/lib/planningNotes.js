@@ -1,6 +1,6 @@
 export const PLANNING_NOTES_KIND = 'kindle-navi-planning-notes';
-export const PLANNING_NOTES_VERSION = 4;
-export const PLANNING_NOTES_LEGACY_VERSIONS = Object.freeze([1, 2, 3]);
+export const PLANNING_NOTES_VERSION = 5;
+export const PLANNING_NOTES_LEGACY_VERSIONS = Object.freeze([1, 2, 3, 4]);
 export const PLANNING_NOTES_WARNING_BYTES = 700 * 1024;
 export const PLANNING_NOTES_SAVE_LIMIT_BYTES = 2 * 1024 * 1024;
 
@@ -155,6 +155,7 @@ const ROOT_FIELDS = new Set([
   'updatedAt',
   'chapterOrderRevision',
   'outlineRevision',
+  'draftOutlineChapterIds',
   'confirmedOutlineId',
   'outlineSnapshots',
   'marketSummary',
@@ -468,12 +469,12 @@ function normalizeRecord(section, value, path) {
   return result;
 }
 
-function validatePlanningChapterRecords(chapters, path) {
+function validatePlanningChapterRecords(chapters, path, { allowDuplicateSiblingOrder = false } = {}) {
   const chaptersById = new Map(chapters.map(chapter => [chapter.id, chapter]));
   const chapterOrdersByParent = new Map();
   for (const chapter of chapters) {
     const siblingOrders = chapterOrdersByParent.get(chapter.parentId) || new Set();
-    if (siblingOrders.has(chapter.order)) {
+    if (!allowDuplicateSiblingOrder && siblingOrders.has(chapter.order)) {
       fail(`${path}.${chapter.id}.order`, '同じ親に属する構成項目の順序が重複しています');
     }
     siblingOrders.add(chapter.order);
@@ -566,6 +567,7 @@ export function createEmptyPlanningNotes() {
     updatedAt: '',
     chapterOrderRevision: 0,
     outlineRevision: 0,
+    draftOutlineChapterIds: [],
     confirmedOutlineId: '',
     outlineSnapshots: [],
     marketSummary: createEmptyMarketSummary(),
@@ -678,8 +680,45 @@ export function normalizePlanningNotes(value, path = 'planningNotes') {
     }
   }
 
-  validatePlanningChapterRecords(result.chapters, `${path}.chapters`);
+  validatePlanningChapterRecords(result.chapters, `${path}.chapters`, { allowDuplicateSiblingOrder: true });
   const chapterIds = new Set(result.chapters.map(chapter => chapter.id));
+  if (inputVersion === PLANNING_NOTES_VERSION && value.draftOutlineChapterIds === undefined) {
+    fail(`${path}.draftOutlineChapterIds`, '編集中の仮目次ID一覧がありません');
+  }
+  const requestedDraftOutlineChapterIds = inputVersion === PLANNING_NOTES_VERSION
+    ? stringArray(value.draftOutlineChapterIds, `${path}.draftOutlineChapterIds`)
+    : result.chapters.map(chapter => chapter.id);
+  const requestedDraftOutlineChapterIdSet = new Set(requestedDraftOutlineChapterIds);
+  for (const chapterId of requestedDraftOutlineChapterIds) {
+    if (!chapterIds.has(chapterId)) {
+      fail(`${path}.draftOutlineChapterIds`, `存在しない構成項目ID（${chapterId}）が含まれます`);
+    }
+  }
+  for (const chapter of result.chapters) {
+    if (!requestedDraftOutlineChapterIdSet.has(chapter.id)) continue;
+    if (chapter.parentId && !requestedDraftOutlineChapterIdSet.has(chapter.parentId)) {
+      fail(`${path}.draftOutlineChapterIds`, `構成項目（${chapter.id}）の親が編集中の仮目次に含まれていません`);
+    }
+    for (const linkedChapterId of chapter.chapterIds) {
+      if (!requestedDraftOutlineChapterIdSet.has(linkedChapterId)) {
+        fail(`${path}.draftOutlineChapterIds`, `構成項目（${chapter.id}）から参照する項目が編集中の仮目次に含まれていません`);
+      }
+    }
+  }
+  result.draftOutlineChapterIds = result.chapters
+    .filter(chapter => requestedDraftOutlineChapterIdSet.has(chapter.id))
+    .map(chapter => chapter.id);
+  validatePlanningChapterRecords(
+    result.chapters.filter(chapter => requestedDraftOutlineChapterIdSet.has(chapter.id)),
+    `${path}.draftOutlineChapters`,
+  );
+  for (const record of [result.concept, ...result.conceptHistory]) {
+    for (const chapterId of record.chapterIds) {
+      if (!chapterIds.has(chapterId)) {
+        fail(`${path}.${record.id}.chapterIds`, '存在しない構成項目IDが含まれます');
+      }
+    }
+  }
   for (const section of PLANNING_NOTE_SECTIONS) {
     for (const record of result[section]) {
       for (const chapterId of record.chapterIds) {
@@ -687,7 +726,6 @@ export function normalizePlanningNotes(value, path = 'planningNotes') {
       }
     }
   }
-
   const instructionById = new Map(result.instructionVersions.map(record => [record.id, record]));
   const instructionVersionKeys = new Set();
   for (const record of result.instructionVersions) {
@@ -851,17 +889,150 @@ export function createPlanningNoteId(prefix = 'note') {
   return `${safePrefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
+function planningOutlineHeadingNodeType(title) {
+  const text = String(title || '').normalize('NFKC').trim();
+  const numbered = '(?:第)?(?:[0-9]+|[一二三四五六七八九十百千零〇]+)';
+  const separator = '(?:\\s|[:：・.．_-]|$)';
+  if (new RegExp(`^(?:${numbered})?部${separator}`).test(text)) return 'part';
+  if (new RegExp(`^(?:${numbered})?章${separator}`).test(text)) return 'chapter';
+  if (new RegExp(`^(?:${numbered})?話${separator}`).test(text)) return 'episode';
+  if (new RegExp(`^(?:${numbered})?節${separator}`).test(text)) return 'section';
+  return '';
+}
+
+export function parsePlanningOutlineMarkdown(text, {
+  now = () => new Date(),
+  idFactory = createPlanningNoteId,
+} = {}) {
+  const source = stringValue(text, 'outlineMarkdown', { max: MAX_LONG_TEXT });
+  if (!source.trim()) throw new Error('目次のMarkdownが空です');
+  const sensitive = findPlanningNotesSensitiveData({ outlineMarkdown: source });
+  if (sensitive.length > 0) {
+    throw new Error(`${sensitive[0].label}を検出したため、目次として取り込めません`);
+  }
+  const restricted = findMarketResearchRestrictedData({ outlineMarkdown: source });
+  if (restricted.length > 0) {
+    throw new Error(`${restricted[0].label}を検出したため、目次として取り込めません`);
+  }
+
+  const headings = [];
+  let nonHeadingContentCount = 0;
+  source.split(/\r?\n/).forEach((line, index) => {
+    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (!match) {
+      if (line.trim() && !/^```/.test(line.trim())) nonHeadingContentCount += 1;
+      return;
+    }
+    const title = match[2].replace(/\s+#+\s*$/, '').trim();
+    if (!title) throw new Error(`${index + 1}行目の見出しに題名がありません`);
+    headings.push({ level: match[1].length, title, lineNumber: index + 1 });
+  });
+  if (headings.length === 0) {
+    throw new Error('「# 第1章」のようなMarkdown見出しが見つかりません');
+  }
+
+  const warnings = [];
+  if (
+    headings.length > 1
+    && !planningOutlineHeadingNodeType(headings[0].title)
+    && /^(?:目次|仮目次|目次案|書名|本のタイトル)(?:\s|[:：]|$)/.test(headings[0].title.normalize('NFKC'))
+    && planningOutlineHeadingNodeType(headings[1].title)
+    && headings[1].level > headings[0].level
+  ) {
+    warnings.push(`先頭の「${headings[0].title}」は目次全体の見出しとして構成項目から除外しました`);
+    headings.shift();
+  }
+  if (headings.length > MAX_RECORDS_PER_SECTION) {
+    throw new Error(`目次の構成項目は${MAX_RECORDS_PER_SECTION.toLocaleString('ja-JP')}件までです`);
+  }
+  if (nonHeadingContentCount > 0) {
+    warnings.push(`見出し以外の本文${nonHeadingContentCount}行は目次項目へ取り込みません`);
+  }
+
+  for (let index = 1; index < headings.length; index += 1) {
+    if (headings[index].level > headings[index - 1].level + 1) {
+      throw new Error(`${headings[index].lineNumber}行目で見出しの深さが飛んでいます。#を一段ずつ深くしてください`);
+    }
+  }
+
+  const timestamp = isoNow(now);
+  const stack = [];
+  const usedIds = new Set();
+  const nextOrderByParent = new Map();
+  const proposedChapters = [];
+  const counts = { total: 0, part: 0, chapter: 0, episode: 0, section: 0 };
+
+  for (const heading of headings) {
+    while (stack.length > 0 && stack.at(-1).level >= heading.level) stack.pop();
+    const explicitNodeType = planningOutlineHeadingNodeType(heading.title);
+    const nearestParent = stack.at(-1)?.record || null;
+    const nodeType = explicitNodeType || (
+      nearestParent?.nodeType === 'part' ? 'chapter'
+        : nearestParent ? 'section'
+          : 'chapter'
+    );
+    let parent = null;
+    if (nodeType !== 'part') {
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        if (CHAPTER_ALLOWED_PARENT_TYPES[nodeType].has(stack[index].record.nodeType)) {
+          parent = stack[index].record;
+          break;
+        }
+      }
+    }
+    const parentId = parent?.id || '';
+    const order = nextOrderByParent.get(parentId) || 0;
+    nextOrderByParent.set(parentId, order + 1);
+    const id = idValue(idFactory('chapter'), `outlineMarkdown.${heading.lineNumber}.id`);
+    if (usedIds.has(id)) throw new Error('目次の構成項目IDが重複しました。もう一度プレビューしてください');
+    usedIds.add(id);
+    const record = createPlanningRecord('chapters', {
+      nodeType,
+      parentId,
+      order,
+      title: heading.title,
+      status: 'draft',
+      approvedAt: '',
+      approvedBy: '',
+      chapterIds: [],
+      sourcePriority: 'unspecified',
+    }, {
+      now: () => new Date(timestamp),
+      idFactory: () => id,
+    });
+    proposedChapters.push(record);
+    counts.total += 1;
+    counts[nodeType] += 1;
+    stack.push({ level: heading.level, record });
+  }
+  validatePlanningChapterRecords(proposedChapters, 'outlineMarkdown.chapters');
+  return { proposedChapters, counts, warnings };
+}
+
 export function getPlanningChapterNodeLabel(nodeType) {
   return PLANNING_CHAPTER_NODE_TYPES[nodeType] || PLANNING_CHAPTER_NODE_TYPES.chapter;
+}
+
+export function getPlanningDraftOutlineChapters(data) {
+  const normalized = normalizePlanningNotes(data);
+  const activeIds = new Set(normalized.draftOutlineChapterIds);
+  return normalized.chapters.filter(chapter => activeIds.has(chapter.id));
+}
+
+export function isPlanningDraftChapter(data, chapterId) {
+  const normalized = normalizePlanningNotes(data);
+  const safeChapterId = idValue(chapterId, 'chapterId');
+  return normalized.draftOutlineChapterIds.includes(safeChapterId);
 }
 
 export function getNextPlanningChapterOrder(data, parentId = '') {
   const normalized = normalizePlanningNotes(data);
   const safeParentId = idValue(parentId, 'parentId', { allowEmpty: true });
+  const activeIds = new Set(normalized.draftOutlineChapterIds);
   return Math.max(
     -1,
     ...normalized.chapters
-      .filter(chapter => chapter.parentId === safeParentId)
+      .filter(chapter => activeIds.has(chapter.id) && chapter.parentId === safeParentId)
       .map(chapter => chapter.order),
   ) + 1;
 }
@@ -889,9 +1060,10 @@ function flattenChapterRecords(chapters, { includeRejected = true } = {}) {
   return flattened;
 }
 
-export function flattenPlanningChapterTree(data, options = {}) {
+export function flattenPlanningChapterTree(data, { includeArchived = false, ...options } = {}) {
   const normalized = normalizePlanningNotes(data);
-  return flattenChapterRecords(normalized.chapters, options);
+  const chapters = includeArchived ? normalized.chapters : getPlanningDraftOutlineChapters(normalized);
+  return flattenChapterRecords(chapters, options);
 }
 
 export function flattenPlanningOutlineSnapshot(snapshot, options = {}) {
@@ -917,7 +1089,7 @@ export function planningOutlineMatchesSnapshot(data, snapshot) {
   const normalized = normalizePlanningNotes(data);
   if (!snapshot) return false;
   const normalizedSnapshot = normalizeOutlineSnapshot(snapshot, 'outlineSnapshot');
-  return canonical(normalized.chapters) === canonical(normalizedSnapshot.chapters);
+  return canonical(getPlanningDraftOutlineChapters(normalized)) === canonical(normalizedSnapshot.chapters);
 }
 
 export function createPlanningOutlineSnapshot(data, {
@@ -937,17 +1109,18 @@ export function createPlanningOutlineSnapshot(data, {
   if (expectedChapterOrderRevision !== normalized.chapterOrderRevision) {
     throw new Error('目次の順序が別の画面で更新されました。最新の仮目次を確認してから保存してください');
   }
-  if (normalized.chapters.filter(chapter => chapter.status !== 'rejected').length === 0) {
+  const draftChapters = getPlanningDraftOutlineChapters(normalized);
+  if (draftChapters.filter(chapter => chapter.status !== 'rejected').length === 0) {
     throw new Error('採用する構成項目がないため、目次として保存できません');
   }
   if (normalized.outlineSnapshots.length >= MAX_OUTLINE_SNAPSHOTS) {
-    throw new Error(`目次履歴は${MAX_OUTLINE_SNAPSHOTS}件までです。完全バックアップを保存してから履歴を整理してください`);
+    throw new Error(`目次履歴は${MAX_OUTLINE_SNAPSHOTS}件が上限です。履歴を自動削除せず安全側で停止しました。完全バックアップを保存し、新しいプロジェクトで続けてください`);
   }
   const safeKind = enumValue(kind, OUTLINE_SNAPSHOT_KIND_VALUES, 'draft', 'outlineSnapshot.kind');
   const comparisonSnapshot = safeKind === 'confirmed'
     ? getConfirmedPlanningOutline(normalized)
     : sortPlanningOutlineSnapshotsNewest(normalized).find(snapshot => snapshot.kind === safeKind);
-  if (comparisonSnapshot && canonical(comparisonSnapshot.chapters) === canonical(normalized.chapters)) {
+  if (comparisonSnapshot && canonical(comparisonSnapshot.chapters) === canonical(draftChapters)) {
     throw new Error(safeKind === 'confirmed'
       ? '仮目次は現在の確定目次から変わっていません'
       : '同じ内容の仮目次がすでに履歴へ保存されています');
@@ -964,7 +1137,7 @@ export function createPlanningOutlineSnapshot(data, {
     createdAt: timestamp,
     sourceOutlineRevision: normalized.outlineRevision,
     sourceChapterOrderRevision: normalized.chapterOrderRevision,
-    chapters: normalized.chapters,
+    chapters: draftChapters,
   }, 'planningNotes.outlineSnapshots');
   return normalizePlanningNotes({
     ...normalized,
@@ -973,6 +1146,197 @@ export function createPlanningOutlineSnapshot(data, {
     outlineSnapshots: [...normalized.outlineSnapshots, snapshot],
     updatedAt: timestamp,
   });
+}
+
+function planningOutlineSemanticShape(chapters) {
+  return flattenChapterRecords(chapters, { includeRejected: true }).map(({ record, depth }) => ({
+    depth,
+    nodeType: record.nodeType,
+    title: record.title,
+    role: record.role,
+    readerQuestion: record.readerQuestion,
+    personalSources: record.personalSources,
+    evidenceNeeded: record.evidenceNeeded,
+    outlineMarkdown: record.outlineMarkdown,
+    readerNextStep: record.readerNextStep,
+  }));
+}
+
+function planningRecordsWithExternalChapterLinks(data) {
+  return [
+    data.concept,
+    ...data.conceptHistory,
+    ...PLANNING_NOTE_SECTIONS
+      .filter(section => section !== 'chapters')
+      .flatMap(section => data[section]),
+  ];
+}
+
+function compactPlanningChapterLedgerForRewrite(data) {
+  const chapterById = new Map(data.chapters.map(chapter => [chapter.id, chapter]));
+  const retainedIds = new Set();
+  const pendingIds = planningRecordsWithExternalChapterLinks(data)
+    .flatMap(record => record.chapterIds);
+  while (pendingIds.length > 0) {
+    const chapterId = pendingIds.pop();
+    if (retainedIds.has(chapterId)) continue;
+    const chapter = chapterById.get(chapterId);
+    if (!chapter) continue;
+    retainedIds.add(chapterId);
+    if (chapter.parentId) pendingIds.push(chapter.parentId);
+    pendingIds.push(...chapter.chapterIds);
+  }
+  return data.chapters.filter(chapter => retainedIds.has(chapter.id));
+}
+
+export function replacePlanningOutlineDraft(data, proposedChapters = [], {
+  expectedOutlineRevision,
+  expectedChapterOrderRevision,
+  snapshotLabel = '',
+  snapshotNote = '仮目次を書き直す前に自動保存しました。',
+  now = () => new Date(),
+  idFactory = createPlanningNoteId,
+} = {}) {
+  const normalized = normalizePlanningNotes(data);
+  if (expectedOutlineRevision !== normalized.outlineRevision) {
+    throw new Error('目次が別の画面で更新されました。最新の仮目次を確認してから書き直してください');
+  }
+  if (expectedChapterOrderRevision !== normalized.chapterOrderRevision) {
+    throw new Error('目次の順序が別の画面で更新されました。最新の仮目次を確認してから書き直してください');
+  }
+  if (!Array.isArray(proposedChapters)) throw new TypeError('新しい仮目次は配列で指定してください');
+  if (proposedChapters.length > MAX_RECORDS_PER_SECTION) {
+    throw new Error(`新しい仮目次は${MAX_RECORDS_PER_SECTION.toLocaleString('ja-JP')}件までです`);
+  }
+
+  const timestamp = isoNow(now);
+  const proposedIds = new Set();
+  const normalizedProposed = proposedChapters.map((record, index) => {
+    if (!isPlainObject(record)) fail(`proposedChapters[${index}]`, 'オブジェクトではありません');
+    const normalizedRecord = normalizeRecord('chapters', {
+      ...record,
+      revision: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      status: 'draft',
+      approvedAt: '',
+      approvedBy: '',
+      chapterIds: [],
+      sourcePriority: 'unspecified',
+    }, `proposedChapters[${index}]`);
+    if (proposedIds.has(normalizedRecord.id)) {
+      fail(`proposedChapters[${index}].id`, '新しい仮目次の中でIDが重複しています');
+    }
+    proposedIds.add(normalizedRecord.id);
+    return normalizedRecord;
+  });
+  validatePlanningChapterRecords(normalizedProposed, 'proposedChapters');
+
+  const currentDraftChapters = getPlanningDraftOutlineChapters(normalized);
+  if (currentDraftChapters.length === 0 && normalizedProposed.length === 0) {
+    return {
+      data: normalized,
+      summary: {
+        archivedChapterCount: 0,
+        createdChapterCount: 0,
+        reusedChapterCount: 0,
+        retainedLinkedChapterCount: 0,
+        compactedChapterCount: 0,
+        preservedLinkCount: 0,
+        needsRelinkCount: 0,
+        snapshotId: '',
+        snapshotCreated: false,
+        confirmedOutlineId: normalized.confirmedOutlineId,
+        changed: false,
+      },
+    };
+  }
+  if (
+    normalizedProposed.length > 0
+    && canonical(planningOutlineSemanticShape(currentDraftChapters))
+      === canonical(planningOutlineSemanticShape(normalizedProposed))
+  ) {
+    throw new Error('貼り付けた目次は現在の仮目次と同じ内容です。書き直しは行いませんでした');
+  }
+
+  const existingChapterIds = new Set(normalized.chapters.map(chapter => chapter.id));
+  const collidedId = normalizedProposed.find(chapter => existingChapterIds.has(chapter.id))?.id;
+  if (collidedId) {
+    throw new Error(`新しい仮目次のID（${collidedId}）は保存済みの構成項目と重複しています。もう一度プレビューしてください`);
+  }
+
+  let snapshot = null;
+  let snapshotCreated = false;
+  let outlineSnapshots = normalized.outlineSnapshots;
+  if (currentDraftChapters.length > 0) {
+    snapshot = sortPlanningOutlineSnapshotsNewest(normalized)
+      .find(candidate => (
+        candidate.kind === 'draft'
+        && canonical(candidate.chapters) === canonical(currentDraftChapters)
+      )) || null;
+    if (!snapshot) {
+      if (normalized.outlineSnapshots.length >= MAX_OUTLINE_SNAPSHOTS) {
+        throw new Error(`目次履歴は${MAX_OUTLINE_SNAPSHOTS}件が上限です。履歴を自動削除せず安全側で停止しました。完全バックアップを保存し、新しいプロジェクトで続けてください`);
+      }
+      const versionNumber = Math.max(0, ...normalized.outlineSnapshots.map(item => item.versionNumber)) + 1;
+      const draftSnapshotCount = normalized.outlineSnapshots.filter(item => item.kind === 'draft').length + 1;
+      snapshot = normalizeOutlineSnapshot({
+        id: idFactory('outline'),
+        versionNumber,
+        kind: 'draft',
+        label: String(snapshotLabel || '').trim() || `書き直し前の仮目次 ${draftSnapshotCount}`,
+        note: String(snapshotNote || ''),
+        createdAt: timestamp,
+        sourceOutlineRevision: normalized.outlineRevision,
+        sourceChapterOrderRevision: normalized.chapterOrderRevision,
+        chapters: currentDraftChapters,
+      }, 'planningNotes.outlineSnapshots');
+      outlineSnapshots = [...normalized.outlineSnapshots, snapshot];
+      snapshotCreated = true;
+    }
+  }
+
+  const retainedLedgerChapters = compactPlanningChapterLedgerForRewrite(normalized);
+  if (retainedLedgerChapters.length + normalizedProposed.length > MAX_RECORDS_PER_SECTION) {
+    throw new Error(`取材等が参照する旧目次を安全に残すと構成項目が${MAX_RECORDS_PER_SECTION.toLocaleString('ja-JP')}件を超えます。完全バックアップを保存し、「旧目次に紐づく記録」の紐づけを現在の目次へ付け直してから再実行してください`);
+  }
+
+  const previousDraftIds = new Set(normalized.draftOutlineChapterIds);
+  let preservedLinkCount = 0;
+  let needsRelinkCount = 0;
+  for (const record of planningRecordsWithExternalChapterLinks(normalized)) {
+    const linkedCount = record.chapterIds.filter(id => previousDraftIds.has(id)).length;
+    if (linkedCount === 0) continue;
+    preservedLinkCount += linkedCount;
+    needsRelinkCount += 1;
+  }
+
+  const next = normalizePlanningNotes({
+    ...normalized,
+    chapters: [...retainedLedgerChapters, ...normalizedProposed],
+    draftOutlineChapterIds: normalizedProposed.map(chapter => chapter.id),
+    outlineSnapshots,
+    chapterOrderRevision: normalized.chapterOrderRevision + 1,
+    outlineRevision: normalized.outlineRevision + 1,
+    updatedAt: timestamp,
+  });
+  serializePlanningNotes(next, { enforceStorageBudget: true });
+  return {
+    data: next,
+    summary: {
+      archivedChapterCount: currentDraftChapters.length,
+      createdChapterCount: normalizedProposed.length,
+      reusedChapterCount: 0,
+      retainedLinkedChapterCount: retainedLedgerChapters.length,
+      compactedChapterCount: normalized.chapters.length - retainedLedgerChapters.length,
+      preservedLinkCount,
+      needsRelinkCount,
+      snapshotId: snapshot?.id || '',
+      snapshotCreated,
+      confirmedOutlineId: next.confirmedOutlineId,
+      changed: true,
+    },
+  };
 }
 
 export function getPlanningChapterParentOptions(data, chapterId = '', nodeType = 'chapter') {
@@ -1101,6 +1465,9 @@ export function createPlanningRecord(section, values = {}, {
 export function createPlanningChapterRecord(data, values = {}, options = {}) {
   const normalized = normalizePlanningNotes(data);
   const parentId = idValue(values.parentId, 'planningNotes.chapters.parentId', { allowEmpty: true });
+  if (parentId && !normalized.draftOutlineChapterIds.includes(parentId)) {
+    throw new Error('書き直し前として退避した構成項目へ子項目を追加できません');
+  }
   const record = createPlanningRecord('chapters', {
     ...values,
     nodeType: values.nodeType || 'chapter',
@@ -1190,8 +1557,12 @@ export function upsertPlanningRecord(data, section, draft, {
   }
   const index = normalized[section].findIndex(record => record.id === draft.id);
   const current = index >= 0 ? normalized[section][index] : null;
+  const activeChapterIds = new Set(normalized.draftOutlineChapterIds);
   if (current && expectedUpdatedAt !== current.updatedAt) {
     throw new Error('同じ項目が別の画面で更新されました。最新内容を確認してください');
+  }
+  if (section === 'chapters' && current && !activeChapterIds.has(current.id)) {
+    throw new Error('この構成項目は書き直し前の目次として安全に退避されています。現在の仮目次へ新しい項目を作ってください');
   }
   if (current && isApproved(current) && !allowApprovedOverwrite) {
     throw new Error('本人承認済みの項目は直接上書きできません。新しい案・新しい版として複製してください');
@@ -1236,6 +1607,9 @@ export function upsertPlanningRecord(data, section, draft, {
     if (rejectedParent(normalized.chapters, nextRecord.parentId)) {
       throw new Error('「採用しない」の親項目へ子項目を追加・移動できません');
     }
+    if (nextRecord.parentId && !activeChapterIds.has(nextRecord.parentId)) {
+      throw new Error('退避済みの構成項目へ子項目を追加・移動できません。編集中の仮目次から親を選んでください');
+    }
   }
   const nextRecords = [...normalized[section]];
   if (index >= 0) nextRecords[index] = nextRecord;
@@ -1244,8 +1618,48 @@ export function upsertPlanningRecord(data, section, draft, {
   return normalizePlanningNotes({
     ...normalized,
     [section]: nextRecords,
+    draftOutlineChapterIds: section === 'chapters' && !current
+      ? [...normalized.draftOutlineChapterIds, nextRecord.id]
+      : normalized.draftOutlineChapterIds,
     chapterOrderRevision: normalized.chapterOrderRevision + (chapterOrderChanged ? 1 : 0),
     outlineRevision: normalized.outlineRevision + (section === 'chapters' ? 1 : 0),
+    updatedAt: timestamp,
+  });
+}
+
+export function updatePlanningRecordChapterLinks(data, section, recordId, nextChapterIds, {
+  expectedUpdatedAt,
+  now = () => new Date(),
+} = {}) {
+  const normalized = normalizePlanningNotes(data);
+  if (!PLANNING_NOTE_SECTIONS.includes(section) || section === 'chapters') {
+    throw new TypeError('章の紐づけだけを変更できる記録種類ではありません');
+  }
+  const safeRecordId = idValue(recordId, 'recordId');
+  const index = normalized[section].findIndex(record => record.id === safeRecordId);
+  if (index < 0) throw new Error('章の紐づけを変更する記録が見つかりません');
+  const current = normalized[section][index];
+  if (expectedUpdatedAt !== current.updatedAt) {
+    throw new Error('同じ記録が別の画面で更新されました。最新内容を確認してください');
+  }
+  const safeChapterIds = stringArray(nextChapterIds, 'nextChapterIds');
+  const knownChapterIds = new Set(normalized.chapters.map(chapter => chapter.id));
+  const missingChapterId = safeChapterIds.find(chapterId => !knownChapterIds.has(chapterId));
+  if (missingChapterId) {
+    throw new Error(`紐づけ先の構成項目（${missingChapterId}）が見つかりません`);
+  }
+  if (canonical(current.chapterIds) === canonical(safeChapterIds)) return normalized;
+  const timestamp = isoNow(now);
+  const nextRecords = [...normalized[section]];
+  nextRecords[index] = {
+    ...current,
+    chapterIds: safeChapterIds,
+    revision: current.revision + 1,
+    updatedAt: timestamp,
+  };
+  return normalizePlanningNotes({
+    ...normalized,
+    [section]: nextRecords,
     updatedAt: timestamp,
   });
 }
@@ -1255,6 +1669,9 @@ export function deletePlanningRecord(data, section, recordId, { expectedUpdatedA
   const current = normalized[section]?.find(record => record.id === recordId);
   if (!current) throw new Error('削除する項目が見つかりません');
   if (expectedUpdatedAt !== current.updatedAt) throw new Error('削除確認後に項目が更新されました。最新内容を確認してください');
+  if (section === 'chapters' && !normalized.draftOutlineChapterIds.includes(current.id)) {
+    throw new Error('この構成項目は取材等の参照を守るため、書き直し前の目次として退避されています');
+  }
   if (isApproved(current)) throw new Error('本人承認済みの項目は削除できません。複製した新しい案を「採用しない」にして履歴を残してください');
   if (section === 'competitors') {
     const evidenceFields = [
@@ -1304,6 +1721,9 @@ export function deletePlanningRecord(data, section, recordId, { expectedUpdatedA
   return normalizePlanningNotes({
     ...normalized,
     [section]: next,
+    draftOutlineChapterIds: section === 'chapters'
+      ? normalized.draftOutlineChapterIds.filter(id => id !== recordId)
+      : normalized.draftOutlineChapterIds,
     chapterOrderRevision: normalized.chapterOrderRevision + (section === 'chapters' ? 1 : 0),
     outlineRevision: normalized.outlineRevision + (section === 'chapters' ? 1 : 0),
     updatedAt: timestamp,
@@ -1317,8 +1737,14 @@ export function movePlanningChapter(data, chapterId, direction, { expectedRevisi
   }
   const selectedChapter = normalized.chapters.find(chapter => chapter.id === chapterId);
   if (!selectedChapter) throw new Error('移動する構成項目が見つかりません');
+  const activeChapterIds = new Set(normalized.draftOutlineChapterIds);
+  if (!activeChapterIds.has(selectedChapter.id)) {
+    throw new Error('書き直し前として退避した構成項目は並べ替えできません');
+  }
   const sorted = normalized.chapters
     .filter(chapter => (
+      activeChapterIds.has(chapter.id)
+      &&
       chapter.status !== 'rejected'
       && chapter.parentId === selectedChapter.parentId
     ))
@@ -1365,6 +1791,10 @@ export function movePlanningChapterToParent(data, chapterId, parentId = '', {
   }
   const selected = normalized.chapters.find(chapter => chapter.id === chapterId);
   if (!selected) throw new Error('移動する構成項目が見つかりません');
+  const activeChapterIds = new Set(normalized.draftOutlineChapterIds);
+  if (!activeChapterIds.has(selected.id)) {
+    throw new Error('書き直し前として退避した構成項目は移動できません');
+  }
   if (chapterSubtreeHasApproved(normalized.chapters, selected.id)) {
     throw new Error('本人承認済みの構成項目または子項目を含むため、別の親へ移動できません。承認済みを残して新しい案を作ってください');
   }
@@ -1375,6 +1805,9 @@ export function movePlanningChapterToParent(data, chapterId, parentId = '', {
     ? normalized.chapters.find(chapter => chapter.id === safeParentId)
     : null;
   if (safeParentId && !targetParent) throw new Error('移動先の親項目が見つかりません');
+  if (safeParentId && !activeChapterIds.has(safeParentId)) {
+    throw new Error('書き直し前として退避した構成項目へは移動できません');
+  }
   if (approvedParent(normalized.chapters, selected.parentId)) {
     throw new Error('本人承認済みの親項目から子項目を移動できません');
   }
@@ -1394,7 +1827,11 @@ export function movePlanningChapterToParent(data, chapterId, parentId = '', {
     ancestorId = normalized.chapters.find(chapter => chapter.id === ancestorId)?.parentId || '';
   }
   const targetSiblings = normalized.chapters
-    .filter(chapter => chapter.id !== selected.id && chapter.parentId === safeParentId);
+    .filter(chapter => (
+      activeChapterIds.has(chapter.id)
+      && chapter.id !== selected.id
+      && chapter.parentId === safeParentId
+    ));
   const nextOrder = targetOrder === null
     ? Math.max(-1, ...targetSiblings.map(chapter => chapter.order)) + 1
     : targetOrder;
@@ -1446,6 +1883,9 @@ export function duplicatePlanningRecord(data, section, recordId, {
   const normalized = normalizePlanningNotes(data);
   const current = normalized[section]?.find(record => record.id === recordId);
   if (!current) throw new Error('複製する項目が見つかりません');
+  if (section === 'chapters' && !normalized.draftOutlineChapterIds.includes(current.id)) {
+    throw new Error('書き直し前として退避した構成項目は複製できません。現在の仮目次へ新しい項目を作ってください');
+  }
   const timestamp = now().toISOString();
   const duplicate = {
     ...current,
@@ -1766,10 +2206,16 @@ export function filterPlanningNotes(data, {
     : section === 'concept'
       ? ['concept', 'conceptHistory']
       : [section];
-  const chapterScope = chapterId !== 'all' && chapterId !== 'unlinked'
+  const activeChapterIds = new Set(normalized.draftOutlineChapterIds);
+  const archivedChapterIds = new Set(
+    normalized.chapters
+      .filter(chapter => !activeChapterIds.has(chapter.id))
+      .map(chapter => chapter.id),
+  );
+  const chapterScope = chapterId !== 'all' && chapterId !== 'unlinked' && chapterId !== 'archived'
     ? new Set([
       chapterId,
-      ...collectPlanningChapterDescendantIds(normalized.chapters, chapterId),
+      ...collectPlanningChapterDescendantIds(getPlanningDraftOutlineChapters(normalized), chapterId),
     ])
     : null;
   const results = [];
@@ -1777,9 +2223,15 @@ export function filterPlanningNotes(data, {
     const records = key === 'concept' ? [normalized.concept] : (normalized[key] || []);
     for (const record of records) {
       if (key === 'concept' && isPlanningConceptEmpty(record)) continue;
+      if (chapterId === 'archived' && key === 'chapters') continue;
+      if (key === 'chapters' && !activeChapterIds.has(record.id) && chapterId !== 'archived') continue;
       if (status !== 'all' && record.status !== status) continue;
       if (sourcePriority !== 'all' && record.sourcePriority !== sourcePriority) continue;
       if (chapterId === 'unlinked' && record.chapterIds.length > 0) continue;
+      if (
+        chapterId === 'archived'
+        && !record.chapterIds.some(id => archivedChapterIds.has(id))
+      ) continue;
       if (
         chapterScope
         && !record.chapterIds.some(id => chapterScope.has(id))
@@ -1794,6 +2246,23 @@ export function filterPlanningNotes(data, {
 
 function canonical(value) {
   return JSON.stringify(value);
+}
+
+function isPristinePlanningOutline(data) {
+  return data.chapters.length === 0
+    && data.draftOutlineChapterIds.length === 0
+    && data.outlineSnapshots.length === 0
+    && data.outlineRevision === 0
+    && data.chapterOrderRevision === 0
+    && !data.confirmedOutlineId;
+}
+
+function hasRetiredPlanningOutline(data) {
+  const activeChapterIds = new Set(data.draftOutlineChapterIds);
+  return data.draftOutlineChapterIds.length < data.chapters.length
+    || data.outlineSnapshots.some(snapshot => (
+      snapshot.chapters.some(chapter => !activeChapterIds.has(chapter.id))
+    ));
 }
 
 export class PlanningNotesMergeConflictError extends Error {
@@ -1844,6 +2313,47 @@ export function previewPlanningNotesMerge(currentRaw, incomingRaw) {
         conflicts.push({ section, id: record.id, current: existing, incoming: record });
       }
     }
+  }
+  const currentDraftChapterIds = new Set(current.draftOutlineChapterIds);
+  const incomingDraftChapterIds = new Set(incoming.draftOutlineChapterIds);
+  const incomingChapterIds = new Set(incoming.chapters.map(chapter => chapter.id));
+  let hasSharedMembershipConflict = false;
+  for (const chapter of current.chapters) {
+    if (!incomingChapterIds.has(chapter.id)) continue;
+    if (currentDraftChapterIds.has(chapter.id) === incomingDraftChapterIds.has(chapter.id)) continue;
+    hasSharedMembershipConflict = true;
+    conflicts.push({
+      section: 'chapters',
+      id: chapter.id,
+      current: { activeInDraftOutline: currentDraftChapterIds.has(chapter.id) },
+      incoming: { activeInDraftOutline: incomingDraftChapterIds.has(chapter.id) },
+      reason: 'draft_outline_membership_conflict',
+    });
+  }
+  const sameDraftMembership = canonical([...currentDraftChapterIds].sort())
+    === canonical([...incomingDraftChapterIds].sort());
+  const currentHasArchivedChapters = hasRetiredPlanningOutline(current);
+  const incomingHasArchivedChapters = hasRetiredPlanningOutline(incoming);
+  const isLegacySafeAppend = currentDraftChapterIds.size > 0
+    && incomingDraftChapterIds.size > 0
+    && !currentHasArchivedChapters
+    && !incomingHasArchivedChapters;
+  const currentIsPristineEmpty = isPristinePlanningOutline(current);
+  const incomingIsPristineEmpty = isPristinePlanningOutline(incoming);
+  if (
+    !sameDraftMembership
+    && !hasSharedMembershipConflict
+    && !isLegacySafeAppend
+    && !currentIsPristineEmpty
+    && !incomingIsPristineEmpty
+  ) {
+    conflicts.push({
+      section: 'chapters',
+      id: 'draft-outline-membership',
+      current: { draftOutlineChapterIds: [...currentDraftChapterIds] },
+      incoming: { draftOutlineChapterIds: [...incomingDraftChapterIds] },
+      reason: 'draft_outline_membership_conflict',
+    });
   }
   const currentOutlineById = new Map(current.outlineSnapshots.map(snapshot => [snapshot.id, snapshot]));
   const currentOutlineByVersion = new Map(current.outlineSnapshots.map(snapshot => [snapshot.versionNumber, snapshot]));
@@ -1898,9 +2408,11 @@ export function previewPlanningNotesMerge(currentRaw, incomingRaw) {
   if (current.chapters.length > 0) {
     const currentChapterIds = new Set(current.chapters.map(record => record.id));
     const currentChapterByOrder = new Map(
-      current.chapters.map(record => [`${record.parentId}\u0000${record.order}`, record]),
+      current.chapters
+        .filter(record => currentDraftChapterIds.has(record.id))
+        .map(record => [`${record.parentId}\u0000${record.order}`, record]),
     );
-    for (const record of incoming.chapters) {
+    for (const record of incoming.chapters.filter(item => incomingDraftChapterIds.has(item.id))) {
       const occupied = currentChapterByOrder.get(`${record.parentId}\u0000${record.order}`);
       if (!currentChapterIds.has(record.id) && occupied) {
         conflicts.push({
@@ -2052,6 +2564,26 @@ export function mergePlanningNotesValues(currentRaw, incomingRaw) {
     const byId = new Map(current[section].map(record => [record.id, record]));
     for (const record of incoming[section]) if (!byId.has(record.id)) byId.set(record.id, record);
     next[section] = [...byId.values()];
+  }
+  const currentHasArchivedChapters = hasRetiredPlanningOutline(current);
+  const incomingHasArchivedChapters = hasRetiredPlanningOutline(incoming);
+  const currentIsPristineEmpty = isPristinePlanningOutline(current);
+  const incomingIsPristineEmpty = isPristinePlanningOutline(incoming);
+  const isLegacySafeAppend = current.draftOutlineChapterIds.length > 0
+    && incoming.draftOutlineChapterIds.length > 0
+    && !currentHasArchivedChapters
+    && !incomingHasArchivedChapters;
+  if (currentIsPristineEmpty) {
+    next.draftOutlineChapterIds = [...incoming.draftOutlineChapterIds];
+  } else if (incomingIsPristineEmpty) {
+    next.draftOutlineChapterIds = [...current.draftOutlineChapterIds];
+  } else if (isLegacySafeAppend) {
+    next.draftOutlineChapterIds = [...new Set([
+      ...current.draftOutlineChapterIds,
+      ...incoming.draftOutlineChapterIds,
+    ])];
+  } else {
+    next.draftOutlineChapterIds = [...current.draftOutlineChapterIds];
   }
   next.chapterOrderRevision = Math.max(
     current.chapterOrderRevision,
@@ -2653,7 +3185,7 @@ export function planningNotesShareToMarkdown(sharePackage) {
   lines.push('', '## 目次・章構成', '');
   appendMarkdownOutline(lines, {
     title: '仮目次（編集中）',
-    chapters: data.chapters,
+    chapters: getPlanningDraftOutlineChapters(data),
     description: 'この目次は編集中です。現在の確定目次とは別に、あとから何度でも直せます。',
   });
 

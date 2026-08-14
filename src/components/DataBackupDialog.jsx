@@ -62,6 +62,7 @@ const PLANNING_CONFLICT_REASON_LABELS = Object.freeze({
   outline_snapshot_limit_exceeded: '目次の保存履歴が上限100件を超える',
   outline_version_number_conflict: '目次の版番号の重なり',
   confirmed_outline_conflict: '現在使う確定目次の指定違い',
+  draft_outline_membership_conflict: '編集中の仮目次が異なる（自動では切り替えない）',
   instruction_canonical_scope_conflict: '指示書の正本指定の重なり',
   instruction_first_read_conflict: '最初に見る指示書の重なり',
   decision_canonical_conflict: '意思決定の正本指定の重なり',

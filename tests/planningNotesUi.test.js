@@ -280,6 +280,91 @@ test('目次の3タブは狭い画面で横スクロールし、PCでは3列に�
   assert.match(source, /prefers-reduced-motion: reduce/);
 });
 
+test('目次全体を1件ずつ削除せずCodex案へ安全に書き直せる', () => {
+  for (const label of [
+    '目次をまとめて書き直す',
+    'Codexの目次案を貼り付ける（おすすめ）',
+    '空の仮目次から始める',
+    'Codexへの相談文をコピー',
+    '新しい仮目次のプレビュー',
+    '切り替える前の安全確認',
+    '新しい仮目次へ切り替える',
+  ]) assert.match(source, new RegExp(label));
+  assert.match(source, /parsePlanningOutlineMarkdown\(outlineRewrite\.markdown\)/);
+  assert.match(source, /replacePlanningOutlineDraft\(current, outlineRewrite\.preview\.proposedChapters/);
+  assert.match(source, /expectedOutlineRevision: outlineRewrite\.expectedOutlineRevision/);
+  assert.match(source, /expectedChapterOrderRevision: outlineRewrite\.expectedChapterOrderRevision/);
+  assert.match(source, /本人承認済みの項目・取材の質問と回答・競合調査・執筆指示書・現在の確定目次・過去の目次はすべて残ります/);
+  assert.match(source, /消えるもの：<\/span>ありません/);
+  assert.match(source, /確定目次は自動では変わりません/);
+});
+
+test('書き直しダイアログは3手順・キーボード復帰・モバイル再配置に対応する', () => {
+  assert.match(source, /aria-label="目次を書き直す手順"/);
+  assert.match(source, /aria-current=\{active \? 'step' : undefined\}/);
+  assert.match(source, /onOpenAutoFocus=\{event => \{/);
+  assert.match(source, /cancelButtonRef\.current\?\.focus\(\)/);
+  assert.match(source, /outlineRewriteTriggerRef\.current\?\.focus\(\)/);
+  assert.match(source, /max-h-\[92dvh\].*max-w-3xl.*overflow-hidden/);
+  assert.match(source, /min-h-11/);
+  assert.match(source, /flex flex-col gap-2.*sm:flex-row/);
+  assert.match(source, /role="alert"/);
+  assert.match(source, /aria-live="polite"/);
+});
+
+test('Codex相談文は本の前提と現在目次だけを含め、非公開取材を自動コピーしない', () => {
+  const promptSource = sourceBlock('function planningOutlineRewritePrompt', 'function recordSummary');
+  for (const field of ['targetReader', 'readerProblems', 'bookPromise', 'theme']) {
+    assert.match(promptSource, new RegExp(`concept\\?\\.${field}`));
+  }
+  assert.match(promptSource, /既存項目の削除や承認解除はしません/);
+  assert.match(promptSource, /出力は説明文を付けず、次のMarkdown形式だけ/);
+  assert.doesNotMatch(promptSource, /interviews|rawAnswer|publicAnswer|session/i);
+});
+
+test('書き直し後の旧目次リンクを見える状態で保持し、再紐づけできる', () => {
+  assert.match(source, /getPlanningDraftOutlineChapters\(data\)/);
+  assert.match(source, /const allChapters = data\.chapters/);
+  assert.match(source, /旧目次：\$\{path\}/);
+  assert.match(source, /旧目次との紐づけ（参照用）/);
+  assert.match(source, /目次を書き直す前の紐づけです/);
+  assert.match(source, /<option value="archived">旧目次に紐づく記録<\/option>/);
+  assert.match(source, /record\.chapterIds\.map\(id => chapterReferenceLabel\(id, allChapters, activeChapterIds\)\)/);
+  assert.match(source, /lastOutlineRewriteSummary\.preservedLinkCount/);
+  assert.match(source, /lastOutlineRewriteSummary\.needsRelinkCount/);
+});
+
+test('本人承認済みの取材等も本文を解除せず目次の紐づけだけ付け直せる', () => {
+  for (const label of [
+    '目次との紐づけだけ変更',
+    '本文や承認状態は変わりません',
+    '旧目次との紐づけ（現在残っているもの）',
+    '紐づけだけ保存',
+  ]) assert.match(source, new RegExp(label));
+  assert.match(source, /updatePlanningRecordChapterLinks\(/);
+  assert.match(source, /chapterLinkEditor\.section/);
+  assert.match(source, /chapterLinkEditor\.recordId/);
+  assert.match(source, /expectedUpdatedAt: chapterLinkEditor\.expectedUpdatedAt/);
+  assert.match(source, /<ChapterLinkDialog/);
+  assert.match(source, /value=\{chapterLinkEditor\?\.projectId === project\.id \? chapterLinkEditor : null\}/);
+  assert.match(source, /record && !\['chapters', 'concept', 'conceptHistory'\]\.includes\(detail\.section\)/);
+  assert.match(source, /activeSection !== 'chapters'.*openChapterLinkEditor\(activeSection, record\)/);
+  assert.match(source, /onEditChapterLinks=\{record => openChapterLinkEditor\('competitors', record\)\}/);
+  assert.match(source, /onEditChapterLinks=\{record => openChapterLinkEditor\('instructionVersions', record\)\}/);
+  assert.match(source, /onEditChapterLinks=\{record => openChapterLinkEditor\('decisions', record\)\}/);
+});
+
+test('空の仮目次をもう一度空にせず、完了表示で履歴追加の有無と項目数を区別する', () => {
+  assert.match(source, /disabled=\{value\.currentCount === 0\}/);
+  assert.match(source, /仮目次はすでに空です。Codexの案を貼るか、ダイアログを閉じて部・章を追加してください/);
+  assert.match(source, /if \(!result\.summary\.changed\) throw new Error/);
+  assert.match(source, /function outlineRewriteHistoryMessage\(summary\)/);
+  assert.match(source, /if \(itemCount === 0\) return '前の目次は空だったため、履歴の追加はありません'/);
+  assert.match(source, /if \(summary\?\.snapshotCreated\) return `前の目次 1版（\$\{itemCount\}項目）を履歴へ保存`/);
+  assert.match(source, /if \(summary\?\.snapshotId\) return `前の目次は保存済みの履歴に保持（\$\{itemCount\}項目）`/);
+  assert.match(source, /outlineRewriteHistoryMessage\(lastOutlineRewriteSummary\)/);
+});
+
 test('長文入力中に全文の再解析・dirty比較・検索再正規化を繰り返さない', () => {
   assert.match(source, /useState\(\(\) => readPlanningNotes\(project\?\.planning_notes\)\)/);
   assert.doesNotMatch(source, /JSON\.stringify\(editor\.draft\)/);
@@ -296,6 +381,7 @@ test('バックアップ結合のノート競合は場所と理由を示して�
   assert.match(backupDialogSource, /conflict\.section/);
   assert.match(backupDialogSource, /conflict\.reason/);
   assert.match(backupDialogSource, /目次の保存履歴が上限100件を超える/);
+  assert.match(backupDialogSource, /編集中の仮目次が異なる（自動では切り替えない）/);
   assert.match(backupDialogSource, /disabled=\{busy \|\| planningMergeConflicts\.length > 0\}/);
   assert.match(backupDialogSource, /非公開取材は通常バックアップに含まれます/);
 });

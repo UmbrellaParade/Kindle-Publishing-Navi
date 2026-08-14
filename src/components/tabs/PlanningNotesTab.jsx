@@ -70,21 +70,26 @@ import {
   formatPlanningDateTimeJst,
   getPlanningMarketMetrics,
   getConfirmedPlanningOutline,
+  getPlanningDraftOutlineChapters,
   getNextPlanningChapterOrder,
   getPlanningChapterNodeLabel,
   getPlanningChapterParentOptions,
+  isPlanningDraftChapter,
   movePlanningChapter,
+  parsePlanningOutlineMarkdown,
   parseMarketResearchSummaryMarkdown,
   planningNotesShareToMarkdown,
   planningOutlineMatchesSnapshot,
   previewMarketResearchImport,
   readPlanningNotes,
+  replacePlanningOutlineDraft,
   savePlanningMarketSummary,
   savePlanningConcept,
   serializePlanningNotes,
   sortPlanningRecordsNewest,
   sortPlanningOutlineSnapshotsNewest,
   upsertPlanningRecord,
+  updatePlanningRecordChapterLinks,
   withdrawPlanningDecision,
 } from '@/lib/planningNotes';
 
@@ -230,6 +235,59 @@ function chapterPathLabel(recordOrId, chapters, { includeSelf = true } = {}) {
   return ordered.join(' › ');
 }
 
+function chapterReferenceLabel(recordOrId, allChapters, activeChapterIds) {
+  const record = typeof recordOrId === 'string'
+    ? allChapters.find(chapter => chapter.id === recordOrId)
+    : recordOrId;
+  if (!record) return '削除済みの構成項目';
+  const path = chapterPathLabel(record, allChapters);
+  return activeChapterIds.has(record.id) ? path : `旧目次：${path}`;
+}
+
+function ChapterReferenceSummary({ record, allChapters, activeChapterIds, className = '' }) {
+  if (!record?.chapterIds?.length) return null;
+  return (
+    <p className={`break-words text-[11px] leading-relaxed text-neon-cyan/80 ${className}`}>
+      紐づく構成：{record.chapterIds.map(id => chapterReferenceLabel(id, allChapters, activeChapterIds)).join('／')}
+    </p>
+  );
+}
+
+function planningOutlineRewritePrompt(chapterRows, concept) {
+  const currentOutline = chapterRows.length > 0
+    ? chapterRows.map(({ record, depth }) => (
+      `${'#'.repeat(Math.min(depth + 1, 6))} ${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}`
+    )).join('\n')
+    : '（現在の仮目次は空です）';
+  const conceptLines = [
+    ['想定読者', concept?.targetReader],
+    ['読者の悩み', concept?.readerProblems],
+    ['本の約束', concept?.bookPromise],
+    ['テーマ', concept?.theme],
+  ].filter(([, value]) => String(value || '').trim())
+    .map(([label, value]) => `${label}：${String(value).trim()}`);
+  return [
+    '以下はKindle本の現在の仮目次です。内容を踏まえ、目次全体を新しい案として書き直してください。',
+    '既存項目の削除や承認解除はしません。新しい目次案だけを作ってください。',
+    '出力は説明文を付けず、次のMarkdown形式だけにしてください。',
+    '# 第一部　大きなまとまり',
+    '## 第一話　部の中の話',
+    '### 第一節　話の中の小見出し',
+    '',
+    ...(conceptLines.length > 0 ? ['【本の前提】', ...conceptLines, ''] : []),
+    '【現在の仮目次】',
+    currentOutline,
+  ].join('\n');
+}
+
+function outlineRewriteHistoryMessage(summary) {
+  const itemCount = Number(summary?.archivedChapterCount) || 0;
+  if (itemCount === 0) return '前の目次は空だったため、履歴の追加はありません';
+  if (summary?.snapshotCreated) return `前の目次 1版（${itemCount}項目）を履歴へ保存`;
+  if (summary?.snapshotId) return `前の目次は保存済みの履歴に保持（${itemCount}項目）`;
+  return `前の目次 ${itemCount}項目は旧目次として保持`;
+}
+
 function recordSummary(section, record) {
   const value = {
     competitors: record.findings || record.differentiation,
@@ -308,7 +366,7 @@ function ReferenceTargetBadge({ value }) {
   return <MetaBadge icon={UserRound}>対象：{REFERENCE_TARGET_LABELS[value] || '未設定'}</MetaBadge>;
 }
 
-function RecordDetailDialog({ detail, chapters, onClose }) {
+function RecordDetailDialog({ detail, chapters, activeChapterIds, onEditChapterLinks, onClose }) {
   const record = detail?.record;
   const section = detail?.section === 'conceptHistory' ? 'concept' : detail?.section;
   const fields = FORM_FIELDS[section] || [];
@@ -385,7 +443,7 @@ function RecordDetailDialog({ detail, chapters, onClose }) {
               <div className="rounded-lg border border-neon-cyan/20 bg-neon-cyan/5 p-3">
                 <p className="text-[10px] font-bold text-neon-cyan">紐づく部・章・話・節</p>
                 <p className="mt-1 text-sm text-foreground">
-                  {record.chapterIds.map(id => chapterPathLabel(id, chapters)).join('／')}
+                  {record.chapterIds.map(id => chapterReferenceLabel(id, chapters, activeChapterIds)).join('／')}
                 </p>
               </div>
             )}
@@ -393,6 +451,9 @@ function RecordDetailDialog({ detail, chapters, onClose }) {
           </div>
         )}
         <DialogFooter className="border-t border-[#2a2a4a] bg-[#121222] px-5 py-4">
+          {record && !['chapters', 'concept', 'conceptHistory'].includes(detail.section) && (
+            <Button type="button" variant="outline" onClick={() => onEditChapterLinks(detail.section, record)} className="min-h-11 border-neon-cyan/35 text-neon-cyan"><Link2 className="h-4 w-4" aria-hidden="true" />目次との紐づけだけ変更</Button>
+          )}
           <Button type="button" variant="outline" onClick={onClose} className="min-h-11">閉じる</Button>
         </DialogFooter>
       </DialogContent>
@@ -458,6 +519,322 @@ function OutlineSnapshotDialog({ value, busy, onChange, onSave, onClose }) {
   );
 }
 
+function flattenOutlineProposal(chapters = []) {
+  const childrenByParent = new Map();
+  for (const chapter of chapters) {
+    const rows = childrenByParent.get(chapter.parentId || '') || [];
+    rows.push(chapter);
+    childrenByParent.set(chapter.parentId || '', rows);
+  }
+  for (const rows of childrenByParent.values()) {
+    rows.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  }
+  const result = [];
+  const visited = new Set();
+  const visit = (record, depth) => {
+    if (!record || visited.has(record.id)) return;
+    visited.add(record.id);
+    result.push({ record, depth });
+    for (const child of childrenByParent.get(record.id) || []) visit(child, depth + 1);
+  };
+  for (const root of childrenByParent.get('') || []) visit(root, 0);
+  for (const record of chapters) visit(record, 0);
+  return result;
+}
+
+function OutlineRewriteDialog({
+  value,
+  busy,
+  onChange,
+  onNext,
+  onApply,
+  onCopyPrompt,
+  onClose,
+}) {
+  const cancelButtonRef = useRef(null);
+  const previewRows = useMemo(
+    () => flattenOutlineProposal(value?.preview?.proposedChapters || []),
+    [value?.preview],
+  );
+  const step = value?.step || 1;
+  const mode = value?.mode || 'paste';
+  const stepLabels = ['方法を選ぶ', '新しい目次を用意', '安全確認'];
+
+  return (
+    <Dialog open={Boolean(value)} onOpenChange={open => { if (!open && !busy) onClose(); }}>
+      <DialogContent
+        className="flex max-h-[92dvh] max-w-3xl flex-col overflow-hidden p-0"
+        style={{ background: '#151527', border: '1px solid #2a2a4a' }}
+        onOpenAutoFocus={event => {
+          event.preventDefault();
+          cancelButtonRef.current?.focus();
+        }}
+      >
+        <DialogHeader className="border-b border-[#2a2a4a] px-5 pb-4 pt-5">
+          <DialogTitle className="flex items-center gap-2 text-neon-cyan">
+            <Pencil className="h-5 w-5" aria-hidden="true" />
+            目次をまとめて書き直す
+          </DialogTitle>
+          <DialogDescription>
+            1件ずつ削除しなくて大丈夫です。今の目次と取材を残したまま、新しい仮目次へ安全に切り替えます。
+          </DialogDescription>
+          <ol aria-label="目次を書き直す手順" className="grid grid-cols-3 gap-2 pt-2 text-[11px] font-bold">
+            {stepLabels.map((label, index) => {
+              const number = index + 1;
+              const active = step === number;
+              const completed = step > number;
+              return (
+                <li
+                  key={label}
+                  aria-current={active ? 'step' : undefined}
+                  className={`rounded-md border px-2 py-2 text-center ${active ? 'border-neon-cyan/55 bg-neon-cyan/10 text-neon-cyan' : completed ? 'border-emerald-400/30 bg-emerald-400/5 text-emerald-200' : 'border-white/10 text-muted-foreground'}`}
+                >
+                  <span className="block">{completed ? '完了' : `STEP ${number}`}</span>
+                  <span className="mt-0.5 block">{label}</span>
+                </li>
+              );
+            })}
+          </ol>
+        </DialogHeader>
+
+        {value && <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          {step === 1 && <>
+            <fieldset className="space-y-3">
+              <legend className="text-sm font-black text-foreground">書き直し方を選んでください</legend>
+              <label className={`flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border p-4 ${mode === 'paste' ? 'border-neon-cyan/55 bg-neon-cyan/10' : 'border-white/10 bg-black/10'}`}>
+                <input
+                  type="radio"
+                  name="outline-rewrite-mode"
+                  value="paste"
+                  checked={mode === 'paste'}
+                  onChange={() => onChange({ ...value, mode: 'paste', preview: null, error: '' })}
+                  className="mt-1 h-4 w-4 accent-cyan-400"
+                />
+                <span className="min-w-0">
+                  <span className="block font-black text-neon-cyan">Codexの目次案を貼り付ける（おすすめ）</span>
+                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">CodexやChatGPTが作ったMarkdownを貼ると、部・章・話・節の階層を確認してから反映できます。</span>
+                </span>
+              </label>
+              <label className={`flex min-h-14 items-start gap-3 rounded-xl border p-4 ${value.currentCount === 0 ? 'cursor-not-allowed border-white/10 bg-black/10 opacity-55' : mode === 'blank' ? 'cursor-pointer border-neon-pink/55 bg-neon-pink/10' : 'cursor-pointer border-white/10 bg-black/10'}`}>
+                <input
+                  type="radio"
+                  name="outline-rewrite-mode"
+                  value="blank"
+                  checked={mode === 'blank'}
+                  disabled={value.currentCount === 0}
+                  onChange={() => onChange({ ...value, mode: 'blank', preview: null, error: '' })}
+                  className="mt-1 h-4 w-4 accent-pink-400"
+                />
+                <span className="min-w-0">
+                  <span className="block font-black text-neon-pink">空の仮目次から始める</span>
+                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{value.currentCount === 0 ? '仮目次はすでに空です。Codexの案を貼るか、ダイアログを閉じて部・章を追加してください。' : '今の仮目次を履歴へ残し、新しい仮目次だけを空にします。あとから1件ずつ追加できます。'}</span>
+                </span>
+              </label>
+            </fieldset>
+
+            <div className="rounded-xl border border-emerald-400/25 bg-emerald-400/5 p-4 text-xs leading-relaxed text-muted-foreground">
+              <p className="font-black text-emerald-200">どちらを選んでも、次の内容は消えません</p>
+              <p className="mt-2">本人承認済みの項目・取材の質問と回答・競合調査・執筆指示書・現在の確定目次・過去の目次はすべて残ります。</p>
+            </div>
+
+            <Button type="button" variant="outline" onClick={onCopyPrompt} className="min-h-11 w-full gap-2 border-neon-cyan/35 text-neon-cyan sm:w-auto">
+              <Copy className="h-4 w-4" aria-hidden="true" />Codexへの相談文をコピー
+            </Button>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">現在の目次と、貼り付けに使える出力形式をまとめてコピーします。Codexには「削除」ではなく「新しい目次案の作成」を頼めます。</p>
+          </>}
+
+          {step === 2 && mode === 'paste' && <>
+            <label className="block space-y-2 text-sm font-black text-foreground">
+              <span>Codexが作った新しい目次を貼り付ける</span>
+              <span className="block text-xs font-normal leading-relaxed text-muted-foreground">貼り付けただけでは保存されません。次の画面で階層を確認してから切り替えます。</span>
+              <textarea
+                value={value.markdown}
+                onChange={event => onChange({ ...value, markdown: event.target.value, preview: null, error: '' })}
+                className={`${TEXTAREA_CLASS} min-h-64 font-mono text-xs`}
+                placeholder={'# 第一部　息をしているだけで精いっぱいだった\n## 第一話　朝が来るのが怖かった\n### 第一節　布団から出られない朝'}
+                aria-describedby={`outline-rewrite-format-help${value.error ? ' outline-rewrite-error' : ''}`}
+              />
+            </label>
+            <div id="outline-rewrite-format-help" className="rounded-lg border border-white/10 bg-black/10 p-3 text-xs leading-relaxed text-muted-foreground">
+              <p className="font-bold text-foreground">貼り付け形式の例</p>
+              <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-neon-cyan">{'# 第一部　大きなまとまり\n## 第一話　部の中の話\n### 第一節　話の中の小見出し'}</pre>
+              <p className="mt-2">「第1章」「第一話」などの文字から種類を判別します。判別できない行は勝手に保存せず、確認メッセージを表示します。</p>
+            </div>
+            {value.error && (
+              <div id="outline-rewrite-error" role="alert" className="flex gap-2 rounded-lg border border-rose-400/40 bg-rose-400/10 p-3 text-xs leading-relaxed text-rose-100">
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                <span>{value.error}</span>
+              </div>
+            )}
+          </>}
+
+          {step === 2 && mode === 'blank' && (
+            <div className="rounded-xl border border-neon-pink/30 bg-neon-pink/5 p-5">
+              <h3 className="font-black text-neon-pink">新しい仮目次を空にします</h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">今の仮目次は自動で「過去の目次」へ保存されます。空にしたあとも、履歴を見ながら新しい部・章・話・節を追加できます。</p>
+            </div>
+          )}
+
+          {step === 3 && <>
+            <div className="rounded-xl border border-neon-cyan/25 bg-neon-cyan/5 p-4">
+              <h3 className="font-black text-neon-cyan">新しい仮目次のプレビュー</h3>
+              {previewRows.length === 0 ? (
+                <p className="mt-3 rounded-lg border border-dashed border-white/15 p-4 text-center text-sm text-muted-foreground">空の仮目次から始めます。</p>
+              ) : <>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  部 {value.preview?.counts?.part || 0}・章 {value.preview?.counts?.chapter || 0}・話 {value.preview?.counts?.episode || 0}・節 {value.preview?.counts?.section || 0}
+                </p>
+                <div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1" aria-label="新しい仮目次の階層プレビュー">
+                  {previewRows.map(({ record, depth }) => (
+                    <div
+                      key={record.id}
+                      className="rounded-lg border border-white/10 bg-black/10 px-3 py-2"
+                      style={{ marginLeft: `${Math.min(depth, 3) * 8}px` }}
+                    >
+                      <span className="mr-2 inline-block rounded-full border border-neon-pink/30 px-2 py-0.5 text-[10px] font-black text-neon-pink">{getPlanningChapterNodeLabel(record.nodeType)}</span>
+                      <span className="break-words text-sm font-bold text-foreground">{record.title || '無題'}</span>
+                    </div>
+                  ))}
+                </div>
+              </>}
+              {(value.preview?.warnings || []).length > 0 && (
+                <ul className="mt-3 space-y-1 text-xs text-amber-200">
+                  {value.preview.warnings.map(warning => <li key={warning}>・{warning}</li>)}
+                </ul>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/5 p-4 text-xs leading-relaxed text-muted-foreground">
+              <h3 className="font-black text-emerald-200">切り替える前の安全確認</h3>
+              <p className="mt-2"><span className="font-bold text-foreground">履歴へ残るもの：</span>現在の仮目次 {value.currentCount}件</p>
+              <p className="mt-1"><span className="font-bold text-foreground">そのまま残るもの：</span>本人承認済み {value.approvedCount}件、取材などの紐づく記録 {value.linkedRecordCount}件、現在の確定目次、過去の履歴</p>
+              <p className="mt-1"><span className="font-bold text-foreground">消えるもの：</span>ありません</p>
+              <p className="mt-1"><span className="font-bold text-foreground">変わるもの：</span>編集中の仮目次だけです。確定目次は自動では変わりません。</p>
+              {value.linkedRecordCount > 0 && <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/5 p-2 text-amber-100">取材などの紐づけは「旧目次：〇〇」として残ります。新しい目次が固まってから、必要なものだけ付け直せます。</p>}
+            </div>
+          </>}
+
+          <p className="sr-only" aria-live="polite">手順 {step}／3：{stepLabels[step - 1]}</p>
+        </div>}
+
+        <DialogFooter className="border-t border-[#2a2a4a] px-5 py-4 sm:justify-between">
+          <div className="flex flex-col-reverse gap-2 sm:flex-row">
+            <Button ref={cancelButtonRef} type="button" variant="outline" onClick={onClose} disabled={busy} className="min-h-11">キャンセル</Button>
+            {step > 1 && <Button type="button" variant="outline" onClick={() => onChange({ ...value, step: step - 1, error: '' })} disabled={busy} className="min-h-11">戻る</Button>}
+          </div>
+          {step < 3 ? (
+            <Button type="button" onClick={onNext} disabled={busy || (step === 2 && mode === 'paste' && !value.markdown.trim())} className="min-h-11 bg-neon-cyan/20 text-neon-cyan">
+              {step === 1 ? '次へ' : '解析して安全確認へ'}
+            </Button>
+          ) : (
+            <Button type="button" onClick={onApply} disabled={busy} className="min-h-11 bg-emerald-400/15 text-emerald-200">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="h-4 w-4" aria-hidden="true" />}
+              {mode === 'blank' ? '仮目次を空にして始める' : '新しい仮目次へ切り替える'}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function sameStringSet(left = [], right = []) {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every(value => rightSet.has(value));
+}
+
+function ChapterLinkDialog({
+  value,
+  chapterRows,
+  allChapters,
+  activeChapterIds,
+  busy,
+  onChange,
+  onSave,
+  onClose,
+}) {
+  const cancelButtonRef = useRef(null);
+  const archivedSelected = useMemo(() => (
+    (value?.chapterIds || [])
+      .filter(chapterId => !activeChapterIds.has(chapterId))
+      .map(chapterId => allChapters.find(chapter => chapter.id === chapterId))
+      .filter(Boolean)
+  ), [activeChapterIds, allChapters, value?.chapterIds]);
+  const dirty = value ? !sameStringSet(value.initialChapterIds, value.chapterIds) : false;
+  const toggleChapter = (chapterId, checked) => onChange({
+    ...value,
+    chapterIds: checked
+      ? [...new Set([...(value.chapterIds || []), chapterId])]
+      : (value.chapterIds || []).filter(id => id !== chapterId),
+  });
+
+  return (
+    <Dialog open={Boolean(value)} onOpenChange={open => { if (!open && !busy) onClose(); }}>
+      <DialogContent
+        className="flex max-h-[92dvh] max-w-2xl flex-col overflow-hidden p-0"
+        style={{ background: '#151527', border: '1px solid #2a2a4a' }}
+        onOpenAutoFocus={event => {
+          event.preventDefault();
+          cancelButtonRef.current?.focus();
+        }}
+      >
+        <DialogHeader className="border-b border-[#2a2a4a] px-5 pb-4 pt-5">
+          <DialogTitle className="flex items-center gap-2 text-neon-cyan"><Link2 className="h-5 w-5" aria-hidden="true" />目次との紐づけだけ変更</DialogTitle>
+          <DialogDescription>{value?.title || 'この記録'}を、新しい仮目次のどこで使うか選び直します。</DialogDescription>
+        </DialogHeader>
+        {value && <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <div className="rounded-lg border border-emerald-400/25 bg-emerald-400/5 p-3 text-xs leading-relaxed text-muted-foreground">
+            <p className="font-black text-emerald-200">本文や承認状態は変わりません</p>
+            <p className="mt-1">本人承認済みの取材でも、質問・原回答・要約・公開範囲を変更せず、目次との紐づけだけ安全に付け直せます。</p>
+          </div>
+
+          <fieldset>
+            <legend className="text-sm font-black text-foreground">現在の仮目次</legend>
+            {chapterRows.length === 0 ? (
+              <p className="mt-2 rounded-lg border border-dashed border-white/15 p-4 text-center text-xs text-muted-foreground">新しい仮目次は空です。先に部・章・話・節を追加すると紐づけられます。</p>
+            ) : (
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {chapterRows.map(({ record: chapter, depth }) => {
+                  const checked = value.chapterIds.includes(chapter.id);
+                  return (
+                    <label key={chapter.id} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-[#34345a] px-3 py-2 text-xs">
+                      <input type="checkbox" checked={checked} onChange={event => toggleChapter(chapter.id, event.target.checked)} className="h-4 w-4 accent-cyan-400" />
+                      <span className="min-w-0 break-words">{'› '.repeat(Math.min(depth, 3))}{getPlanningChapterNodeLabel(chapter.nodeType)}：{chapter.title || '無題'}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
+
+          {archivedSelected.length > 0 && (
+            <fieldset className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3">
+              <legend className="px-1 text-sm font-black text-amber-200">旧目次との紐づけ（現在残っているもの）</legend>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">チェックを外すまでは参照として残ります。新しい目次への付け直しと同時に外せます。</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {archivedSelected.map(chapter => (
+                  <label key={chapter.id} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-amber-400/25 px-3 py-2 text-xs">
+                    <input type="checkbox" checked onChange={event => toggleChapter(chapter.id, event.target.checked)} className="h-4 w-4 accent-amber-400" />
+                    <span className="min-w-0 break-words">{chapterReferenceLabel(chapter, allChapters, activeChapterIds)}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+        </div>}
+        <DialogFooter className="border-t border-[#2a2a4a] px-5 py-4">
+          <Button ref={cancelButtonRef} type="button" variant="outline" onClick={onClose} disabled={busy} className="min-h-11">キャンセル</Button>
+          <Button type="button" onClick={onSave} disabled={busy || !dirty} className="min-h-11 bg-neon-cyan/20 text-neon-cyan">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}
+            紐づけだけ保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function OutlineSnapshotTree({ snapshot, current = false, includeRejected = false }) {
   if (!snapshot) return null;
   const rows = flattenPlanningOutlineSnapshot(snapshot, { includeRejected });
@@ -505,7 +882,7 @@ function OutlineSnapshotTree({ snapshot, current = false, includeRejected = fals
   );
 }
 
-function EditorDialog({ editor, planningData, chapters, busy, onChange, onSave, onClose }) {
+function EditorDialog({ editor, planningData, chapters, allChapters, activeChapterIds, busy, onChange, onSave, onClose }) {
   const draft = editor?.draft;
   const section = editor?.section;
   const fields = FORM_FIELDS[section] || [];
@@ -521,6 +898,12 @@ function EditorDialog({ editor, planningData, chapters, busy, onChange, onSave, 
     () => planningData ? flattenPlanningChapterTree(planningData) : [],
     [planningData],
   );
+  const archivedLinkedChapters = useMemo(() => (
+    (draft?.chapterIds || [])
+      .filter(chapterId => !activeChapterIds.has(chapterId))
+      .map(chapterId => allChapters.find(chapter => chapter.id === chapterId))
+      .filter(Boolean)
+  ), [activeChapterIds, allChapters, draft?.chapterIds]);
 
   const requestClose = () => {
     if (dirty && !globalThis.window.confirm('まだ保存していない入力があります。閉じてもよいですか？')) return;
@@ -636,28 +1019,51 @@ function EditorDialog({ editor, planningData, chapters, busy, onChange, onSave, 
           {section !== 'concept' && section !== 'chapters' && (
             <fieldset className="rounded-lg border border-[#34345a] p-3">
               <legend className="px-1 text-xs font-bold text-foreground">紐づく部・章・話・節</legend>
-              {chapters.length === 0 ? (
+              {chapters.length === 0 && archivedLinkedChapters.length === 0 ? (
                 <p className="text-xs text-muted-foreground">先に「目次・章構成」で部・章・話・節を作ると紐づけられます。</p>
               ) : (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {chapterRows.map(({ record: chapter, depth }) => {
-                    const checked = (draft?.chapterIds || []).includes(chapter.id);
-                    return (
-                      <label key={chapter.id} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-[#34345a] px-3 py-2 text-xs">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={event => update('chapterIds', event.target.checked
-                            ? [...(draft.chapterIds || []), chapter.id]
-                            : (draft.chapterIds || []).filter(id => id !== chapter.id))}
-                          className="h-4 w-4 accent-cyan-400"
-                        />
-                        <span className="min-w-0 break-words">
-                          {'› '.repeat(Math.min(depth, 3))}{getPlanningChapterNodeLabel(chapter.nodeType)}：{chapter.title || '無題'}
-                        </span>
-                      </label>
-                    );
-                  })}
+                <div className="space-y-3">
+                  {chapterRows.length > 0 && <div className="grid gap-2 sm:grid-cols-2">
+                    {chapterRows.map(({ record: chapter, depth }) => {
+                      const checked = (draft?.chapterIds || []).includes(chapter.id);
+                      return (
+                        <label key={chapter.id} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-[#34345a] px-3 py-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={event => update('chapterIds', event.target.checked
+                              ? [...(draft.chapterIds || []), chapter.id]
+                              : (draft.chapterIds || []).filter(id => id !== chapter.id))}
+                            className="h-4 w-4 accent-cyan-400"
+                          />
+                          <span className="min-w-0 break-words">
+                            {'› '.repeat(Math.min(depth, 3))}{getPlanningChapterNodeLabel(chapter.nodeType)}：{chapter.title || '無題'}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>}
+                  {archivedLinkedChapters.length > 0 && (
+                    <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3">
+                      <p className="text-xs font-black text-amber-200">旧目次との紐づけ（参照用）</p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">目次を書き直す前の紐づけです。取材内容は残したまま、ここでチェックを外したり、新しい目次へ付け直したりできます。</p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {archivedLinkedChapters.map(chapter => (
+                          <label key={chapter.id} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-amber-400/25 px-3 py-2 text-xs">
+                            <input
+                              type="checkbox"
+                              checked
+                              onChange={event => update('chapterIds', event.target.checked
+                                ? [...new Set([...(draft.chapterIds || []), chapter.id])]
+                                : (draft.chapterIds || []).filter(id => id !== chapter.id))}
+                              className="h-4 w-4 accent-amber-400"
+                            />
+                            <span className="min-w-0 break-words">{chapterReferenceLabel(chapter, allChapters, activeChapterIds)}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </fieldset>
@@ -981,6 +1387,8 @@ function MarketResearchSection({
   metrics,
   allCompetitors,
   visibleCompetitors,
+  allChapters,
+  activeChapterIds,
   filtersActive,
   onClearFilters,
   onEditSummary,
@@ -988,6 +1396,7 @@ function MarketResearchSection({
   onAdd,
   onRevealEvidence,
   onOpenDetail,
+  onEditChapterLinks,
   onEdit,
   onDuplicate,
   onDelete,
@@ -1024,6 +1433,7 @@ function MarketResearchSection({
   const actionButtons = record => (
     <div className="flex flex-wrap gap-2">
       <Button type="button" size="sm" variant="outline" onClick={() => onOpenDetail(record)} className="min-h-10 border-white/15 text-foreground"><BookOpenText className="h-4 w-4" />内容を見る</Button>
+      <Button type="button" size="sm" variant="outline" onClick={() => onEditChapterLinks(record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Link2 className="h-4 w-4" />目次との紐づけだけ変更</Button>
       {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => onEdit(record)} className="min-h-10"><Pencil className="h-4 w-4" />編集</Button>}
       <Button type="button" size="sm" variant="outline" onClick={() => onDuplicate(record)} className="min-h-10 border-neon-cyan/30 text-neon-cyan"><Copy className="h-4 w-4" />複製</Button>
       {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => onDelete(record)} className="min-h-10 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" />削除</Button>}
@@ -1180,7 +1590,7 @@ function MarketResearchSection({
                       className="align-top odd:bg-white/[0.015] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neon-cyan/80"
                       style={{ scrollMarginTop: 'calc(var(--kindle-main-nav-height, 60px) + 5.5rem)' }}
                     >
-                      <td className="max-w-48 px-3 py-3"><p className="font-bold text-foreground">{record.bookTitle || record.competitorName || '名称未設定'}</p><p className="mt-1 text-muted-foreground">{record.author || '著者未記録'}</p></td>
+                      <td className="max-w-48 px-3 py-3"><p className="font-bold text-foreground">{record.bookTitle || record.competitorName || '名称未設定'}</p><p className="mt-1 text-muted-foreground">{record.author || '著者未記録'}</p><ChapterReferenceSummary record={record} allChapters={allChapters} activeChapterIds={activeChapterIds} className="mt-2" /></td>
                       {[record.targetReader, record.mainPromise, record.strengths, record.readerReactionGap, record.differentiation].map((value, index) => <td key={index} className="max-w-56 whitespace-pre-wrap px-3 py-3 leading-relaxed text-foreground">{value || '未記録'}</td>)}
                       <td className="max-w-32 px-3 py-3">{record.url ? <a href={record.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-bold text-neon-cyan underline underline-offset-4">開く<ExternalLink className="h-3 w-3" aria-hidden="true" /></a> : <span className="text-muted-foreground">未記録</span>}</td>
                       <td className="px-3 py-3 text-foreground">{record.checkedOn || '未記録'}</td>
@@ -1215,6 +1625,7 @@ function MarketResearchSection({
                     <StatusBadge status={record.status} />
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">{record.author || '著者未記録'} ／ 確認日：{record.checkedOn || '未記録'}</p>
+                  <ChapterReferenceSummary record={record} allChapters={allChapters} activeChapterIds={activeChapterIds} className="mt-2" />
                   <dl className="mt-3 space-y-2">
                     {[
                       ['想定読者', record.targetReader], ['中心の約束', record.mainPromise], ['強み', record.strengths],
@@ -1248,9 +1659,12 @@ const INSTRUCTION_ROLE_LABELS = {
 function InstructionReferenceSection({
   records,
   newestRecords,
+  allChapters,
+  activeChapterIds,
   busy,
   onAdd,
   onOpenDetail,
+  onEditChapterLinks,
   onEdit,
   onDuplicate,
   onDelete,
@@ -1295,6 +1709,7 @@ function InstructionReferenceSection({
                 <div className="mt-3 flex flex-wrap items-center gap-2"><MetaBadge icon={Star} tone="first">最初に見る</MetaBadge><MetaBadge icon={ShieldCheck} tone="canonical">正本</MetaBadge><ReferenceTargetBadge value={record.audience} /></div>
                 <p className="mt-3 font-bold text-foreground">{record.name || '無題の指示書'} <span className="text-neon-cyan">v{record.versionNumber}</span></p>
                 <p className="mt-1 text-xs text-muted-foreground">{INSTRUCTION_ROLE_LABELS[record.role] || record.role} ／ 更新：{formatPlanningDateTimeJst(record.updatedAt)}（日本時間）</p>
+                <ChapterReferenceSummary record={record} allChapters={allChapters} activeChapterIds={activeChapterIds} className="mt-2" />
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button type="button" size="sm" variant="outline" onClick={() => onOpenDetail(record)} className="min-h-10"><BookOpenText className="h-4 w-4" />内容を見る</Button>
                   <Button type="button" size="sm" variant="outline" onClick={() => onClearCanonical(record, target)} disabled={busy} className="min-h-10 border-white/15 text-muted-foreground"><X className="h-4 w-4" />指定を外す</Button>
@@ -1340,6 +1755,7 @@ function InstructionReferenceSection({
                     </div>
                     <h3 className="mt-3 break-words font-bold text-foreground">{record.name || '無題の指示書'} <span className="text-neon-cyan">v{record.versionNumber}</span></h3>
                     <p className="mt-1 text-xs text-muted-foreground">役割：{INSTRUCTION_ROLE_LABELS[record.role] || record.role} ／ 更新：{formatPlanningDateTimeJst(record.updatedAt)}（日本時間）</p>
+                    <ChapterReferenceSummary record={record} allChapters={allChapters} activeChapterIds={activeChapterIds} className="mt-2" />
                     {record.changeSummary && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{record.changeSummary}</p>}
                     <p className="mt-2 break-all text-[10px] text-muted-foreground">ID: {record.id}</p>
                   </div>
@@ -1359,6 +1775,7 @@ function InstructionReferenceSection({
                     ))}
                     {record.audience === 'unset' && <p className="w-full text-xs text-amber-200">正本にする対象を選ぶと、この資料の対象も同時に設定されます。</p>}
                     <Button type="button" size="sm" variant="outline" onClick={() => onOpenDetail(record)} className="min-h-11 border-white/15 text-foreground"><BookOpenText className="h-4 w-4" />内容を見る</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => onEditChapterLinks(record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Link2 className="h-4 w-4" />目次との紐づけだけ変更</Button>
                     {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => onEdit(record)} className="min-h-11"><Pencil className="h-4 w-4" />編集</Button>}
                     <Button type="button" size="sm" variant="outline" onClick={() => onDuplicate(record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Copy className="h-4 w-4" />新しい版</Button>
                     {record.status !== 'approved' && record.canonicalFor.length === 0 && <Button type="button" size="sm" variant="outline" onClick={() => onDelete(record)} className="min-h-11 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" />削除</Button>}
@@ -1376,9 +1793,12 @@ function InstructionReferenceSection({
 function DecisionHistorySection({
   records,
   newestRecords,
+  allChapters,
+  activeChapterIds,
   busy,
   onAdd,
   onOpenDetail,
+  onEditChapterLinks,
   onEdit,
   onDuplicate,
   onDelete,
@@ -1414,6 +1834,7 @@ function DecisionHistorySection({
             <p className="mt-3 whitespace-pre-wrap font-bold leading-relaxed text-foreground">{canonical.decision}</p>
             {canonical.reason && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">理由：{canonical.reason}</p>}
             <p className="mt-2 text-xs text-muted-foreground">更新：{formatPlanningDateTimeJst(canonical.updatedAt)}（日本時間）</p>
+            <ChapterReferenceSummary record={canonical} allChapters={allChapters} activeChapterIds={activeChapterIds} className="mt-2" />
             <Button type="button" size="sm" variant="outline" onClick={() => onReveal(canonical.id)} className="mt-3 min-h-10"><History className="h-4 w-4" />履歴内で見る</Button>
           </div>
         ) : (
@@ -1450,6 +1871,7 @@ function DecisionHistorySection({
                   <p className="mt-3 whitespace-pre-wrap font-bold leading-relaxed text-foreground">{record.decision}</p>
                   {record.reason && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">理由：{record.reason}</p>}
                   <p className="mt-2 text-xs text-muted-foreground">更新：{formatPlanningDateTimeJst(record.updatedAt)}（日本時間）</p>
+                  <ChapterReferenceSummary record={record} allChapters={allChapters} activeChapterIds={activeChapterIds} className="mt-2" />
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
                     {record.supersedesId && <button type="button" onClick={() => onReveal(record.supersedesId)} className="inline-flex min-h-10 items-center gap-1 rounded-md border border-white/15 px-2.5 py-1.5 font-bold text-neon-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80"><Link2 className="h-3.5 w-3.5" />差替え前を見る</button>}
                     {record.supersededById && <button type="button" onClick={() => onReveal(record.supersededById)} className="inline-flex min-h-10 items-center gap-1 rounded-md border border-white/15 px-2.5 py-1.5 font-bold text-neon-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80"><Link2 className="h-3.5 w-3.5" />差替え後を見る</button>}
@@ -1460,6 +1882,7 @@ function DecisionHistorySection({
                   {!record.isCanonical && record.decisionState !== 'withdrawn' && <Button type="button" size="sm" variant="outline" onClick={() => onAssignCanonical(record)} disabled={busy} className="min-h-11 border-neon-pink/30 text-neon-pink"><Star className="h-4 w-4" />正本にする</Button>}
                   {record.decisionState !== 'withdrawn' && <Button type="button" size="sm" variant="outline" onClick={() => onWithdraw(record)} disabled={busy} className="min-h-11 border-rose-400/30 text-rose-200"><X className="h-4 w-4" />撤回</Button>}
                   <Button type="button" size="sm" variant="outline" onClick={() => onOpenDetail(record)} className="min-h-11 border-white/15 text-foreground"><BookOpenText className="h-4 w-4" />内容を見る</Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => onEditChapterLinks(record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Link2 className="h-4 w-4" />目次との紐づけだけ変更</Button>
                   {record.status !== 'approved' && record.decisionState !== 'withdrawn' && <Button type="button" size="sm" variant="outline" onClick={() => onEdit(record)} className="min-h-11"><Pencil className="h-4 w-4" />編集</Button>}
                   <Button type="button" size="sm" variant="outline" onClick={() => onDuplicate(record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Copy className="h-4 w-4" />新しい判断</Button>
                   {record.status !== 'approved' && !record.isCanonical && !record.supersedesId && !record.supersededById && <Button type="button" size="sm" variant="outline" onClick={() => onDelete(record)} className="min-h-11 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" />削除</Button>}
@@ -1490,6 +1913,9 @@ export default function PlanningNotesTab({
   const [detail, setDetail] = useState(null);
   const [outlineView, setOutlineView] = useState('draft');
   const [outlineDialog, setOutlineDialog] = useState(null);
+  const [outlineRewrite, setOutlineRewrite] = useState(null);
+  const [lastOutlineRewriteSummary, setLastOutlineRewriteSummary] = useState(null);
+  const [chapterLinkEditor, setChapterLinkEditor] = useState(null);
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [query, setQuery] = useState('');
@@ -1506,6 +1932,7 @@ export default function PlanningNotesTab({
   const marketImportInputRef = useRef(null);
   const outlineTablistScrollRef = useRef(null);
   const outlineTabRefs = useRef(new Map());
+  const outlineRewriteTriggerRef = useRef(null);
   const activeSectionRef = useRef(activeSection);
 
   const selectActiveSection = section => {
@@ -1530,6 +1957,9 @@ export default function PlanningNotesTab({
     setDetail(null);
     setOutlineView('draft');
     setOutlineDialog(null);
+    setOutlineRewrite(null);
+    setLastOutlineRewriteSummary(null);
+    setChapterLinkEditor(null);
     const restoredSection = normalizePlanningViewSection(initialSection);
     activeSectionRef.current = restoredSection;
     setActiveSection(restoredSection);
@@ -1632,8 +2062,10 @@ export default function PlanningNotesTab({
     };
   }, [activeSection, outlineView]);
 
+  const allChapters = data.chapters;
+  const chapters = useMemo(() => getPlanningDraftOutlineChapters(data), [data]);
+  const activeChapterIds = useMemo(() => new Set(chapters.map(chapter => chapter.id)), [chapters]);
   const chapterRows = useMemo(() => flattenPlanningChapterTree(data), [data]);
-  const chapters = useMemo(() => chapterRows.map(({ record }) => record), [chapterRows]);
   const outlineSnapshots = useMemo(
     () => sortPlanningOutlineSnapshotsNewest(data),
     [data],
@@ -1659,9 +2091,19 @@ export default function PlanningNotesTab({
     [data, latestDraftSnapshot],
   );
   const activeOutlineChapterCount = useMemo(
-    () => data.chapters.filter(chapter => chapter.status !== 'rejected').length,
-    [data.chapters],
+    () => chapters.filter(chapter => chapter.status !== 'rejected').length,
+    [chapters],
   );
+  const approvedDraftChapterCount = useMemo(
+    () => chapters.filter(chapter => chapter.status === 'approved').length,
+    [chapters],
+  );
+  const linkedRecordCountForDraft = useMemo(() => (
+    ['competitors', 'interviews', 'instructionVersions', 'decisions']
+      .flatMap(section => data[section])
+      .filter(record => record.chapterIds.some(chapterId => activeChapterIds.has(chapterId)))
+      .length
+  ), [activeChapterIds, data]);
   const usageBytes = useMemo(
     () => estimatePlanningNotesBytes(project?.planning_notes || serializePlanningNotes(data)),
     [project?.planning_notes, data],
@@ -1863,10 +2305,36 @@ export default function PlanningNotesTab({
     });
   };
 
+  const openChapterLinkEditor = (section, record) => {
+    if (section === 'chapters' || section === 'concept' || section === 'conceptHistory') return;
+    setDetail(null);
+    setChapterLinkEditor({
+      projectId: project.id,
+      section,
+      recordId: record.id,
+      title: recordTitle(section, record),
+      initialChapterIds: [...record.chapterIds],
+      chapterIds: [...record.chapterIds],
+      expectedUpdatedAt: record.updatedAt,
+    });
+  };
+
+  const saveChapterLinks = async () => {
+    if (!chapterLinkEditor || chapterLinkEditor.projectId !== project.id) return;
+    const next = await persist(current => updatePlanningRecordChapterLinks(
+      current,
+      chapterLinkEditor.section,
+      chapterLinkEditor.recordId,
+      chapterLinkEditor.chapterIds,
+      { expectedUpdatedAt: chapterLinkEditor.expectedUpdatedAt },
+    ), '目次との紐づけだけを保存しました', { closeEditor: false });
+    if (next) setChapterLinkEditor(null);
+  };
+
   const openDuplicate = (section, record) => {
     if (section === 'chapters') {
       const parent = record.parentId
-        ? data.chapters.find(chapter => chapter.id === record.parentId)
+        ? chapters.find(chapter => chapter.id === record.parentId)
         : null;
       if (parent?.status === 'approved') {
         toast.error('本人承認済みの親項目には新しい子項目を追加できません。最上位へ新しい案を作ってください');
@@ -1938,7 +2406,11 @@ export default function PlanningNotesTab({
           expectedUpdatedAt: editor.expectedUpdatedAt,
         });
       }
-      const latestRecord = current.chapters.find(chapter => chapter.id === editor.draft.id);
+      const storedRecord = current.chapters.find(chapter => chapter.id === editor.draft.id);
+      if (storedRecord && !isPlanningDraftChapter(current, storedRecord.id)) {
+        throw new Error('この項目を開いたあとに仮目次が書き直されました。新しい仮目次を確認してから編集してください');
+      }
+      const latestRecord = storedRecord;
       if (!latestRecord) {
         return upsertPlanningRecord(current, 'chapters', {
           ...editor.draft,
@@ -1968,7 +2440,7 @@ export default function PlanningNotesTab({
   };
 
   const handleDelete = async (section, record) => {
-    if (!globalThis.window.confirm(`「${recordTitle(section, record)}」を削除しますか？\n\n本人承認済みの項目は削除できません。`)) return;
+    if (!globalThis.window.confirm(`「${recordTitle(section, record)}」だけを削除しますか？\n\n子項目や取材との紐づけがある場合は削除せず停止します。目次全体を変えたいときは、キャンセルして「目次をまとめて書き直す」を使ってください。`)) return;
     await persist(current => deletePlanningRecord(current, section, record.id, {
       expectedUpdatedAt: record.updatedAt,
     }), 'ノートを削除しました', { closeEditor: false });
@@ -1979,6 +2451,74 @@ export default function PlanningNotesTab({
       expectedRevision: data.chapterOrderRevision,
     }), `「${record.title || '無題の構成項目'}」を${direction === 'up' ? '上' : '下'}へ移動しました`, { closeEditor: false });
     if (next) setData(next);
+  };
+
+  const closeOutlineRewrite = () => {
+    setOutlineRewrite(null);
+    window.requestAnimationFrame(() => outlineRewriteTriggerRef.current?.focus());
+  };
+
+  const openOutlineRewrite = () => {
+    setOutlineRewrite({
+      projectId: project.id,
+      step: 1,
+      mode: 'paste',
+      markdown: '',
+      preview: null,
+      error: '',
+      currentCount: chapters.length,
+      approvedCount: approvedDraftChapterCount,
+      linkedRecordCount: linkedRecordCountForDraft,
+      expectedOutlineRevision: data.outlineRevision,
+      expectedChapterOrderRevision: data.chapterOrderRevision,
+    });
+  };
+
+  const continueOutlineRewrite = () => {
+    if (!outlineRewrite || outlineRewrite.projectId !== project.id) return;
+    if (outlineRewrite.step === 1) {
+      setOutlineRewrite({ ...outlineRewrite, step: 2, error: '', preview: null });
+      return;
+    }
+    if (outlineRewrite.step !== 2) return;
+    try {
+      const preview = outlineRewrite.mode === 'blank'
+        ? { proposedChapters: [], counts: { total: 0, part: 0, chapter: 0, episode: 0, section: 0 }, warnings: [] }
+        : parsePlanningOutlineMarkdown(outlineRewrite.markdown);
+      setOutlineRewrite({ ...outlineRewrite, step: 3, preview, error: '' });
+    } catch (error) {
+      setOutlineRewrite({ ...outlineRewrite, preview: null, error: error?.message || '新しい目次を解析できませんでした' });
+    }
+  };
+
+  const copyOutlineRewritePrompt = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('このブラウザではクリップボードを利用できません');
+      await navigator.clipboard.writeText(planningOutlineRewritePrompt(chapterRows, data.concept));
+      toast.success('Codexへの相談文をコピーしました');
+      setStatusMessage('Codexへの相談文をコピーしました');
+    } catch (error) {
+      toast.error(error?.message || '相談文をコピーできませんでした');
+    }
+  };
+
+  const applyOutlineRewrite = async () => {
+    if (!outlineRewrite || outlineRewrite.projectId !== project.id || outlineRewrite.step !== 3 || !outlineRewrite.preview) return;
+    let rewriteSummary = null;
+    const next = await persist(current => {
+      const result = replacePlanningOutlineDraft(current, outlineRewrite.preview.proposedChapters, {
+        expectedOutlineRevision: outlineRewrite.expectedOutlineRevision,
+        expectedChapterOrderRevision: outlineRewrite.expectedChapterOrderRevision,
+      });
+      if (!result.summary.changed) throw new Error('仮目次はすでに空です。Codexの案を貼るか、部・章を追加してください');
+      rewriteSummary = result.summary;
+      return result.data;
+    }, outlineRewrite.mode === 'blank' ? '仮目次を空にして、前の目次を履歴へ残しました' : '新しい仮目次へ切り替えました', { closeEditor: false });
+    if (!next || !rewriteSummary) return;
+    setLastOutlineRewriteSummary(rewriteSummary);
+    setOutlineRewrite(null);
+    selectOutlineView('draft');
+    window.requestAnimationFrame(() => outlineRewriteTriggerRef.current?.focus());
   };
 
   const openOutlineSnapshotDialog = kind => {
@@ -2250,7 +2790,7 @@ export default function PlanningNotesTab({
                 {Object.entries(SECTION_META).filter(([key]) => !['overview', 'concept'].includes(key)).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
               </select>
               <select aria-label="構成項目で絞り込み" value={chapterFilter} onChange={event => setChapterFilter(event.target.value)} className={INPUT_CLASS}>
-                <option value="all">すべての部・章・話・節</option><option value="unlinked">構成項目へ未紐づけ</option>
+                <option value="all">すべての部・章・話・節</option><option value="unlinked">構成項目へ未紐づけ</option><option value="archived">旧目次に紐づく記録</option>
                 {chapterRows.map(({ record: chapter, depth }) => (
                   <option key={chapter.id} value={chapter.id}>
                     {`${'　'.repeat(Math.min(depth, 3))}${getPlanningChapterNodeLabel(chapter.nodeType)}：${chapter.title || '無題'}`}
@@ -2357,6 +2897,8 @@ export default function PlanningNotesTab({
           metrics={marketMetrics}
           allCompetitors={newestCompetitors}
           visibleCompetitors={visibleCompetitors}
+          allChapters={allChapters}
+          activeChapterIds={activeChapterIds}
           filtersActive={filtersActive}
           onClearFilters={clearFilters}
           onEditSummary={openMarketSummary}
@@ -2364,6 +2906,7 @@ export default function PlanningNotesTab({
           onAdd={() => openNewRecord('competitors')}
           onRevealEvidence={record => revealRecord('competitors', record.id, { resetFilters: true })}
           onOpenDetail={record => openDetail('competitors', record)}
+          onEditChapterLinks={record => openChapterLinkEditor('competitors', record)}
           onEdit={record => openEditRecord('competitors', record)}
           onDuplicate={record => openDuplicate('competitors', record)}
           onDelete={record => handleDelete('competitors', record)}
@@ -2374,9 +2917,12 @@ export default function PlanningNotesTab({
         <InstructionReferenceSection
           records={data.instructionVersions}
           newestRecords={newestInstructions}
+          allChapters={allChapters}
+          activeChapterIds={activeChapterIds}
           busy={busy}
           onAdd={() => openNewRecord('instructionVersions')}
           onOpenDetail={record => openDetail('instructionVersions', record)}
+          onEditChapterLinks={record => openChapterLinkEditor('instructionVersions', record)}
           onEdit={record => openEditRecord('instructionVersions', record)}
           onDuplicate={record => openDuplicate('instructionVersions', record)}
           onDelete={record => handleDelete('instructionVersions', record)}
@@ -2389,9 +2935,12 @@ export default function PlanningNotesTab({
         <DecisionHistorySection
           records={data.decisions}
           newestRecords={newestDecisions}
+          allChapters={allChapters}
+          activeChapterIds={activeChapterIds}
           busy={busy}
           onAdd={() => openNewRecord('decisions')}
           onOpenDetail={record => openDetail('decisions', record)}
+          onEditChapterLinks={record => openChapterLinkEditor('decisions', record)}
           onEdit={record => openEditRecord('decisions', record)}
           onDuplicate={record => openDuplicate('decisions', record)}
           onDelete={record => handleDelete('decisions', record)}
@@ -2461,29 +3010,60 @@ export default function PlanningNotesTab({
                 <span className="font-bold text-foreground">仮目次</span>は何度でも編集できます。<span className="font-bold text-foreground">確定目次</span>は本全体で現在使う読み取り専用の保存版です。各項目の「本人承認済み」とは別です。
               </p>
               {outlineView === 'draft' && (
-                <div className="flex flex-wrap gap-2 border-t border-white/10 pt-3">
-                  <Button type="button" onClick={() => openNewRecord('chapters', { nodeType: 'part' })} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus />部を追加</Button>
-                  <Button type="button" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: 'chapter' })} className="min-h-11 gap-2 border-neon-pink/35 text-neon-pink"><Plus />章だけで始める</Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => openOutlineSnapshotDialog('draft')}
-                    disabled={busy || activeOutlineChapterCount === 0 || draftMatchesLatestSavedDraft}
-                    className="min-h-11 gap-2 border-slate-400/30 text-slate-200"
-                  >
-                    <History className="h-4 w-4" aria-hidden="true" />
-                    {draftMatchesLatestSavedDraft ? '履歴へ保存済み' : '今の仮目次を履歴に保存'}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => openOutlineSnapshotDialog('confirmed')}
-                    disabled={busy || activeOutlineChapterCount === 0 || draftMatchesConfirmed}
-                    className="min-h-11 gap-2 border-emerald-400/35 text-emerald-200"
-                  >
-                    <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-                    {draftMatchesConfirmed ? '確定目次へ反映済み' : 'この仮目次を確定目次にする'}
-                  </Button>
+                <div className="space-y-3 border-t border-white/10 pt-3">
+                  <div className="flex flex-col gap-2 rounded-xl border border-neon-pink/30 bg-neon-pink/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p id="outline-rewrite-help" className="text-xs font-black text-neon-pink">全体を変えたいときは、1件ずつ削除しなくて大丈夫です</p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">今の目次・本人承認・取材の紐づけを残したまま、Codexの新しい案へまとめて切り替えられます。</p>
+                    </div>
+                    <Button
+                      ref={outlineRewriteTriggerRef}
+                      type="button"
+                      variant="outline"
+                      onClick={openOutlineRewrite}
+                      disabled={busy}
+                      aria-describedby="outline-rewrite-help"
+                      className="min-h-11 shrink-0 gap-2 border-neon-pink/45 bg-neon-pink/10 text-neon-pink"
+                    >
+                      <Pencil className="h-4 w-4" aria-hidden="true" />目次をまとめて書き直す
+                    </Button>
+                  </div>
+
+                  {lastOutlineRewriteSummary && (
+                    <div role="status" className="flex items-start justify-between gap-3 rounded-xl border border-emerald-400/30 bg-emerald-400/5 p-3 text-xs leading-relaxed text-muted-foreground">
+                      <div>
+                        <p className="font-black text-emerald-200">新しい仮目次へ安全に切り替えました</p>
+                        <p className="mt-1">新しい仮目次 {lastOutlineRewriteSummary.createdChapterCount}項目 ／ {outlineRewriteHistoryMessage(lastOutlineRewriteSummary)}</p>
+                        <p className="mt-1">取材などの紐づけ {lastOutlineRewriteSummary.preservedLinkCount}件は旧目次の参照として残っています。付け直しが必要な記録は {lastOutlineRewriteSummary.needsRelinkCount}件です。</p>
+                      </div>
+                      <button type="button" onClick={() => setLastOutlineRewriteSummary(null)} className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80" aria-label="書き直し完了のお知らせを閉じる"><X className="h-4 w-4" aria-hidden="true" /></button>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" onClick={() => openNewRecord('chapters', { nodeType: 'part' })} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus />部を追加</Button>
+                    <Button type="button" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: 'chapter' })} className="min-h-11 gap-2 border-neon-pink/35 text-neon-pink"><Plus />章だけで始める</Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => openOutlineSnapshotDialog('draft')}
+                      disabled={busy || activeOutlineChapterCount === 0 || draftMatchesLatestSavedDraft}
+                      className="min-h-11 gap-2 border-slate-400/30 text-slate-200"
+                    >
+                      <History className="h-4 w-4" aria-hidden="true" />
+                      {draftMatchesLatestSavedDraft ? '履歴へ保存済み' : '今の仮目次を履歴に保存'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => openOutlineSnapshotDialog('confirmed')}
+                      disabled={busy || activeOutlineChapterCount === 0 || draftMatchesConfirmed}
+                      className="min-h-11 gap-2 border-emerald-400/35 text-emerald-200"
+                    >
+                      <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                      {draftMatchesConfirmed ? '確定目次へ反映済み' : 'この仮目次を確定目次にする'}
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -2625,7 +3205,7 @@ export default function PlanningNotesTab({
                     </div>
                     {recordSummary(activeSection, record) && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{recordSummary(activeSection, record)}</p>}
                     {activeSection === 'chapters' && hasChildren && <p className="mt-2 text-[11px] text-neon-cyan/80">中の項目 {chapters.filter(chapter => chapter.parentId === record.id).length}件</p>}
-                    {record.chapterIds.length > 0 && <p className="mt-2 break-words text-[11px] text-neon-cyan/80">紐づく構成：{record.chapterIds.map(id => chapterPathLabel(id, chapters)).join('／')}</p>}
+                    {record.chapterIds.length > 0 && <p className="mt-2 break-words text-[11px] text-neon-cyan/80">紐づく構成：{record.chapterIds.map(id => chapterReferenceLabel(id, allChapters, activeChapterIds)).join('／')}</p>}
                     <p className="mt-2 break-all text-[10px] text-muted-foreground">ID: {record.id}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -2637,6 +3217,7 @@ export default function PlanningNotesTab({
                       <Button type="button" size="sm" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: defaultChildType, parentId: record.id })} className="min-h-11 border-neon-pink/30 text-neon-pink"><CornerDownRight className="h-4 w-4" />この中に追加</Button>
                     )}
                     <Button type="button" size="sm" variant="outline" onClick={() => openDetail(activeSection, record)} className="min-h-11 border-white/15 text-foreground"><BookOpenText className="h-4 w-4" />内容を見る</Button>
+                    {activeSection !== 'chapters' && <Button type="button" size="sm" variant="outline" onClick={() => openChapterLinkEditor(activeSection, record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Link2 className="h-4 w-4" />目次との紐づけだけ変更</Button>}
                     {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => openEditRecord(activeSection, record)} className="min-h-11"><Pencil className="h-4 w-4" />編集</Button>}
                     <Button
                       type="button"
@@ -2678,7 +3259,7 @@ export default function PlanningNotesTab({
                 <span className="min-w-0">
                   <span className="block text-[10px] text-muted-foreground">
                     {section === 'chapters'
-                      ? `${getPlanningChapterNodeLabel(record.nodeType)} ／ ${chapterPathLabel(record, chapters, { includeSelf: false }) || '本全体の最上位'}`
+                      ? `${activeChapterIds.has(record.id) ? '' : '旧目次 ／ '}${getPlanningChapterNodeLabel(record.nodeType)} ／ ${chapterPathLabel(record, allChapters, { includeSelf: false }) || '本全体の最上位'}`
                       : SECTION_META[section]?.label || '企画メモ履歴'}
                   </span>
                   <span className="block break-words text-sm font-bold text-foreground">{recordTitle(section, record)}</span>
@@ -2704,6 +3285,8 @@ export default function PlanningNotesTab({
         editor={editor?.projectId === project.id ? editor : null}
         planningData={data}
         chapters={chapters}
+        allChapters={allChapters}
+        activeChapterIds={activeChapterIds}
         busy={busy}
         onChange={draft => setEditor(current => ({ ...current, draft, dirty: true }))}
         onSave={saveEditor}
@@ -2730,9 +3313,30 @@ export default function PlanningNotesTab({
         onSave={saveOutlineSnapshot}
         onClose={() => setOutlineDialog(null)}
       />
+      <OutlineRewriteDialog
+        value={outlineRewrite?.projectId === project.id ? outlineRewrite : null}
+        busy={busy}
+        onChange={setOutlineRewrite}
+        onNext={continueOutlineRewrite}
+        onApply={applyOutlineRewrite}
+        onCopyPrompt={copyOutlineRewritePrompt}
+        onClose={closeOutlineRewrite}
+      />
+      <ChapterLinkDialog
+        value={chapterLinkEditor?.projectId === project.id ? chapterLinkEditor : null}
+        chapterRows={chapterRows}
+        allChapters={allChapters}
+        activeChapterIds={activeChapterIds}
+        busy={busy}
+        onChange={setChapterLinkEditor}
+        onSave={saveChapterLinks}
+        onClose={() => setChapterLinkEditor(null)}
+      />
       <RecordDetailDialog
         detail={detail?.projectId === project.id ? detail : null}
-        chapters={chapters}
+        chapters={allChapters}
+        activeChapterIds={activeChapterIds}
+        onEditChapterLinks={openChapterLinkEditor}
         onClose={() => setDetail(null)}
       />
 
