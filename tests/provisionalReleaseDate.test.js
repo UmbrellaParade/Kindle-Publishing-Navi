@@ -98,3 +98,21 @@ test('正式日と仮日は同じ幅のコンパクト行で表示し、日程�
   assert.match(scheduleCardSource, /data-release-date-row="provisional"[\s\S]*?data-release-schedule-notices/);
   assert.match(scheduleCardSource, /配信方法：\{option\.shortLabel\}/);
 });
+
+test('次にやることを日付行の直下へ置き、右レールの高さによる空白を作らない', () => {
+  assert.equal(
+    (scheduleCardSource.match(/data-release-next-tasks/g) || []).length,
+    1,
+  );
+  assert.match(
+    scheduleCardSource,
+    /data-release-date-row="provisional"[\s\S]*?data-release-next-tasks[\s\S]*?data-release-schedule-rail/,
+  );
+  assert.match(scheduleCardSource, /data-release-next-tasks[\s\S]*?sm:grid-cols-3/);
+  assert.match(scheduleCardSource, /data-release-schedule-rail[\s\S]*?p-2\.5 text-\[11px\] leading-4/);
+  assert.equal(
+    (scheduleCardSource.match(/grid min-w-0 flex-1 grid-cols-2 gap-2 sm:flex/g) || []).length,
+    2,
+  );
+  assert.match(scheduleCardSource, /col-span-2 min-h-11[\s\S]*?sm:col-span-1 sm:h-9/);
+});

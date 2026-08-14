@@ -62,6 +62,76 @@ final result: passed
 
 ---
 
+# Design QA: 逆算カードの余白削減
+
+## Source and implementation
+
+- Source visual truth: `C:\Users\myabe\AppData\Local\Temp\codex-clipboard-f1c118f8-ea5a-4227-a0f6-c0ed938b5d93.png`
+- Implementation PC: `C:\Users\myabe\AppData\Local\Temp\kindle-release-schedule-spacing-pc-v3.png`
+- Implementation mobile: `C:\Users\myabe\AppData\Local\Temp\kindle-release-schedule-spacing-mobile-v2.png`
+- Source pixels: 1920 x 1032（ブラウザの外枠を含むユーザー添付画像）
+- Implementation pixels: PC 1915 x 1077 / mobile 385 x 833
+- CSS viewport: PC 1920 x 1080 / mobile 390 x 844、devicePixelRatio 1
+- Density normalization: 1x。ブラウザ外枠とスクロールバー幅を比較対象から外し、同じ逆算カード領域の配置と縦寸法を比較した。
+- State: 仮リリース日 2026-09-14 を基準に逆算済みで、「次にやること」3件と期限超過表示がある状態。参照画像と実装で書名・配信方法の保存値は異なるため、文言内容ではなく同じUI領域の密度を比較した。
+
+## Full-view and focused comparison
+
+- 参照画像とPC実装画像を同じ比較入力で開き、赤丸の空白、日付2行、右レール、「次にやること」の位置を比較した。
+- 逆算カードが画面上部の主要領域を占めるため、PC全体画像でも入力・ボタン・タスク名を判読できた。別の拡大画像を必須とせず、実測値と同じ全体画像で重点領域を確認した。
+- Fonts and typography: 既存フォント、太さ、11pxの案内・タスク本文を維持。高さ削減のために重要文を10pxへ縮めていない。
+- Spacing and layout rhythm: 「次にやること」を左列の日付行直下へ移し、右レールの高さだけで左側へ空白が生じない構造にした。
+- Colors and tokens: neon pink / cyan / amber、背景、枠線、角丸を既存トークンのまま維持。
+- Image quality and assets: 新規画像資産なし。既存Lucideアイコンを維持し、代替図形は追加していない。
+- Copy and content: KDP非反映、手動日の維持、リセット範囲の意味を保ち、右レールの重複説明だけ短文化した。
+
+## Measurements
+
+| Check | Source / before | Implementation / after |
+| --- | ---: | ---: |
+| PC release card height | 約514px | 359.4px |
+| 仮日行の下端→次タスク先頭 | 約185px | 8px |
+| PC official/provisional rows | 80px / 80px | 80px / 80px |
+| PC right rail | 約325px | 253px |
+| Mobile official/provisional rows | 272px / 272px | 220px / 220px |
+| Mobile release card | 1200.3px（第1調整時） | 992.8px |
+
+Responsive checks:
+
+- 1366px: 両日付行80px、横あふれなし
+- 1024px: 両日付行102px、横あふれなし
+- 768px: 両日付行102px、横あふれなし
+- 390px: 両日付行220px、document 385px / viewport 390px、横あふれなし
+- 320px: 両日付行236px、横あふれなし
+- モバイルの主要ボタンと展開後の4リセットボタンはすべて44px
+
+## Findings and iteration history
+
+1. [P1] 右レールの高さで2カラム全体が伸び、「次にやること」がgrid外にあるため左列へ大きな空白が発生していた。
+2. Fix: 「次にやること」とチェックリスト異常警告を左列へ移し、日付行の直下から自然に続く構造へ変更した。
+3. [P2] 初回修正では右レールと次タスク本文を10pxへ縮めていた。初心者向け可読性を優先し、11pxへ戻したまま余白・行間・重複文で高さを削減した。
+4. [P2] 390pxでは日付行の操作が縦4段、次タスクが大きなカード3段でスクロール量が多かった。
+5. Fix: モバイル操作を2列グリッドへ再配置し、次タスクを日付＋1行見出しのコンパクト行にした。操作域44pxとラベルは維持した。
+6. Post-fix: PCの赤丸相当は約185pxから8px、モバイルカードは約207px短縮。横あふれ、切れ、コンソールエラーは0。
+
+## Interaction and accessibility checks
+
+- 「この仮日で逆算」を実行し、保存後に「次にやること」が日付行直下へ表示されることを確認。
+- リセットdetailsを開閉し、4ボタンが390pxで各309 x 44px、クリップなしであることを確認。
+- 1920 / 1366 / 1024 / 768 / 390 / 320pxで横あふれなし。
+- 正式日、仮日、配信方法、逆算、4種類のリセットのhandler/disabled条件は変更なし。
+- Console errors: 0
+- Automated checks: 222/222 tests passed, lint passed, GitHub Pages production build passed.
+
+## Remaining findings
+
+- P0 / P1 / P2: なし。
+- P3: 全タスク完了時は「次にやること」が非表示になるため、右レールより左列がわずかに短くなる場合がある。操作上の空白は小さく、今回の大きなスクロール問題は再発しないため追補扱い。
+
+final result: passed
+
+---
+
 # Design QA: 発売目標日・仮リリース日のコンパクト化
 
 ## Visual source

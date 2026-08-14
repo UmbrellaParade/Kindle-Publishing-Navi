@@ -425,7 +425,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                       ナビ内の正式な目標日です。KDPへ自動送信されません。
                     </p>
                   </div>
-                  <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                  <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:flex sm:flex-row sm:flex-wrap sm:items-center">
                     <input
                       id="release-target-date"
                       type="date"
@@ -433,7 +433,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                       disabled={isWorking}
                       aria-describedby="release-target-date-help"
                       onChange={event => setReleaseDate(event.target.value)}
-                      className="min-h-11 w-full min-w-0 rounded-md px-3 text-sm text-foreground focus:outline-none focus:border-neon-pink disabled:opacity-60 sm:h-9 sm:min-h-9 sm:w-44"
+                      className="col-span-2 min-h-11 w-full min-w-0 rounded-md px-3 text-sm text-foreground focus:outline-none focus:border-neon-pink disabled:opacity-60 sm:h-9 sm:min-h-9 sm:w-44"
                       style={INPUT_STYLE}
                     />
                     {provisionalDate && (
@@ -457,7 +457,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                       aria-describedby="release-method-help"
                       title={releaseMethodInfo?.guidance || '配信方法は正式な発売計画を決めるときに選びます。'}
                       onChange={event => setReleaseMethod(event.target.value)}
-                      className="min-h-11 min-w-0 flex-1 rounded-md px-3 text-xs text-foreground focus:outline-none focus:border-neon-cyan disabled:opacity-60 sm:h-9 sm:min-h-9 sm:min-w-56"
+                      className="order-3 col-span-2 min-h-11 min-w-0 flex-1 rounded-md px-3 text-xs text-foreground focus:outline-none focus:border-neon-cyan disabled:opacity-60 sm:order-none sm:h-9 sm:min-h-9 sm:min-w-56"
                       style={INPUT_STYLE}
                     >
                       <option value="">配信方法：未設定</option>
@@ -470,7 +470,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                       size="sm"
                       onClick={() => applySchedule(SCHEDULE_DATE_SOURCE_RELEASE_TARGET, false)}
                       disabled={!releaseDate || !releaseMethod || isWorking || Boolean(checklistError)}
-                      className="min-h-11 gap-1.5 border border-neon-pink/40 bg-neon-pink/20 text-xs text-neon-pink hover:bg-neon-pink/30 sm:h-9 sm:min-h-9"
+                      className="order-2 min-h-11 gap-1.5 border border-neon-pink/40 bg-neon-pink/20 text-xs text-neon-pink hover:bg-neon-pink/30 sm:order-none sm:h-9 sm:min-h-9"
                     >
                       <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
                       {officialScheduleIsCurrent && !officialDraftChanged ? '正式日を再計算' : '正式日で逆算'}
@@ -499,7 +499,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                       </p>
                     </div>
                   </div>
-                  <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                  <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:flex sm:flex-row sm:flex-wrap sm:items-center">
                     <input
                       id="provisional-release-date"
                       type="date"
@@ -507,7 +507,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                       disabled={isWorking}
                       aria-describedby="provisional-release-date-help"
                       onChange={event => setProvisionalDate(event.target.value)}
-                      className="min-h-11 w-full min-w-0 rounded-md px-3 text-sm text-foreground focus:outline-none focus:border-neon-cyan disabled:opacity-60 sm:h-9 sm:min-h-9 sm:w-44"
+                      className="col-span-2 min-h-11 w-full min-w-0 rounded-md px-3 text-sm text-foreground focus:outline-none focus:border-neon-cyan disabled:opacity-60 sm:h-9 sm:min-h-9 sm:w-44"
                       style={INPUT_STYLE}
                     />
                     <Button
@@ -538,7 +538,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                       size="sm"
                       onClick={() => applySchedule(SCHEDULE_DATE_SOURCE_PROVISIONAL, false)}
                       disabled={!provisionalDate || isWorking || Boolean(checklistError)}
-                      className="min-h-11 gap-1.5 border border-neon-cyan/50 bg-neon-cyan/20 text-xs text-neon-cyan hover:bg-neon-cyan/30 sm:h-9 sm:min-h-9"
+                      className="col-span-2 min-h-11 gap-1.5 border border-neon-cyan/50 bg-neon-cyan/20 text-xs text-neon-cyan hover:bg-neon-cyan/30 sm:col-span-1 sm:h-9 sm:min-h-9"
                     >
                       <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />この仮日で逆算
                     </Button>
@@ -566,13 +566,33 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
               >
                 {statusMessage}
               </p>
+
+              {checklistError && (
+                <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[11px] leading-relaxed text-destructive">
+                  チェックリストの保存データに異常が見つかったため、日程の逆算とリセットを停止しています。上部の「データ管理」から先にバックアップを保存し、復元またはサポート用に保管してください。仮リリース日だけの保存は利用できます。
+                </div>
+              )}
+
+              {project.schedule_calculated_for && nextTasks.length > 0 && (
+                <div data-release-next-tasks className="border-t border-border/60 pt-2">
+                  <p className="mb-1.5 text-[10px] font-bold text-neon-cyan">次にやること</p>
+                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                    {nextTasks.map(task => (
+                      <div key={task.taskId} className="flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-[11px] sm:block" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid #2a2a4a' }}>
+                        <p className={task.due_date < todayLocal() ? 'font-bold text-neon-amber' : 'font-bold text-neon-pink'}>{task.due_date}</p>
+                        <p className="min-w-0 line-clamp-1 text-muted-foreground sm:mt-0.5 sm:line-clamp-2">{task.title}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div data-release-schedule-rail className="space-y-2 lg:self-start">
-              <aside className="rounded-lg border border-[#323252] bg-[#111122] p-3 text-[11px] leading-relaxed">
-                <p className="font-black text-foreground">現在、各項目へ反映されている日程</p>
+              <aside className="rounded-lg border border-[#323252] bg-[#111122] p-2.5 text-[11px] leading-4">
+                <p className="text-[11px] font-black text-foreground">現在、各項目へ反映されている日程</p>
                 {currentScheduleWindow ? (
-                  <div className="mt-2 space-y-1 text-muted-foreground">
+                  <div className="mt-1.5 space-y-0.5 text-muted-foreground">
                     <p>
                       基準：{' '}
                       <span className={storedScheduleSource === SCHEDULE_DATE_SOURCE_PROVISIONAL ? 'font-bold text-neon-cyan' : 'font-bold text-neon-pink'}>
@@ -582,7 +602,10 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                       </span>
                     </p>
                     {storedScheduleSource === SCHEDULE_DATE_SOURCE_PROVISIONAL && (
-                      <p className="font-bold text-neon-amber">正式な発売目標日ではありません。KDP上の発売日・予約注文・配信方法も変えていません。</p>
+                      <p className="font-bold text-neon-amber">
+                        計画用です。KDPの発売日・予約注文・配信方法は変わりません。
+                        <span className="sr-only">正式な発売目標日ではありません。</span>
+                      </p>
                     )}
                     {storedScheduleSource === SCHEDULE_DATE_SOURCE_PROVISIONAL && !project.provisional_release_date && (
                       <p className="font-bold text-neon-amber">基準にした仮日は削除済みですが、この逆算日程は残っています。不要なら「自動入力した日程だけ消す」を使ってください。</p>
@@ -597,11 +620,11 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                     </p>
                   </div>
                 ) : (
-                  <p className="mt-2 text-muted-foreground">まだ逆算日程は設定されていません。</p>
+                  <p className="mt-1.5 text-muted-foreground">まだ逆算日程は設定されていません。</p>
                 )}
-                <p className="mt-2 text-muted-foreground">各タスクの日付はあとから手動変更でき、通常の再計算でも維持されます。</p>
+                <p className="mt-1.5 text-muted-foreground">手動変更した日は通常の再計算でも維持します。</p>
                 {overdueCount > 0 && (
-                  <p className="mt-2 inline-flex items-center gap-1 text-neon-amber">
+                  <p className="mt-1.5 inline-flex items-center gap-1 text-neon-amber">
                     <AlertTriangle className="h-3 w-3" aria-hidden="true" />期限超過の未完了タスク {overdueCount} 件
                   </p>
                 )}
@@ -612,7 +635,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                     variant="ghost"
                     onClick={() => applySchedule(storedScheduleSource, true)}
                     disabled={isWorking || Boolean(checklistError) || currentScheduleDraftChanged}
-                    className="mt-2 min-h-11 w-full gap-1.5 text-[11px] text-muted-foreground hover:text-neon-amber"
+                    className="mt-1.5 min-h-11 w-full gap-1.5 text-[11px] text-muted-foreground hover:text-neon-amber lg:h-9 lg:min-h-9"
                     title="手動変更を含む全日付を現在の基準日から再設定します"
                   >
                     <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />すべて標準に戻す
@@ -620,8 +643,8 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                 )}
               </aside>
 
-              <details className="rounded-lg border border-neon-amber/25 bg-neon-amber/5 px-3 py-2">
-                <summary className="flex min-h-11 cursor-pointer items-center font-black text-xs text-neon-amber focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-amber/70">
+              <details className="rounded-lg border border-neon-amber/25 bg-neon-amber/5 px-3 py-1">
+                <summary className="flex min-h-11 cursor-pointer items-center font-black text-xs text-neon-amber focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-amber/70 lg:min-h-9">
                   日付設定を整理・リセットする
                 </summary>
                 <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
@@ -676,24 +699,6 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
           <p className="mt-4 text-xs text-muted-foreground">先に出版プロジェクトを作成してください。</p>
         )}
 
-        {project && checklistError && (
-          <div role="alert" className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[11px] leading-relaxed text-destructive">
-            チェックリストの保存データに異常が見つかったため、日程の逆算とリセットを停止しています。上部の「データ管理」から先にバックアップを保存し、復元またはサポート用に保管してください。仮リリース日だけの保存は利用できます。
-          </div>
-        )}
-        {project && project.schedule_calculated_for && nextTasks.length > 0 && (
-          <div className="mt-3 border-t border-border/60 pt-3">
-            <p className="mb-2 text-[10px] font-bold text-neon-cyan">次にやること</p>
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-              {nextTasks.map(task => (
-                <div key={task.taskId} className="rounded-lg px-3 py-2 text-[11px]" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid #2a2a4a' }}>
-                  <p className={task.due_date < todayLocal() ? 'font-bold text-neon-amber' : 'font-bold text-neon-pink'}>{task.due_date}</p>
-                  <p className="mt-0.5 line-clamp-2 text-muted-foreground">{task.title}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </section>
   );
