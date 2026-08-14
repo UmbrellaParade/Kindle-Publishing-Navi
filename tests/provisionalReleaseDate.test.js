@@ -83,3 +83,18 @@ test('日付・配信方法・主要操作は説明付きで44px以上の操作�
   assert.match(scheduleCardSource, /aria-live="polite"/);
   assert.match(scheduleCardSource, /aria-busy=\{isWorking\}/);
 });
+
+test('正式日と仮日は同じ幅のコンパクト行で表示し、日程情報を右側へまとめる', () => {
+  assert.match(scheduleCardSource, /data-release-date-row="official"/);
+  assert.match(scheduleCardSource, /data-release-date-row="provisional"/);
+  assert.equal(
+    (scheduleCardSource.match(/sm:h-9 sm:min-h-9 sm:w-44/g) || []).length,
+    2,
+  );
+  assert.doesNotMatch(scheduleCardSource, /sm:max-w-xs/);
+  assert.match(scheduleCardSource, /data-release-schedule-rail/);
+  assert.match(scheduleCardSource, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/);
+  assert.match(scheduleCardSource, /data-release-schedule-rail[\s\S]*?すべて標準に戻す/);
+  assert.match(scheduleCardSource, /data-release-date-row="provisional"[\s\S]*?data-release-schedule-notices/);
+  assert.match(scheduleCardSource, /配信方法：\{option\.shortLabel\}/);
+});
