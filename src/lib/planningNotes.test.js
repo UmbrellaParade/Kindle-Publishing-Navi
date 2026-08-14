@@ -9,17 +9,22 @@ import {
   buildPlanningNotesSharePackage,
   clearInstructionCanonical,
   createEmptyPlanningNotes,
+  createPlanningChapterRecord,
   createPlanningRecord,
   deletePlanningRecord,
   duplicatePlanningRecord,
   estimatePlanningNotesBytes,
   filterPlanningNotes,
+  flattenPlanningChapterTree,
   findMarketResearchRestrictedData,
   findPlanningNotesSensitiveData,
   formatPlanningDateTimeJst,
   getPlanningMarketMetrics,
+  getNextPlanningChapterOrder,
+  getPlanningChapterParentOptions,
   mergePlanningNotesValues,
   movePlanningChapter,
+  movePlanningChapterToParent,
   normalizePlanningNotes,
   planningNotesShareToMarkdown,
   parseMarketResearchSummaryMarkdown,
@@ -114,6 +119,103 @@ test('6領域を構造化保存し、取材を安定した章IDへ紐づける',
   assert.equal(restored.decisions.length, 1);
 });
 
+test('部の中へ話と節を作り、親子順で安定して平坦化する', () => {
+  let data = createEmptyPlanningNotes();
+  const part = createPlanningChapterRecord(data, {
+    nodeType: 'part',
+    title: '第一部',
+  }, { now: fixedNow, idFactory: idFactory('part-1') });
+  data = addRecord(data, 'chapters', part);
+  const episode2 = createPlanningChapterRecord(data, {
+    nodeType: 'episode',
+    parentId: part.id,
+    title: '第二話',
+    order: 1,
+  }, { now: fixedNow, idFactory: idFactory('episode-2') });
+  data = addRecord(data, 'chapters', episode2);
+  const episode1 = createPlanningChapterRecord(data, {
+    nodeType: 'episode',
+    parentId: part.id,
+    title: '第一話',
+    order: 0,
+  }, { now: fixedNow, idFactory: idFactory('episode-1') });
+  data = addRecord(data, 'chapters', episode1);
+  const section = createPlanningChapterRecord(data, {
+    nodeType: 'section',
+    parentId: episode1.id,
+    title: '最初の場面',
+  }, { now: fixedNow, idFactory: idFactory('section-1') });
+  data = addRecord(data, 'chapters', section);
+
+  assert.equal(getNextPlanningChapterOrder(data, part.id), 2);
+  assert.deepEqual(
+    flattenPlanningChapterTree(data).map(({ record, depth }) => [record.id, depth]),
+    [['part-1', 0], ['episode-1', 1], ['section-1', 2], ['episode-2', 1]],
+  );
+  assert.deepEqual(
+    getPlanningChapterParentOptions(data, 'episode-1', 'episode').map(({ record }) => record.id),
+    ['part-1'],
+  );
+  const duplicate = duplicatePlanningRecord(data, 'chapters', 'episode-1', {
+    now: fixedNow,
+    idFactory: idFactory('episode-copy'),
+  });
+  assert.equal(duplicate.parentId, 'part-1');
+  assert.equal(duplicate.nodeType, 'episode');
+  assert.equal(duplicate.order, 2);
+  const markdown = planningNotesShareToMarkdown(buildPlanningNotesSharePackage(data, { now: fixedNow }));
+  assert.match(markdown, /- 部：第一部\n  - 話：第一話\n    - 節：最初の場面/);
+});
+
+test('目次階層は存在しない親・循環・親子型違反・同じ親内の順序重複を拒否する', () => {
+  let data = createEmptyPlanningNotes();
+  data = addRecord(data, 'chapters', createPlanningRecord('chapters', {
+    id: 'part-1', nodeType: 'part', title: '第一部', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('part-1') }));
+  const episode = createPlanningRecord('chapters', {
+    id: 'episode-1', nodeType: 'episode', parentId: 'part-1', title: '第一話', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('episode-1') });
+  data = addRecord(data, 'chapters', episode);
+
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      chapters: data.chapters.map(record => record.id === 'episode-1'
+        ? { ...record, parentId: 'missing' }
+        : record),
+    }),
+    /存在しない親/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      chapters: data.chapters.map(record => record.id === 'part-1'
+        ? { ...record, parentId: 'episode-1' }
+        : record),
+    }),
+    /循環/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      chapters: data.chapters.map(record => record.id === 'episode-1'
+        ? { ...record, nodeType: 'part' }
+        : record),
+    }),
+    /部は部の中には置けません/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      chapters: [...data.chapters, {
+        ...episode,
+        id: 'episode-duplicate-order',
+      }],
+    }),
+    /同じ親.*順序が重複/,
+  );
+});
+
 test('存在しない章への紐づけ、無効URL、未知versionを拒否する', () => {
   const empty = createEmptyPlanningNotes();
   assert.throws(
@@ -127,7 +229,7 @@ test('存在しない章への紐づけ、無効URL、未知versionを拒否す�
         chapterIds: ['missing-chapter'],
       }],
     }),
-    /存在しない章ID/,
+    /存在しない構成項目ID/,
   );
   assert.throws(
     () => createPlanningRecord('competitors', { url: 'javascript:alert(1)' }, {
@@ -182,6 +284,48 @@ test('3章を上下ボタン相当の操作で並べ替えてもIDを維持す�
   assert.equal(moved.chapterOrderRevision, beforeMoveRevision + 1);
 });
 
+test('上下移動は同じ親の兄弟だけを入れ替え、別の部へは末尾追加できる', () => {
+  let data = createEmptyPlanningNotes();
+  for (const [id, title, order] of [
+    ['part-1', '第一部', 0],
+    ['part-2', '第二部', 1],
+  ]) {
+    data = addRecord(data, 'chapters', createPlanningRecord('chapters', {
+      id, title, order, nodeType: 'part',
+    }, { now: fixedNow, idFactory: idFactory(id) }));
+  }
+  for (const [id, parentId, order] of [
+    ['episode-1', 'part-1', 0],
+    ['episode-2', 'part-1', 1],
+    ['episode-3', 'part-2', 0],
+  ]) {
+    data = addRecord(data, 'chapters', createPlanningRecord('chapters', {
+      id, title: id, order, parentId, nodeType: 'episode',
+    }, { now: fixedNow, idFactory: idFactory(id) }));
+  }
+
+  data = movePlanningChapter(data, 'episode-2', 'up', {
+    expectedRevision: data.chapterOrderRevision,
+  });
+  assert.deepEqual(
+    data.chapters
+      .filter(record => record.parentId === 'part-1')
+      .sort((a, b) => a.order - b.order)
+      .map(record => record.id),
+    ['episode-2', 'episode-1'],
+  );
+  assert.equal(data.chapters.find(record => record.id === 'episode-3').order, 0);
+
+  data = movePlanningChapterToParent(data, 'episode-2', 'part-2', {
+    expectedRevision: data.chapterOrderRevision,
+    now: fixedNow,
+  });
+  const moved = data.chapters.find(record => record.id === 'episode-2');
+  assert.equal(moved.parentId, 'part-2');
+  assert.equal(moved.order, 1);
+  assert.equal(data.chapters.find(record => record.id === 'episode-1').order, 1);
+});
+
 test('本人承認済みの章は隣の未承認章からも並べ替えない', () => {
   let data = createEmptyPlanningNotes();
   data = addRecord(data, 'chapters', createPlanningRecord('chapters', {
@@ -198,9 +342,42 @@ test('本人承認済みの章は隣の未承認章からも並べ替えない',
     () => movePlanningChapter(data, 'chapter-draft', 'up', {
       expectedRevision: data.chapterOrderRevision,
     }),
-    /本人承認済みの章順/,
+    /本人承認済みの構成順/,
   );
   assert.equal(data.chapters.find(chapter => chapter.id === 'chapter-approved').order, 0);
+});
+
+test('承認済みの親や子を含む階層は間接的にも順序・所属を変更しない', () => {
+  let data = createEmptyPlanningNotes();
+  const approvedPart = createPlanningRecord('chapters', {
+    id: 'approved-part', nodeType: 'part', order: 0, title: '承認済みの部', status: 'approved',
+  }, { now: fixedNow, idFactory: idFactory('approved-part') });
+  data = addRecord(data, 'chapters', approvedPart);
+  assert.throws(
+    () => addRecord(data, 'chapters', createPlanningRecord('chapters', {
+      id: 'new-child', nodeType: 'episode', parentId: approvedPart.id, order: 0, title: '追加案',
+    }, { now: fixedNow, idFactory: idFactory('new-child') })),
+    /承認済みの親項目へ子項目を追加/,
+  );
+
+  let draftTree = createEmptyPlanningNotes();
+  const draftPart = createPlanningRecord('chapters', {
+    id: 'draft-part', nodeType: 'part', order: 0, title: '未承認の部',
+  }, { now: fixedNow, idFactory: idFactory('draft-part') });
+  draftTree = addRecord(draftTree, 'chapters', draftPart);
+  draftTree = addRecord(draftTree, 'chapters', createPlanningRecord('chapters', {
+    id: 'approved-child', nodeType: 'episode', parentId: draftPart.id, order: 0,
+    title: '承認済みの話', status: 'approved',
+  }, { now: fixedNow, idFactory: idFactory('approved-child') }));
+  draftTree = addRecord(draftTree, 'chapters', createPlanningRecord('chapters', {
+    id: 'other-part', nodeType: 'part', order: 1, title: '別の部',
+  }, { now: fixedNow, idFactory: idFactory('other-part') }));
+  assert.throws(
+    () => movePlanningChapter(draftTree, draftPart.id, 'down', {
+      expectedRevision: draftTree.chapterOrderRevision,
+    }),
+    /本人承認済みの構成順/,
+  );
 });
 
 test('章削除後の空いた順序でも新規・複製を保存でき、移動は離れた承認章を変えない', () => {
@@ -262,7 +439,92 @@ test('取材等が参照している章は理由を示して削除を止める',
     () => deletePlanningRecord(data, 'chapters', chapter.id, {
       expectedUpdatedAt: chapter.updatedAt,
     }),
-    /紐づく記録が1件.*先に.*紐づく章.*外して/,
+    /紐づく記録が1件.*先に.*紐づく部・章・話・節.*外して/,
+  );
+});
+
+test('子項目を持つ部は先に子を移動または削除するまで削除しない', () => {
+  let data = createEmptyPlanningNotes();
+  const part = createPlanningRecord('chapters', {
+    nodeType: 'part', title: '第一部', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('part-with-child') });
+  data = addRecord(data, 'chapters', part);
+  data = addRecord(data, 'chapters', createPlanningRecord('chapters', {
+    nodeType: 'episode', parentId: part.id, title: '第一話', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('episode-child') }));
+
+  assert.throws(
+    () => deletePlanningRecord(data, 'chapters', part.id, {
+      expectedUpdatedAt: part.updatedAt,
+    }),
+    /1件の子項目.*移動または削除/,
+  );
+});
+
+test('子項目を持つ部は採用しないへ変更して配下を画面から消さない', () => {
+  let data = createEmptyPlanningNotes();
+  const part = createPlanningRecord('chapters', {
+    id: 'part-with-child', nodeType: 'part', order: 0, title: '第一部',
+  }, { now: fixedNow, idFactory: idFactory('part-with-child') });
+  data = addRecord(data, 'chapters', part);
+  data = addRecord(data, 'chapters', createPlanningRecord('chapters', {
+    id: 'episode-child', nodeType: 'episode', parentId: part.id, order: 0, title: '第一話',
+  }, { now: fixedNow, idFactory: idFactory('episode-child') }));
+
+  assert.throws(
+    () => upsertPlanningRecord(data, 'chapters', { ...part, status: 'rejected' }, {
+      expectedUpdatedAt: part.updatedAt,
+      now: fixedNow,
+    }),
+    /子項目がある.*採用しない.*先に子項目を移動または削除/,
+  );
+});
+
+test('採用しない親への子追加と承認済み親の子を採用しない変更を止める', () => {
+  let rejectedTree = createEmptyPlanningNotes();
+  const rejectedPart = createPlanningRecord('chapters', {
+    id: 'rejected-part', nodeType: 'part', order: 0, title: '不採用の部', status: 'rejected',
+  }, { now: fixedNow, idFactory: idFactory('rejected-part') });
+  rejectedTree = addRecord(rejectedTree, 'chapters', rejectedPart);
+  assert.equal(
+    getPlanningChapterParentOptions(rejectedTree, '', 'episode').some(({ record }) => record.id === rejectedPart.id),
+    false,
+  );
+  assert.throws(
+    () => addRecord(rejectedTree, 'chapters', createPlanningRecord('chapters', {
+      id: 'hidden-child', nodeType: 'episode', parentId: rejectedPart.id, order: 0, title: '見えない子',
+    }, { now: fixedNow, idFactory: idFactory('hidden-child') })),
+    /採用しない.*親項目へ子項目を追加・移動できません/,
+  );
+  const movableEpisode = createPlanningRecord('chapters', {
+    id: 'movable-episode', nodeType: 'episode', parentId: '', order: 1, title: '移動する話',
+  }, { now: fixedNow, idFactory: idFactory('movable-episode') });
+  rejectedTree = addRecord(rejectedTree, 'chapters', movableEpisode);
+  assert.throws(
+    () => movePlanningChapterToParent(rejectedTree, movableEpisode.id, rejectedPart.id, {
+      expectedRevision: rejectedTree.chapterOrderRevision,
+      now: fixedNow,
+    }),
+    /採用しない.*親項目へ子項目を移動できません/,
+  );
+
+  let approvedTree = createEmptyPlanningNotes();
+  const approvedPart = createPlanningRecord('chapters', {
+    id: 'approved-parent', nodeType: 'part', order: 0, title: '承認済みの部', status: 'approved',
+  }, { now: fixedNow, idFactory: idFactory('approved-parent') });
+  const draftEpisode = createPlanningRecord('chapters', {
+    id: 'draft-episode', nodeType: 'episode', parentId: approvedPart.id, order: 0, title: '未承認の話',
+  }, { now: fixedNow, idFactory: idFactory('draft-episode') });
+  approvedTree = normalizePlanningNotes({
+    ...approvedTree,
+    chapters: [approvedPart, draftEpisode],
+  });
+  assert.throws(
+    () => upsertPlanningRecord(approvedTree, 'chapters', { ...draftEpisode, status: 'rejected' }, {
+      expectedUpdatedAt: draftEpisode.updatedAt,
+      now: fixedNow,
+    }),
+    /本人承認済みの親項目に属する構成順は直接変更できません/,
   );
 });
 
@@ -657,7 +919,7 @@ ${sources}
 `;
 }
 
-test('v1企画ノートを新フィールド未設定のv2へ安全に移行する', () => {
+test('v1企画ノートを新フィールド未設定のv3へ安全に移行する', () => {
   const legacy = createEmptyPlanningNotes();
   legacy.version = 1;
   delete legacy.marketSummary;
@@ -681,12 +943,99 @@ test('v1企画ノートを新フィールド未設定のv2へ安全に移行す�
   }
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.equal(migrated.marketSummary.versionId, '');
   assert.equal(migrated.instructionVersions[0].audience, 'unset');
   assert.deepEqual(migrated.instructionVersions[0].canonicalFor, []);
   assert.equal(migrated.decisions[0].decisionState, 'unset');
   assert.equal(migrated.decisions[0].isCanonical, false);
+});
+
+test('部で絞り込むと配下の話・節と、それらへ紐づく記録も表示する', () => {
+  let data = createEmptyPlanningNotes();
+  const part = createPlanningRecord('chapters', {
+    id: 'filter-part', nodeType: 'part', order: 0, title: '第一部',
+  }, { now: fixedNow, idFactory: idFactory('filter-part') });
+  const episode = createPlanningRecord('chapters', {
+    id: 'filter-episode', nodeType: 'episode', parentId: part.id, order: 0, title: '第一話',
+  }, { now: fixedNow, idFactory: idFactory('filter-episode') });
+  data = addRecord(data, 'chapters', part);
+  data = addRecord(data, 'chapters', episode);
+  data = addRecord(data, 'interviews', createPlanningRecord('interviews', {
+    id: 'filter-interview', question: '第一話の取材', chapterIds: [episode.id],
+  }, { now: fixedNow, idFactory: idFactory('filter-interview') }));
+
+  const ids = filterPlanningNotes(data, { chapterId: part.id })
+    .map(result => result.record.id);
+  assert.deepEqual(ids, [part.id, episode.id, 'filter-interview']);
+});
+
+test('v2の平坦な章はID・本文・orderを変えずrootの章としてv3へ移行する', () => {
+  const legacy = createEmptyPlanningNotes();
+  legacy.version = 2;
+  legacy.chapters = [createPlanningRecord('chapters', {
+    id: 'legacy-chapter-1',
+    order: 7,
+    title: '旧データの第1章',
+    outlineMarkdown: '本文構成をそのまま保持',
+  }, { now: fixedNow, idFactory: idFactory('legacy-chapter-1') })];
+  delete legacy.chapters[0].nodeType;
+  delete legacy.chapters[0].parentId;
+
+  const migrated = normalizePlanningNotes(legacy);
+  assert.equal(migrated.version, 3);
+  assert.deepEqual(
+    {
+      id: migrated.chapters[0].id,
+      order: migrated.chapters[0].order,
+      title: migrated.chapters[0].title,
+      outlineMarkdown: migrated.chapters[0].outlineMarkdown,
+      nodeType: migrated.chapters[0].nodeType,
+      parentId: migrated.chapters[0].parentId,
+    },
+    {
+      id: 'legacy-chapter-1',
+      order: 7,
+      title: '旧データの第1章',
+      outlineMarkdown: '本文構成をそのまま保持',
+      nodeType: 'chapter',
+      parentId: '',
+    },
+  );
+});
+
+test('階層目次の結合は親ごとのorderを扱い、親子関係を保ったまま冪等になる', () => {
+  const part1 = createPlanningRecord('chapters', {
+    id: 'part-1', nodeType: 'part', parentId: '', order: 0, title: '第一部',
+  }, { now: fixedNow, idFactory: idFactory('part-1') });
+  const part2 = createPlanningRecord('chapters', {
+    id: 'part-2', nodeType: 'part', parentId: '', order: 1, title: '第二部',
+  }, { now: fixedNow, idFactory: idFactory('part-2') });
+  let current = addRecord(createEmptyPlanningNotes(), 'chapters', part1);
+  current = addRecord(current, 'chapters', createPlanningRecord('chapters', {
+    id: 'episode-1', nodeType: 'episode', parentId: part1.id, order: 0, title: '第一話',
+  }, { now: fixedNow, idFactory: idFactory('episode-1') }));
+  let incoming = addRecord(createEmptyPlanningNotes(), 'chapters', part2);
+  incoming = addRecord(incoming, 'chapters', createPlanningRecord('chapters', {
+    id: 'episode-2', nodeType: 'episode', parentId: part2.id, order: 0, title: '第二部の第一話',
+  }, { now: fixedNow, idFactory: idFactory('episode-2') }));
+
+  const once = mergePlanningNotesValues(
+    serializePlanningNotes(current),
+    serializePlanningNotes(incoming),
+  );
+  const twice = mergePlanningNotesValues(once, serializePlanningNotes(incoming));
+  const merged = readPlanningNotes(twice).data;
+  assert.deepEqual(twice, once);
+  assert.deepEqual(
+    flattenPlanningChapterTree(merged).map(({ record, depth }) => [record.id, record.order, depth]),
+    [
+      ['part-1', 0, 0],
+      ['episode-1', 0, 1],
+      ['part-2', 1, 0],
+      ['episode-2', 0, 1],
+    ],
+  );
 });
 
 test('市場調査サマリーは根拠IDを検証し、確認済み公開URLを重複なく数える', () => {
@@ -900,7 +1249,7 @@ test('MARKET-001 Markdownを5競合・6公開出典へ厳格preview/applyし、�
   );
   const share = buildPlanningNotesSharePackage(applied, { now: fixedNow });
   assert.equal(share.schemaVersion, 1);
-  assert.equal(share.data.version, 2);
+  assert.equal(share.data.version, 3);
   assert.match(planningNotesShareToMarkdown(share), /MARKET-001|市場調査サマリー/);
 });
 

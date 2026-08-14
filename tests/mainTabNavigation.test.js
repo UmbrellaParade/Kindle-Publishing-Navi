@@ -68,7 +68,7 @@ test('スマホは現在地と全11項目を開閉でき、企画ノートを2�
 test('企画・取材・構成ノートをcreation直後に描画できる', () => {
   assert.match(homeSource, /import PlanningNotesTab from '@\/components\/tabs\/PlanningNotesTab';/);
   assert.match(homeSource, /activeTab === 'creation'[\s\S]*activeTab === 'notes'[\s\S]*activeTab === 'kdp'/);
-  assert.match(homeSource, /activeTab === 'notes'\s+&& <PlanningNotesTab \{\.\.\.tabProps\} \/>/);
+  assert.match(homeSource, /activeTab === 'notes'[\s\S]*?<PlanningNotesTab[\s\S]*?\{\.\.\.tabProps\}[\s\S]*?initialSection=\{planningSection\}/);
 });
 
 test('2段ナビの下でもマニュアル目次が隠れない', () => {

@@ -1418,11 +1418,26 @@ test('企画・取材・構成ノートを厳格に正規化してバックア�
   );
 });
 
-test('企画ノートv2の市場サマリー・正本・意思決定参照をバックアップと結合復元で保つ', async () => {
+test('企画ノートv3の市場サマリー・正本・意思決定参照をバックアップと結合復元で保つ', async () => {
   let notes = createEmptyPlanningNotes();
   const add = (section, record) => {
     notes = upsertPlanningRecord(notes, section, record, { expectedUpdatedAt: null, now });
   };
+  const part = createPlanningRecord('chapters', {
+    id: 'part-backup',
+    nodeType: 'part',
+    parentId: '',
+    order: 0,
+    title: '第一部',
+  }, { now, idFactory: () => 'part-backup' });
+  add('chapters', part);
+  add('chapters', createPlanningRecord('chapters', {
+    id: 'episode-backup',
+    nodeType: 'episode',
+    parentId: part.id,
+    order: 0,
+    title: '第一話',
+  }, { now, idFactory: () => 'episode-backup' }));
   const competitor = createPlanningRecord('competitors', {
     bookTitle: '確認済み競合',
     url: 'https://example.com/competitor',
@@ -1475,7 +1490,8 @@ test('企画ノートv2の市場サマリー・正本・意思決定参照をバ
   const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => {} };
   const exported = await createDataBackup({ storage, imageStore, now });
   const restored = readPlanningNotes(exported.data.projects[0].planning_notes).data;
-  assert.equal(restored.version, 2);
+  assert.equal(restored.version, 3);
+  assert.equal(restored.chapters.find(record => record.id === 'episode-backup').parentId, 'part-backup');
   assert.equal(restored.marketSummary.versionId, 'MARKET-BACKUP');
   assert.deepEqual(restored.instructionVersions[0].canonicalFor, ['codex', 'author']);
   assert.equal(restored.decisions[0].isCanonical, true);
@@ -1487,6 +1503,7 @@ test('企画ノートv2の市場サマリー・正本・意思決定参照をバ
   );
   const mergedNotes = readPlanningNotes(merged.projects[0].planning_notes).data;
   assert.equal(mergedNotes.marketSummary.publicSources[0].verificationStatus, 'verified');
+  assert.equal(mergedNotes.chapters.find(record => record.id === 'episode-backup').nodeType, 'episode');
   assert.equal(mergedNotes.instructionVersions[0].firstReadFor.includes('author'), true);
   assert.equal(mergedNotes.decisions[0].decisionState, 'current');
 });

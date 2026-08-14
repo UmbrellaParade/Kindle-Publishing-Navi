@@ -101,6 +101,7 @@ const MARKDOWN_COMPONENTS = {
         id={id}
         tabIndex={-1}
         className="scroll-mt-28 border-t border-neon-cyan/20 pt-8 text-xl font-black leading-snug text-neon-cyan outline-none first:border-t-0 first:pt-0 sm:text-2xl"
+        style={{ scrollMarginTop: 'calc(var(--kindle-main-nav-height, 60px) + 0.75rem)' }}
       >
         {children}
       </h2>

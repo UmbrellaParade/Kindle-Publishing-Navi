@@ -34,8 +34,21 @@ import {
   downloadCritiqueRecovery,
   downloadDataBackup,
 } from '@/lib/dataBackup';
-
-const SELECTED_PROJECT_KEY = 'kindle_publishing_navi_selected_project_id';
+import {
+  calculateRestoredScrollY,
+  createViewScrollPosition,
+  DEFAULT_PLANNING_SECTION,
+  getProjectPlanningSection,
+  getSavedViewScroll,
+  normalizePlanningViewSection,
+  persistViewResumeState,
+  PLANNING_VIEW_SECTIONS,
+  readExplicitViewUrl,
+  readViewResumeState,
+  reconcileViewResumeProjects,
+  rememberViewResumeState,
+  resolveViewResumeState,
+} from '@/lib/viewResumeState';
 
 const TABS = [
   { id: 'manual',    label: '使い方マニュアル' },
@@ -50,6 +63,7 @@ const TABS = [
   { id: 'formatter', label: 'Kindle原稿整形ツール（テスト版）' },
   { id: 'critique',  label: '辛口論評' },
 ];
+const MAIN_TAB_IDS = TABS.map(tab => tab.id);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState('creation');
@@ -63,8 +77,63 @@ export default function Home() {
   const [createRequestToken, setCreateRequestToken] = useState(0);
   const [mobileTabsOpen, setMobileTabsOpen] = useState(false);
   const [mainNavigationHeight, setMainNavigationHeight] = useState(60);
+  const [planningSection, setPlanningSection] = useState(DEFAULT_PLANNING_SECTION);
+  const [viewResumeReady, setViewResumeReady] = useState(false);
+  const [resumeNoticeVisible, setResumeNoticeVisible] = useState(false);
+  const [initialViewResumeState] = useState(() => readViewResumeState());
   const mobileTabsToggleRef = useRef(null);
   const mainNavigationRef = useRef(null);
+  const viewResumeStateRef = useRef(initialViewResumeState);
+  const viewResumeReadyRef = useRef(false);
+  const viewContextRef = useRef({
+    projectId: '',
+    mainTab: 'creation',
+    planningSection: DEFAULT_PLANNING_SECTION,
+  });
+  const explicitViewUrlRef = useRef(readExplicitViewUrl(
+    typeof window === 'undefined' ? null : window.location,
+  ));
+  const skipNextViewRestoreRef = useRef(false);
+  const resumeNoticeShownRef = useRef(false);
+  const resumeNoticeTimerRef = useRef(0);
+
+  const getStickyViewOffset = useCallback(() => {
+    const mainHeight = Math.ceil(mainNavigationRef.current?.getBoundingClientRect().height || 0);
+    const planningHeight = viewContextRef.current.mainTab === 'notes'
+      ? Math.ceil(document.querySelector('[data-view-resume-sticky="planning"]')?.getBoundingClientRect().height || 0)
+      : 0;
+    return mainHeight + planningHeight + (planningHeight > 0 ? 16 : 8);
+  }, []);
+
+  const storeViewResumeState = useCallback(nextState => {
+    viewResumeStateRef.current = nextState;
+    persistViewResumeState(nextState);
+  }, []);
+
+  const rememberViewContext = useCallback(context => {
+    viewContextRef.current = context;
+    const nextState = rememberViewResumeState(viewResumeStateRef.current, {
+      selectedProjectId: context.projectId || null,
+      mainTab: context.mainTab,
+      projectId: context.projectId,
+      planningSection: context.planningSection,
+    });
+    storeViewResumeState(nextState);
+  }, [storeViewResumeState]);
+
+  const captureCurrentViewScroll = useCallback(() => {
+    if (!viewResumeReadyRef.current) return;
+    const context = viewContextRef.current;
+    if (!context.projectId) return;
+    const nextState = rememberViewResumeState(viewResumeStateRef.current, {
+      projectId: context.projectId,
+      planningSection: context.planningSection,
+      scrollMainTab: context.mainTab,
+      scrollPlanningSection: context.planningSection,
+      scrollPosition: createViewScrollPosition(window.scrollY, getStickyViewOffset()),
+    });
+    storeViewResumeState(nextState);
+  }, [getStickyViewOffset, storeViewResumeState]);
 
   const loadProjects = async () => {
     const list = await base44.entities.PublishingProject.list('-created_date', 50);
@@ -73,30 +142,199 @@ export default function Home() {
   };
 
   const handleSelectProject = (project) => {
+    captureCurrentViewScroll();
+    const projectId = project?.id || '';
+    const nextPlanningSection = projectId
+      ? getProjectPlanningSection(viewResumeStateRef.current, projectId)
+      : DEFAULT_PLANNING_SECTION;
+    const nextMainTab = projectId ? activeTab : 'manual';
+    rememberViewContext({
+      projectId,
+      mainTab: nextMainTab,
+      planningSection: nextPlanningSection,
+    });
     setCurrentProject(project);
-    try {
-      if (project?.id) localStorage.setItem(SELECTED_PROJECT_KEY, project.id);
-      else localStorage.removeItem(SELECTED_PROJECT_KEY);
-    } catch {
-      // 保存領域が利用できない場合も、そのセッション中の選択は維持する。
-    }
+    setPlanningSection(nextPlanningSection);
+    if (!projectId) setActiveTab('manual');
   };
 
   useEffect(() => {
+    let cancelled = false;
     loadProjects().then(list => {
-      let selectedId = '';
-      try {
-        selectedId = localStorage.getItem(SELECTED_PROJECT_KEY) || '';
-      } catch {
-        // 保存領域を読めない場合は先頭のプロジェクトを表示する。
-      }
-      if (list.length > 0) {
-        handleSelectProject(list.find(project => project.id === selectedId) || list[0]);
-      } else {
-        setActiveTab('manual');
+      if (cancelled) return;
+      const resolved = resolveViewResumeState(initialViewResumeState, list, {
+        validMainTabs: MAIN_TAB_IDS,
+        validPlanningSections: PLANNING_VIEW_SECTIONS,
+        explicitNavigation: explicitViewUrlRef.current,
+      });
+      let nextState = reconcileViewResumeProjects(
+        initialViewResumeState,
+        list.map(project => project.id),
+      );
+      nextState = rememberViewResumeState(nextState, {
+        selectedProjectId: resolved.project?.id || null,
+        mainTab: resolved.mainTab,
+        projectId: resolved.project?.id || '',
+        planningSection: resolved.planningSection,
+      });
+      storeViewResumeState(nextState);
+      viewContextRef.current = {
+        projectId: resolved.project?.id || '',
+        mainTab: resolved.mainTab,
+        planningSection: resolved.planningSection,
+      };
+      setCurrentProject(resolved.project);
+      setActiveTab(resolved.mainTab);
+      setPlanningSection(resolved.planningSection);
+      viewResumeReadyRef.current = true;
+      setViewResumeReady(true);
+      if (resolved.resumed && !resumeNoticeShownRef.current) {
+        resumeNoticeShownRef.current = true;
+        setResumeNoticeVisible(true);
+        resumeNoticeTimerRef.current = window.setTimeout(() => {
+          setResumeNoticeVisible(false);
+        }, 2600);
       }
     }).catch(error => toast.error(error?.message || 'プロジェクトを読み込めませんでした'));
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => () => {
+    window.clearTimeout(resumeNoticeTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (
+      explicitViewUrlRef.current.hasExplicitNavigation
+      || explicitViewUrlRef.current.manualAnchor
+      || !('scrollRestoration' in window.history)
+    ) return undefined;
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = 'manual';
+    return () => {
+      window.history.scrollRestoration = previous;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!viewResumeReady) return undefined;
+    const context = {
+      projectId: currentProject?.id || '',
+      mainTab: activeTab,
+      planningSection,
+    };
+    rememberViewContext(context);
+    if (skipNextViewRestoreRef.current) {
+      skipNextViewRestoreRef.current = false;
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      return undefined;
+    }
+    if (
+      explicitViewUrlRef.current.hasExplicitNavigation
+      || explicitViewUrlRef.current.manualAnchor
+    ) return undefined;
+
+    const savedPosition = getSavedViewScroll(
+      viewResumeStateRef.current,
+      context.projectId,
+      context.mainTab,
+      context.planningSection,
+    );
+    const restorePosition = () => {
+      if (
+        viewContextRef.current.projectId !== context.projectId
+        || viewContextRef.current.mainTab !== context.mainTab
+        || viewContextRef.current.planningSection !== context.planningSection
+      ) return;
+      const scrollHeight = Math.max(
+        document.documentElement?.scrollHeight || 0,
+        document.body?.scrollHeight || 0,
+      );
+      const top = calculateRestoredScrollY(savedPosition, {
+        stickyOffset: getStickyViewOffset(),
+        scrollHeight,
+        viewportHeight: window.innerHeight,
+      });
+      window.scrollTo({ top, left: 0, behavior: 'auto' });
+    };
+
+    let secondFrame = 0;
+    let settledLayoutTimer = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        restorePosition();
+        // AnimatePresence(mode="wait") の退出後に本文高が変わるため、
+        // 保存済み座標を保持したまま、描画が落ち着いた時点でもう一度補正する。
+        settledLayoutTimer = window.setTimeout(restorePosition, 220);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(settledLayoutTimer);
+    };
+  }, [
+    activeTab,
+    currentProject?.id,
+    getStickyViewOffset,
+    planningSection,
+    rememberViewContext,
+    viewResumeReady,
+  ]);
+
+  useEffect(() => {
+    const anchorId = explicitViewUrlRef.current.manualAnchor;
+    if (!viewResumeReady || activeTab !== 'manual' || !anchorId) return undefined;
+
+    const scrollToAnchor = () => {
+      const target = document.getElementById(anchorId);
+      if (!target) return;
+      target.scrollIntoView({ block: 'start', behavior: 'auto' });
+      target.focus?.({ preventScroll: true });
+    };
+
+    let secondFrame = 0;
+    let settledLayoutTimer = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        scrollToAnchor();
+        settledLayoutTimer = window.setTimeout(scrollToAnchor, 220);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(settledLayoutTimer);
+    };
+  }, [activeTab, viewResumeReady]);
+
+  useEffect(() => {
+    if (!viewResumeReady) return undefined;
+    let saveTimer = 0;
+    const flushScrollPosition = () => {
+      window.clearTimeout(saveTimer);
+      saveTimer = 0;
+      captureCurrentViewScroll();
+    };
+    const scheduleScrollSave = () => {
+      window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(flushScrollPosition, 160);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushScrollPosition();
+    };
+    window.addEventListener('scroll', scheduleScrollSave, { passive: true });
+    window.addEventListener('pagehide', flushScrollPosition);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearTimeout(saveTimer);
+      window.removeEventListener('scroll', scheduleScrollSave);
+      window.removeEventListener('pagehide', flushScrollPosition);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [captureCurrentViewScroll, viewResumeReady]);
 
   const prepareLegacyMigration = useCallback(async () => {
     await flushPendingSaves();
@@ -151,8 +389,51 @@ export default function Home() {
       if (event.key !== LOCAL_PROJECTS_KEY) return;
       try {
         const list = await base44.entities.PublishingProject.list('-created_date', 50);
+        const previousProjectId = viewContextRef.current.projectId;
+        const retainedProject = list.find(project => project.id === previousProjectId) || null;
         setProjects(list);
-        setCurrentProject(current => list.find(project => project.id === current?.id) || list[0] || null);
+        if (retainedProject) {
+          setCurrentProject(retainedProject);
+          let reconciledState = reconcileViewResumeProjects(
+            viewResumeStateRef.current,
+            list.map(project => project.id),
+          );
+          reconciledState = rememberViewResumeState(reconciledState, {
+            selectedProjectId: retainedProject.id,
+            mainTab: viewContextRef.current.mainTab,
+            projectId: retainedProject.id,
+            planningSection: viewContextRef.current.planningSection,
+          });
+          storeViewResumeState(reconciledState);
+        } else {
+          const fallbackProject = list[0] || null;
+          const fallbackMainTab = fallbackProject ? 'creation' : 'manual';
+          let nextState = reconcileViewResumeProjects(
+            viewResumeStateRef.current,
+            list.map(project => project.id),
+          );
+          nextState = rememberViewResumeState(nextState, {
+            selectedProjectId: fallbackProject?.id || null,
+            mainTab: fallbackMainTab,
+            projectId: fallbackProject?.id || '',
+            planningSection: DEFAULT_PLANNING_SECTION,
+          });
+          storeViewResumeState(nextState);
+          skipNextViewRestoreRef.current = (
+            previousProjectId !== (fallbackProject?.id || '')
+            || viewContextRef.current.mainTab !== fallbackMainTab
+            || viewContextRef.current.planningSection !== DEFAULT_PLANNING_SECTION
+          );
+          viewContextRef.current = {
+            projectId: fallbackProject?.id || '',
+            mainTab: fallbackMainTab,
+            planningSection: DEFAULT_PLANNING_SECTION,
+          };
+          setCurrentProject(fallbackProject);
+          setActiveTab(fallbackMainTab);
+          setPlanningSection(DEFAULT_PLANNING_SECTION);
+          window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+        }
         toast.info('別のタブでの変更を反映しました');
       } catch (error) {
         toast.error(error?.message || '別タブの変更を読み込めませんでした');
@@ -245,15 +526,22 @@ export default function Home() {
   };
 
   const handleTabChange = async (tabId, { restoreMobileFocus = false } = {}) => {
+    if (!MAIN_TAB_IDS.includes(tabId)) return;
     if (tabId === activeTab) {
       setMobileTabsOpen(false);
       if (restoreMobileFocus) restoreMobileTabsToggleFocus();
       return;
     }
     if (switchingTab) return;
+    captureCurrentViewScroll();
     setSwitchingTab(true);
     try {
       await flushPendingSaves();
+      rememberViewContext({
+        projectId: currentProject?.id || '',
+        mainTab: tabId,
+        planningSection,
+      });
       setActiveTab(tabId);
       setMobileTabsOpen(false);
       if (restoreMobileFocus) restoreMobileTabsToggleFocus();
@@ -263,6 +551,18 @@ export default function Home() {
       setSwitchingTab(false);
     }
   };
+
+  const handlePlanningSectionChange = useCallback(nextSection => {
+    const safeSection = normalizePlanningViewSection(nextSection);
+    if (safeSection === viewContextRef.current.planningSection) return;
+    captureCurrentViewScroll();
+    rememberViewContext({
+      projectId: viewContextRef.current.projectId,
+      mainTab: viewContextRef.current.mainTab,
+      planningSection: safeSection,
+    });
+    setPlanningSection(safeSection);
+  }, [captureCurrentViewScroll, rememberViewContext]);
 
   const handleOpenManual = async () => {
     await handleTabChange('manual');
@@ -460,7 +760,13 @@ export default function Home() {
               />
             )}
             {activeTab === 'creation'  && <PublishingChecklistTab {...tabProps} />}
-            {activeTab === 'notes'     && <PlanningNotesTab {...tabProps} />}
+            {activeTab === 'notes'     && (
+              <PlanningNotesTab
+                {...tabProps}
+                initialSection={planningSection}
+                onSectionChange={handlePlanningSectionChange}
+              />
+            )}
             {activeTab === 'kdp'       && <KdpChecklistTab {...tabProps} />}
             {activeTab === 'category'  && <CategoryCheckTab {...tabProps} />}
             {activeTab === 'promo'     && <PromoChecklistTab {...tabProps} />}
@@ -491,6 +797,18 @@ export default function Home() {
           </button>
         </div>
       </div>
+
+      {resumeNoticeVisible && (
+        <div
+          data-view-resume-notice="true"
+          className="pointer-events-none fixed left-4 z-50 max-w-[calc(100vw-2rem)] rounded-lg border border-neon-cyan/25 bg-[#151529]/95 px-3 py-2 text-xs text-foreground shadow-lg backdrop-blur-md"
+          style={{ bottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' }}
+          role="status"
+          aria-live="polite"
+        >
+          前回の続きから再開しました
+        </div>
+      )}
     </div>
   );
 }
