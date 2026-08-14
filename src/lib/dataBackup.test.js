@@ -10,6 +10,7 @@ import {
   createDataBackupBundle,
   importDataBackup,
   parseDataBackup,
+  previewDataBackupPlanningNotesConflicts,
   PROJECTS_STORAGE_KEY,
   PROJECT_RUBY_DICTIONARY_STORAGE_PREFIX,
   RUBY_DICTIONARY_STORAGE_KEY,
@@ -19,6 +20,13 @@ import {
   validateDataBackup,
 } from './dataBackup.js';
 import { readCritiqueHistory, serializeCritiqueHistory } from './critiqueHistory.js';
+import {
+  createEmptyPlanningNotes,
+  createPlanningRecord,
+  PlanningNotesMergeConflictError,
+  readPlanningNotes,
+  serializePlanningNotes,
+} from './planningNotes.js';
 
 const FIXED_DATE = '2026-08-03T00:00:00.000Z';
 const now = () => new Date(FIXED_DATE);
@@ -88,6 +96,24 @@ function critiqueContext(overrides = {}) {
       checkedAt: FIXED_DATE,
     },
     ...overrides,
+  });
+}
+
+function planningNotesDecision(id, decision, overrides = {}) {
+  const notes = createEmptyPlanningNotes();
+  const record = createPlanningRecord('decisions', {
+    decision,
+    reason: '判断理由',
+    decidedBy: '著者',
+    ...overrides,
+  }, {
+    now,
+    idFactory: () => id,
+  });
+  return serializePlanningNotes({
+    ...notes,
+    updatedAt: FIXED_DATE,
+    decisions: [record],
   });
 }
 
@@ -1319,4 +1345,335 @@ test('復元失敗時は壊れた辛口論評原文を含むlocalStorageを完�
   assert.equal(Object.hasOwn(caught.beforeSnapshot.data.projects[0], 'critique_history'), false);
   assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
   assert.deepEqual(storedImages.map(record => record.id), ['current-image']);
+});
+
+test('企画・取材・構成ノートを厳格に正規化してバックアップし、旧バックアップも受け入れる', async () => {
+  const planningRaw = planningNotesDecision('decision-1', '対象読者を初心者へ絞る');
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'p1',
+      name: '企画ノートの本',
+      planning_notes: planningRaw,
+      provisional_release_date: '2026-09-14',
+      release_method: 'immediate',
+    }]),
+  });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+
+  const exported = await createDataBackup({ storage, imageStore, now });
+  const restoredNotes = readPlanningNotes(exported.data.projects[0].planning_notes);
+
+  assert.equal(restoredNotes.error, null);
+  assert.equal(restoredNotes.data.decisions[0].decision, '対象読者を初心者へ絞る');
+  assert.equal(exported.data.projects[0].provisional_release_date, '2026-09-14');
+  assert.equal(exported.data.projects[0].release_method, 'immediate');
+  assert.doesNotThrow(() => parseDataBackup(serializeDataBackup(exported)));
+  assert.equal(
+    validateDataBackup(backup({ projects: [{ id: 'legacy', name: '旧バックアップ' }] }))
+      .data.projects[0].planning_notes,
+    undefined,
+  );
+
+  const invalidValues = [
+    '{broken-planning-notes',
+    JSON.stringify({ ...JSON.parse(planningRaw), version: 999 }),
+    JSON.stringify({ ...JSON.parse(planningRaw), unexpected: '未対応' }),
+  ];
+  for (const planning_notes of invalidValues) {
+    assert.throws(
+      () => validateDataBackup(backup({
+        projects: [{ id: 'p1', name: '不正ノート', planning_notes }],
+      })),
+      error => error instanceof BackupValidationError
+        && error.path === 'backup.data.projects[0].planning_notes',
+    );
+  }
+
+  const emptyPlanning = createEmptyPlanningNotes();
+  const oversizedPlanning = serializePlanningNotes({
+    ...emptyPlanning,
+    concept: {
+      ...emptyPlanning.concept,
+      targetReader: 'a'.repeat(450_000),
+      readerProblems: 'b'.repeat(450_000),
+      bookPromise: 'c'.repeat(450_000),
+      theme: 'd'.repeat(450_000),
+      uniqueness: 'e'.repeat(450_000),
+    },
+  });
+  assert.throws(
+    () => validateDataBackup(backup({
+      projects: [{ id: 'p1', name: '容量超過ノート', planning_notes: oversizedPlanning }],
+    })),
+    error => error instanceof BackupValidationError
+      && error.path === 'backup.data.projects[0].planning_notes'
+      && /約2MB/.test(error.message),
+  );
+});
+
+test('空白だけ・将来版の現在企画ノートも通常バックアップを妨げず原文回収する', async () => {
+  const futureRaw = JSON.stringify({ ...createEmptyPlanningNotes(), version: 99 });
+  for (const raw of ['   \r\n ', futureRaw]) {
+    const storage = new MemoryStorage({
+      [PROJECTS_STORAGE_KEY]: JSON.stringify([{ id: 'p1', name: '回収する本', planning_notes: raw }]),
+    });
+    const bundle = await createDataBackupBundle({
+      storage,
+      imageStore: {
+        listLocalImages: async () => [],
+        replaceLocalImages: async () => {},
+      },
+      now,
+    });
+    assert.equal(Object.hasOwn(bundle.backup.data.projects[0], 'planning_notes'), false);
+    assert.equal(bundle.critiqueRecovery.entries[0].field, 'planning_notes');
+    assert.equal(bundle.critiqueRecovery.entries[0].raw, raw);
+    assert.doesNotThrow(() => parseDataBackup(serializeDataBackup(bundle.backup)));
+  }
+});
+
+test('企画ノートはID別に結合し、旧バックアップ・同一内容・全置換を安全に扱う', () => {
+  const currentRaw = planningNotesDecision('decision-current', '現在の判断');
+  const incomingRaw = planningNotesDecision('decision-incoming', '追加する判断');
+  const current = backup({
+    projects: [{
+      id: 'p1',
+      name: '現在の本',
+      planning_notes: currentRaw,
+      provisional_release_date: '2026-09-14',
+      schedule_calculated_for: '2026-09-14',
+      schedule_date_source: 'provisional',
+    }],
+  });
+
+  const merged = buildDataRestorePlan(current, backup({
+    projects: [{ id: 'p1', name: '結合後の本', planning_notes: incomingRaw }],
+  }), 'merge');
+  const mergedNotes = readPlanningNotes(merged.projects[0].planning_notes);
+  assert.equal(mergedNotes.error, null);
+  assert.deepEqual(
+    mergedNotes.data.decisions.map(record => record.id),
+    ['decision-current', 'decision-incoming'],
+  );
+  assert.equal(merged.projects[0].provisional_release_date, '2026-09-14');
+  assert.equal(merged.projects[0].schedule_date_source, 'provisional');
+
+  const idempotent = buildDataRestorePlan(current, backup({
+    projects: [{ id: 'p1', name: '同一内容', planning_notes: currentRaw }],
+  }), 'merge');
+  assert.equal(readPlanningNotes(idempotent.projects[0].planning_notes).data.decisions.length, 1);
+
+  const mergedLegacy = buildDataRestorePlan(
+    current,
+    backup({ projects: [{ id: 'p1', name: '旧バックアップ' }] }),
+    'merge',
+  );
+  assert.equal(mergedLegacy.projects[0].planning_notes, currentRaw);
+
+  const mergedBlank = buildDataRestorePlan(
+    current,
+    backup({ projects: [{ id: 'p1', name: '空欄を持つ旧バックアップ', planning_notes: '   ' }] }),
+    'merge',
+  );
+  assert.equal(readPlanningNotes(mergedBlank.projects[0].planning_notes).data.decisions.length, 1);
+
+  const replaced = buildDataRestorePlan(current, backup({
+    projects: [{ id: 'p1', name: '全置換', planning_notes: incomingRaw }],
+  }), 'replace');
+  assert.deepEqual(
+    readPlanningNotes(replaced.projects[0].planning_notes).data.decisions.map(record => record.id),
+    ['decision-incoming'],
+  );
+});
+
+test('企画ノートの同一ID競合を事前表示し、mergeは書き込み前に停止する', async () => {
+  const currentRaw = planningNotesDecision('decision-shared', '現在の承認内容', {
+    status: 'approved',
+    approvedBy: '著者',
+  });
+  const incomingRaw = planningNotesDecision('decision-shared', 'バックアップ側の異なる内容', {
+    status: 'approved',
+    approvedBy: '著者',
+  });
+  const current = backup({
+    projects: [{ id: 'p1', name: '現在の本', planning_notes: currentRaw }],
+  });
+  const incoming = backup({
+    projects: [{ id: 'p1', name: '入力側の本', planning_notes: incomingRaw }],
+  });
+  const conflicts = previewDataBackupPlanningNotesConflicts(current, incoming);
+
+  assert.deepEqual(conflicts, [{
+    projectId: 'p1',
+    projectName: '入力側の本',
+    section: 'decisions',
+    id: 'decision-shared',
+    reason: 'same_id_different_content',
+  }]);
+  assert.throws(
+    () => buildDataRestorePlan(current, incoming, 'merge'),
+    error => error instanceof PlanningNotesMergeConflictError
+      && error.conflicts.length === 1,
+  );
+
+  const originalProjectsRaw = JSON.stringify(current.data.projects);
+  const storage = new MemoryStorage({ [PROJECTS_STORAGE_KEY]: originalProjectsRaw });
+  let imageWrites = 0;
+  let beforeApplyCalled = false;
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => { imageWrites += 1; },
+  };
+  await assert.rejects(
+    importDataBackup(incoming, {
+      mode: 'merge',
+      storage,
+      imageStore,
+      now,
+      beforeApply: () => {
+        beforeApplyCalled = true;
+        return { critiqueRecoverySaved: true };
+      },
+    }),
+    error => error instanceof PlanningNotesMergeConflictError,
+  );
+  assert.equal(beforeApplyCalled, false);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
+  assert.equal(imageWrites, 0);
+});
+
+test('壊れた企画ノートは原文を復旧用JSONへ分離し、保存確認後だけmergeで修復する', async () => {
+  const corruptRaw = '{broken-planning\r\n消してはいけない原文';
+  const initialProject = {
+    id: 'p1',
+    name: '現在の本',
+    planning_notes: corruptRaw,
+    manuscript: '修復前原稿',
+    provisional_release_date: '2026-09-14',
+    release_target_date: '2026-10-14',
+    release_method: 'preorder',
+    schedule_calculated_for: '2026-09-14',
+    schedule_date_source: 'provisional',
+    checklist_data: JSON.stringify({ t01: { done: true, note: '残すメモ' } }),
+  };
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([initialProject]),
+  });
+  let imageWrites = 0;
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => { imageWrites += 1; },
+  };
+
+  const bundle = await createDataBackupBundle({ storage, imageStore, now });
+  assert.equal(Object.hasOwn(bundle.backup.data.projects[0], 'planning_notes'), false);
+  assert.equal(bundle.critiqueRecovery.entries.length, 1);
+  assert.deepEqual(bundle.critiqueRecovery.entries[0], {
+    projectId: 'p1',
+    projectName: '現在の本',
+    field: 'planning_notes',
+    error: bundle.critiqueRecovery.entries[0].error,
+    raw: corruptRaw,
+  });
+  assert.match(bundle.critiqueRecovery.entries[0].error, /企画・取材ノート/);
+  assert.equal(
+    JSON.parse(serializeCritiqueRecovery(bundle.critiqueRecovery)).entries[0].raw,
+    corruptRaw,
+  );
+
+  await importDataBackup(backup({
+    projects: [{ id: 'p1', name: '通常結合', manuscript: '修復後原稿' }],
+  }), {
+    mode: 'merge', storage, imageStore, now,
+  });
+  const preserved = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY))[0];
+  assert.equal(preserved.planning_notes, corruptRaw);
+  assert.equal(preserved.manuscript, '修復後原稿');
+  assert.equal(preserved.provisional_release_date, '2026-09-14');
+  assert.equal(preserved.release_target_date, '2026-10-14');
+  assert.equal(preserved.release_method, 'preorder');
+  assert.equal(preserved.schedule_date_source, 'provisional');
+  assert.deepEqual(JSON.parse(preserved.checklist_data).t01, { done: true, note: '残すメモ' });
+
+  const validRaw = planningNotesDecision('decision-repaired', '復旧後の判断');
+  const incoming = backup({
+    projects: [{ id: 'p1', name: '修復する本', planning_notes: validRaw }],
+  });
+  const beforeRepairRaw = storage.getItem(PROJECTS_STORAGE_KEY);
+  const writesBeforeRepair = imageWrites;
+  await assert.rejects(
+    importDataBackup(incoming, { mode: 'merge', storage, imageStore, now }),
+    error => error instanceof BackupImportError
+      && error.preflightFailed === true
+      && error.beforeCritiqueRecovery?.entries[0].field === 'planning_notes'
+      && error.beforeCritiqueRecovery.entries[0].raw === corruptRaw,
+  );
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), beforeRepairRaw);
+  assert.equal(imageWrites, writesBeforeRepair);
+
+  let recoveryObserved = null;
+  await importDataBackup(incoming, {
+    mode: 'merge',
+    storage,
+    imageStore,
+    now,
+    beforeApply: ({ beforeCritiqueRecovery, critiqueRepairProjectIds }) => {
+      recoveryObserved = beforeCritiqueRecovery;
+      assert.deepEqual(critiqueRepairProjectIds, ['p1']);
+      assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), beforeRepairRaw);
+      return { critiqueRecoverySaved: true };
+    },
+  });
+  const repaired = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY))[0];
+  assert.equal(recoveryObserved.entries[0].raw, corruptRaw);
+  assert.equal(readPlanningNotes(repaired.planning_notes).error, null);
+  assert.equal(
+    readPlanningNotes(repaired.planning_notes).data.decisions[0].decision,
+    '復旧後の判断',
+  );
+  assert.equal(repaired.provisional_release_date, '2026-09-14');
+  assert.equal(repaired.release_method, 'preorder');
+});
+
+test('壊れた企画ノートがある全置換は復旧用JSON保存を必須にし、旧バックアップへ復元できる', async () => {
+  const corruptRaw = '{future-planning-notes';
+  const originalProjectsRaw = JSON.stringify([{
+    id: 'p1', name: '壊れた現在の本', planning_notes: corruptRaw,
+  }]);
+  const storage = new MemoryStorage({ [PROJECTS_STORAGE_KEY]: originalProjectsRaw });
+  const imageStore = {
+    listLocalImages: async () => [],
+    replaceLocalImages: async () => {},
+  };
+  const legacyIncoming = backup({
+    projects: [{ id: 'legacy', name: '企画ノート機能より前の本' }],
+    selectedProjectId: 'legacy',
+  });
+
+  await assert.rejects(
+    importDataBackup(legacyIncoming, { mode: 'replace', storage, imageStore, now }),
+    error => error instanceof BackupImportError
+      && error.preflightFailed === true
+      && error.beforeCritiqueRecovery?.entries[0].raw === corruptRaw,
+  );
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), originalProjectsRaw);
+
+  await importDataBackup(legacyIncoming, {
+    mode: 'replace',
+    storage,
+    imageStore,
+    now,
+    beforeApply: ({ beforeCritiqueRecovery }) => {
+      assert.equal(beforeCritiqueRecovery.entries[0].field, 'planning_notes');
+      assert.equal(beforeCritiqueRecovery.entries[0].raw, corruptRaw);
+      return { critiqueRecoverySaved: true };
+    },
+  });
+  assert.deepEqual(
+    JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)),
+    [{ id: 'legacy', name: '企画ノート機能より前の本' }],
+  );
 });
