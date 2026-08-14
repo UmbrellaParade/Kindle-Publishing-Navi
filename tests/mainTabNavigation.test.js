@@ -77,3 +77,10 @@ test('2段ナビの下でもマニュアル目次が隠れない', () => {
     assert.doesNotMatch(source, /sticky top-20 hidden max-h-\[calc\(100vh-6rem\)\]/);
   }
 });
+
+test('内側の追従メニューが使えるよう、外側ナビの実測高さをCSS変数で共有する', () => {
+  assert.match(homeSource, /const \[mainNavigationHeight, setMainNavigationHeight\] = useState\(60\)/);
+  assert.match(homeSource, /new ResizeObserver\(updateHeight\)/);
+  assert.match(homeSource, /navigation\.getBoundingClientRect\(\)\.height/);
+  assert.match(homeSource, /'--kindle-main-nav-height': `\$\{mainNavigationHeight\}px`/);
+});

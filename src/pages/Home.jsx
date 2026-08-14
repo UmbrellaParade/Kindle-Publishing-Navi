@@ -62,6 +62,7 @@ export default function Home() {
   const [retryingSaves, setRetryingSaves] = useState(false);
   const [createRequestToken, setCreateRequestToken] = useState(0);
   const [mobileTabsOpen, setMobileTabsOpen] = useState(false);
+  const [mainNavigationHeight, setMainNavigationHeight] = useState(60);
   const mobileTabsToggleRef = useRef(null);
   const mainNavigationRef = useRef(null);
 
@@ -173,6 +174,29 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    const navigation = mainNavigationRef.current;
+    if (!navigation) return undefined;
+
+    const updateHeight = () => {
+      const nextHeight = Math.ceil(navigation.getBoundingClientRect().height);
+      if (nextHeight > 0) {
+        setMainNavigationHeight(current => current === nextHeight ? current : nextHeight);
+      }
+    };
+    updateHeight();
+
+    const observer = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(updateHeight)
+      : null;
+    observer?.observe(navigation);
+    window.addEventListener('resize', updateHeight);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateHeight);
+    };
+  }, []);
+
   const handleRetrySaves = async () => {
     if (retryingSaves) return;
     setRetryingSaves(true);
@@ -278,7 +302,13 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen relative overflow-x-clip" style={{ background: '#0d0d1a' }}>
+    <div
+      className="min-h-screen relative overflow-x-clip"
+      style={{
+        background: '#0d0d1a',
+        '--kindle-main-nav-height': `${mainNavigationHeight}px`,
+      }}
+    >
       <RainEffect />
       <div className="fixed top-0 left-1/4 w-96 h-96 rounded-full blur-3xl pointer-events-none" style={{ background: 'rgba(255,45,120,0.04)' }} />
       <div className="fixed bottom-0 right-1/4 w-96 h-96 rounded-full blur-3xl pointer-events-none" style={{ background: 'rgba(0,245,255,0.04)' }} />

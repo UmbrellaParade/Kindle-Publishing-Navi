@@ -21,11 +21,15 @@ import {
 } from './dataBackup.js';
 import { readCritiqueHistory, serializeCritiqueHistory } from './critiqueHistory.js';
 import {
+  assignDecisionCanonical,
+  assignInstructionCanonical,
   createEmptyPlanningNotes,
   createPlanningRecord,
   PlanningNotesMergeConflictError,
   readPlanningNotes,
+  savePlanningMarketSummary,
   serializePlanningNotes,
+  upsertPlanningRecord,
 } from './planningNotes.js';
 
 const FIXED_DATE = '2026-08-03T00:00:00.000Z';
@@ -1412,6 +1416,79 @@ test('企画・取材・構成ノートを厳格に正規化してバックア�
       && error.path === 'backup.data.projects[0].planning_notes'
       && /約2MB/.test(error.message),
   );
+});
+
+test('企画ノートv2の市場サマリー・正本・意思決定参照をバックアップと結合復元で保つ', async () => {
+  let notes = createEmptyPlanningNotes();
+  const add = (section, record) => {
+    notes = upsertPlanningRecord(notes, section, record, { expectedUpdatedAt: null, now });
+  };
+  const competitor = createPlanningRecord('competitors', {
+    bookTitle: '確認済み競合',
+    url: 'https://example.com/competitor',
+    checkedOn: '2026-08-03',
+    assessmentStatus: 'verified',
+    claimKind: 'hypothesis',
+    recheckStatus: 'checked',
+  }, { now, idFactory: () => 'competitor-v2' });
+  add('competitors', competitor);
+  const instructionIds = ['instruction-v2', 'document-v2'];
+  let instructionIndex = 0;
+  const instruction = createPlanningRecord('instructionVersions', {
+    name: '正本指示書',
+    role: 'writing',
+    audience: 'shared',
+  }, { now, idFactory: () => instructionIds[instructionIndex++] });
+  add('instructionVersions', instruction);
+  const decision = createPlanningRecord('decisions', { decision: '現在の判断' }, {
+    now,
+    idFactory: () => 'decision-v2',
+  });
+  add('decisions', decision);
+  notes = savePlanningMarketSummary(notes, {
+    versionId: 'MARKET-BACKUP',
+    sourceName: 'market-research-summary.md',
+    reviewedOn: '2026-08-03',
+    status: 'needs_confirmation',
+    readerNeeds: '迷いを一緒に考えたい',
+    readerNeedsEvidenceIds: ['competitor-v2', 'MKT-BACKUP'],
+    publicSources: [{
+      id: 'MKT-BACKUP',
+      label: '公開出典',
+      url: 'https://example.com/source',
+      checkedOn: '2026-08-03',
+      purpose: '確認',
+      verificationStatus: 'verified',
+    }],
+  }, { expectedUpdatedAt: '', now });
+  notes = assignInstructionCanonical(notes, instruction.id, 'codex', { now });
+  notes = assignInstructionCanonical(notes, instruction.id, 'author', { now });
+  notes = assignDecisionCanonical(notes, decision.id, { now });
+
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'p1',
+      name: 'v2企画ノートの本',
+      planning_notes: serializePlanningNotes(notes),
+    }]),
+  });
+  const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => {} };
+  const exported = await createDataBackup({ storage, imageStore, now });
+  const restored = readPlanningNotes(exported.data.projects[0].planning_notes).data;
+  assert.equal(restored.version, 2);
+  assert.equal(restored.marketSummary.versionId, 'MARKET-BACKUP');
+  assert.deepEqual(restored.instructionVersions[0].canonicalFor, ['codex', 'author']);
+  assert.equal(restored.decisions[0].isCanonical, true);
+
+  const merged = buildDataRestorePlan(
+    backup({ projects: [{ id: 'p1', name: 'v2企画ノートの本' }] }),
+    exported,
+    'merge',
+  );
+  const mergedNotes = readPlanningNotes(merged.projects[0].planning_notes).data;
+  assert.equal(mergedNotes.marketSummary.publicSources[0].verificationStatus, 'verified');
+  assert.equal(mergedNotes.instructionVersions[0].firstReadFor.includes('author'), true);
+  assert.equal(mergedNotes.decisions[0].decisionState, 'current');
 });
 
 test('空白だけ・将来版の現在企画ノートも通常バックアップを妨げず原文回収する', async () => {
