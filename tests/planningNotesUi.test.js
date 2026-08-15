@@ -182,7 +182,8 @@ test('章へ紐づく執筆用質問を仮目次と現在の確定目次から�
   assert.match(source, /preview\.slice\(0, 180\)/);
   assert.match(source, /質問本文はまだありません/);
   assert.match(source, /この項目に紐づく執筆用の質問はまだありません/);
-  assert.match(source, /questions=\{questionsByChapterId\.get\(record\.id\) \|\| \[\]\}/);
+  assert.match(source, /const chapterQuestions = activeSection === 'chapters'[\s\S]*questionsByChapterId\.get\(record\.id\) \|\| \[\]/);
+  assert.match(source, /questions=\{chapterQuestions\}/);
   assert.match(source, /getQuestions=\{chapterId => questionsByChapterId\.get\(chapterId\) \|\| \[\]\}/);
   assert.match(source, /onCopyQuestion=\{copyInstructionQuestion\}/);
   assert.match(source, /onOpenQuestion=\{record => openDetail\('instructionVersions', record\)\}/);
@@ -427,9 +428,29 @@ test('仮目次と確定目次だけで章ごとの原稿進捗と原稿リン�
   assert.match(source, /activeSection === 'chapters' && record\.status !== 'rejected'[\s\S]*<ChapterManuscriptControls/);
   assert.match(source, /<OutlineSnapshotTree[\s\S]*snapshot=\{confirmedOutline\}[\s\S]*current[\s\S]*onToggleManuscriptComplete=\{toggleChapterManuscriptComplete\}[\s\S]*onEditManuscriptLink=\{openManuscriptLinkEditor\}/);
   assert.match(source, /current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink/);
-  assert.match(source, /<OutlineSnapshotTree snapshot=\{snapshot\} includeRejected \/>/);
+  assert.match(source, /<OutlineSnapshotTree[\s\S]*snapshot=\{snapshot\}[\s\S]*includeRejected/);
   assert.match(source, /確定目次<\/span>は目次本文を変えない保存版ですが、原稿の完成チェックと原稿リンクだけは更新できます/);
   assert.match(source, /過去の目次<\/span>は変更できません/);
+});
+
+test('仮・確定・過去の目次項目を個別に折りたたみ、見出しと原稿状態を残す', () => {
+  assert.match(source, /function OutlineCardCollapseButton\(/);
+  assert.match(source, /aria-expanded=\{!collapsed\}/);
+  assert.match(source, /aria-controls=\{controlsId\}/);
+  assert.match(source, /詳細を開く/);
+  assert.match(source, /詳細を折りたたむ/);
+  assert.match(source, /className="min-h-11 shrink-0/);
+  assert.match(source, /function OutlineCardSummaryBadges\(/);
+  assert.match(source, /原稿：\{completed \? '完成' : '未完成'\}/);
+  assert.match(source, /原稿リンクあり/);
+  assert.match(source, /質問 \{questionCount\}件/);
+  assert.match(source, /const outlineCardKey = activeSection === 'chapters' \? `draft:\$\{record\.id\}`/);
+  assert.match(source, /collapseScope=\{`confirmed:\$\{confirmedOutline\.id\}`\}/);
+  assert.match(source, /collapseScope=\{`history:\$\{snapshot\.id\}`\}/);
+  assert.match(source, /id=\{activeSection === 'chapters' \? outlineCardBodyId\(outlineCardKey\) : undefined\}/);
+  assert.match(source, /hidden=\{activeSection === 'chapters' && outlineCardCollapsed\}/);
+  assert.match(source, /visibleRecords\.map\(\(\{ record, depth \}\) =>/);
+  assert.doesNotMatch(source, /collapsed[^\n]*(?:filter|flatMap)[^\n]*(?:parentId|pathIds)/);
 });
 
 test('原稿完成チェックと任意HTTPS原稿URLは初心者向けで安全に操作できる', () => {

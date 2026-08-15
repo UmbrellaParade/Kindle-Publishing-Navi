@@ -5,6 +5,8 @@ import {
   ArrowUp,
   BookOpenText,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock3,
   ClipboardList,
   Compass,
@@ -935,6 +937,63 @@ function ChapterManuscriptControls({ record, manuscript, busy, onToggleComplete,
   );
 }
 
+function outlineCardBodyId(cardKey) {
+  return `planning-outline-card-body-${cardKey.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+}
+
+function OutlineCardCollapseButton({ cardKey, collapsed, itemLabel, onToggle }) {
+  const controlsId = outlineCardBodyId(cardKey);
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      onClick={() => onToggle(cardKey)}
+      className="min-h-11 shrink-0 border-white/15 text-foreground"
+      aria-expanded={!collapsed}
+      aria-controls={controlsId}
+      aria-label={`${itemLabel}の詳細を${collapsed ? '開く' : '折りたたむ'}`}
+    >
+      {collapsed
+        ? <ChevronRight className="h-4 w-4" aria-hidden="true" />
+        : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
+      {collapsed ? '詳細を開く' : '詳細を折りたたむ'}
+    </Button>
+  );
+}
+
+function OutlineCardSummaryBadges({ manuscript, showManuscript = false, questionCount = 0, childCount = 0 }) {
+  const completed = Boolean(manuscript?.completed);
+  const hasDocumentLink = Boolean(manuscript?.documentUrl);
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold">
+      {showManuscript && (
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 ${completed ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-200' : 'border-white/15 bg-black/10 text-muted-foreground'}`}>
+          {completed
+            ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+            : <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />}
+          原稿：{completed ? '完成' : '未完成'}
+        </span>
+      )}
+      {showManuscript && hasDocumentLink && (
+        <span className="inline-flex items-center gap-1 rounded-full border border-neon-cyan/30 bg-neon-cyan/5 px-2 py-1 text-neon-cyan">
+          <Link2 className="h-3.5 w-3.5" aria-hidden="true" />原稿リンクあり
+        </span>
+      )}
+      {questionCount > 0 && (
+        <span className="inline-flex items-center gap-1 rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-1 text-neon-pink">
+          <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />質問 {questionCount}件
+        </span>
+      )}
+      {childCount > 0 && (
+        <span className="rounded-full border border-white/15 bg-black/10 px-2 py-1 text-muted-foreground">
+          中の項目 {childCount}件
+        </span>
+      )}
+    </div>
+  );
+}
+
 function ChapterWritingQuestions({
   record,
   questions = [],
@@ -1102,6 +1161,9 @@ function ManuscriptLinkDialog({ value, busy, returnFocusRef, onChange, onSave, o
 
 function OutlineSnapshotTree({
   snapshot,
+  collapseScope,
+  collapsedCardKeys,
+  onToggleCard,
   current = false,
   includeRejected = false,
   busy = false,
@@ -1141,40 +1203,63 @@ function OutlineSnapshotTree({
           {visibleRecords.map(({ record, depth }) => {
             const questions = getQuestions?.(record.id) || [];
             const hasChildren = visibleRecords.some(({ record: child }) => child.parentId === record.id);
+            const childCount = visibleRecords.filter(({ record: child }) => child.parentId === record.id).length;
+            const manuscript = current && getManuscript ? getManuscript(record.id) : undefined;
+            const itemLabel = `${getPlanningChapterNodeLabel(record.nodeType)}「${record.title || '無題'}」`;
+            const cardKey = `${collapseScope || `history:${snapshot.id}`}:${record.id}`;
+            const collapsed = collapsedCardKeys?.has(cardKey) || false;
             return (
               <article
                 key={record.id}
                 className="rounded-lg border border-white/10 bg-white/[0.025] p-3"
                 style={{ marginLeft: `${Math.min(depth, 3) * 8}px` }}
               >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
-                    {getPlanningChapterNodeLabel(record.nodeType)}
-                  </span>
-                  <span className="font-bold text-foreground">{record.title || '無題'}</span>
-                  {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
+                        {getPlanningChapterNodeLabel(record.nodeType)}
+                      </span>
+                      <span className="break-words font-bold text-foreground">{record.title || '無題'}</span>
+                      {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
+                    </div>
+                    <OutlineCardSummaryBadges
+                      manuscript={manuscript}
+                      showManuscript={current}
+                      questionCount={current ? questions.length : 0}
+                      childCount={childCount}
+                    />
+                  </div>
+                  <OutlineCardCollapseButton
+                    cardKey={cardKey}
+                    collapsed={collapsed}
+                    itemLabel={itemLabel}
+                    onToggle={onToggleCard}
+                  />
                 </div>
-                {record.role && <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{record.role}</p>}
-                {current && getQuestions && onCopyQuestion && onOpenQuestion && (questions.length > 0 || !hasChildren) && (
-                  <ChapterWritingQuestions
-                    record={record}
-                    questions={questions}
-                    currentConfirmed
-                    onCopyInstruction={onCopyQuestion}
-                    onOpenDetail={onOpenQuestion}
-                    onAddQuestion={canAddQuestion?.(record.id) ? onAddQuestion : undefined}
-                    addQuestionUnavailableMessage={canAddQuestion?.(record.id) ? '' : 'この項目は以前の確定目次にだけ残っています。仮目次の項目へ質問を紐づけ直してから追加してください。'}
-                  />
-                )}
-                {current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
-                  <ChapterManuscriptControls
-                    record={record}
-                    manuscript={getManuscript(record.id)}
-                    busy={busy}
-                    onToggleComplete={onToggleManuscriptComplete}
-                    onEditLink={onEditManuscriptLink}
-                  />
-                )}
+                <div id={outlineCardBodyId(cardKey)} hidden={collapsed}>
+                  {record.role && <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{record.role}</p>}
+                  {current && getQuestions && onCopyQuestion && onOpenQuestion && (questions.length > 0 || !hasChildren) && (
+                    <ChapterWritingQuestions
+                      record={record}
+                      questions={questions}
+                      currentConfirmed
+                      onCopyInstruction={onCopyQuestion}
+                      onOpenDetail={onOpenQuestion}
+                      onAddQuestion={canAddQuestion?.(record.id) ? onAddQuestion : undefined}
+                      addQuestionUnavailableMessage={canAddQuestion?.(record.id) ? '' : 'この項目は以前の確定目次にだけ残っています。仮目次の項目へ質問を紐づけ直してから追加してください。'}
+                    />
+                  )}
+                  {current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
+                    <ChapterManuscriptControls
+                      record={record}
+                      manuscript={manuscript}
+                      busy={busy}
+                      onToggleComplete={onToggleManuscriptComplete}
+                      onEditLink={onEditManuscriptLink}
+                    />
+                  )}
+                </div>
               </article>
             );
           })}
@@ -2209,6 +2294,8 @@ export default function PlanningNotesTab({
   onNavigateTab,
   initialSection = 'overview',
   onSectionChange,
+  collapsedOutlineCardKeys = [],
+  onCollapsedOutlineCardKeysChange,
 }) {
   const [initialRead] = useState(() => readPlanningNotes(project?.planning_notes));
   const [data, setData] = useState(initialRead.data);
@@ -2244,6 +2331,18 @@ export default function PlanningNotesTab({
   const outlineRewriteTriggerRef = useRef(null);
   const manuscriptLinkReturnFocusRef = useRef(null);
   const activeSectionRef = useRef(activeSection);
+  const collapsedOutlineCardKeySet = useMemo(
+    () => new Set(collapsedOutlineCardKeys),
+    [collapsedOutlineCardKeys],
+  );
+
+  const toggleOutlineCard = cardKey => {
+    if (!onCollapsedOutlineCardKeysChange) return;
+    const nextKeys = collapsedOutlineCardKeySet.has(cardKey)
+      ? collapsedOutlineCardKeys.filter(key => key !== cardKey)
+      : [...collapsedOutlineCardKeys, cardKey];
+    onCollapsedOutlineCardKeysChange(nextKeys);
+  };
 
   const selectActiveSection = section => {
     const safeSection = normalizePlanningViewSection(section);
@@ -3563,6 +3662,9 @@ export default function PlanningNotesTab({
                   <p className="text-xs leading-relaxed text-muted-foreground">目次本文は読み取り専用です。本文を変えるときは仮目次を編集します。原稿の完成チェックと原稿URLだけは、確定目次の各カードから更新できます。</p>
                   <OutlineSnapshotTree
                     snapshot={confirmedOutline}
+                    collapseScope={`confirmed:${confirmedOutline.id}`}
+                    collapsedCardKeys={collapsedOutlineCardKeySet}
+                    onToggleCard={toggleOutlineCard}
                     current
                     busy={busy}
                     getManuscript={chapterId => manuscriptByChapterId.get(chapterId)}
@@ -3599,7 +3701,13 @@ export default function PlanningNotesTab({
                     <span className="mt-1 block text-xs text-neon-cyan">内容を見る（読み取り専用）</span>
                   </summary>
                   <div className="mt-3 border-t border-white/10 pt-3">
-                    <OutlineSnapshotTree snapshot={snapshot} includeRejected />
+                    <OutlineSnapshotTree
+                      snapshot={snapshot}
+                      collapseScope={`history:${snapshot.id}`}
+                      collapsedCardKeys={collapsedOutlineCardKeySet}
+                      onToggleCard={toggleOutlineCard}
+                      includeRejected
+                    />
                   </div>
                 </details>
               ))}
@@ -3641,6 +3749,19 @@ export default function PlanningNotesTab({
             const siblingLocation = parent
               ? `${getPlanningChapterNodeLabel(parent.nodeType)}「${parent.title || '無題'}」の中で`
               : '同じ階層で';
+            const chapterQuestions = activeSection === 'chapters'
+              ? questionsByChapterId.get(record.id) || []
+              : [];
+            const chapterManuscript = activeSection === 'chapters'
+              ? manuscriptByChapterId.get(record.id)
+              : undefined;
+            const outlineCardKey = activeSection === 'chapters' ? `draft:${record.id}` : '';
+            const outlineCardCollapsed = outlineCardKey
+              ? collapsedOutlineCardKeySet.has(outlineCardKey)
+              : false;
+            const outlineItemLabel = activeSection === 'chapters'
+              ? `${getPlanningChapterNodeLabel(record.nodeType)}「${record.title || '無題'}」`
+              : '';
             return (
               <article
                 key={record.id}
@@ -3652,74 +3773,100 @@ export default function PlanningNotesTab({
                   marginLeft: activeSection === 'chapters' ? `${Math.min(depth, 3) * 8}px` : undefined,
                 }}
               >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
-                    {activeSection === 'chapters' && pathLabel && (
-                      <p className="mb-2 flex min-w-0 items-start gap-1.5 break-words text-[11px] text-muted-foreground">
-                        <CornerDownRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
-                        入っている場所：{pathLabel}
-                      </p>
-                    )}
-                    <div className="flex flex-wrap items-center gap-2">
-                      {activeSection === 'chapters' && (
+                {activeSection === 'chapters' && (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
                           {getPlanningChapterNodeLabel(record.nodeType)}
                         </span>
-                      )}
-                      {activeSection === 'chapters' && record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
-                      <h3 className="break-words font-bold text-foreground">{recordTitle(activeSection, record)}</h3>
-                      <StatusBadge status={record.status} />
-                      {record.sourcePriority !== 'unspecified' && <span className="rounded-full border border-neon-cyan/25 px-2 py-0.5 text-[10px] text-neon-cyan">{PLANNING_SOURCE_PRIORITIES[record.sourcePriority]}</span>}
-                      {activeSection === 'interviews' && <span className="rounded-full border border-amber-400/25 px-2 py-0.5 text-[10px] text-amber-200">{record.visibility === 'private' ? '非公開' : '公開候補'}</span>}
+                        {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
+                        <h3 className="break-words font-bold text-foreground">{recordTitle(activeSection, record)}</h3>
+                        <StatusBadge status={record.status} />
+                      </div>
+                      <OutlineCardSummaryBadges
+                        manuscript={chapterManuscript}
+                        showManuscript={record.status !== 'rejected'}
+                        questionCount={record.status !== 'rejected' ? chapterQuestions.length : 0}
+                        childCount={hasChildren ? chapters.filter(chapter => chapter.parentId === record.id).length : 0}
+                      />
                     </div>
-                    {recordSummary(activeSection, record) && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{recordSummary(activeSection, record)}</p>}
-                    {activeSection === 'chapters' && hasChildren && <p className="mt-2 text-[11px] text-neon-cyan/80">中の項目 {chapters.filter(chapter => chapter.parentId === record.id).length}件</p>}
-                    {record.chapterIds.length > 0 && <p className="mt-2 break-words text-[11px] text-neon-cyan/80">紐づく構成：{record.chapterIds.map(id => chapterReferenceLabel(id, allChapters, activeChapterIds)).join('／')}</p>}
-                    <p className="mt-2 break-all text-[10px] text-muted-foreground">ID: {record.id}</p>
+                    <OutlineCardCollapseButton
+                      cardKey={outlineCardKey}
+                      collapsed={outlineCardCollapsed}
+                      itemLabel={outlineItemLabel}
+                      onToggle={toggleOutlineCard}
+                    />
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {activeSection === 'chapters' && record.status !== 'rejected' && <>
-                      <Button type="button" size="sm" variant="outline" onClick={() => handleMoveChapter(record, 'up')} disabled={busy || record.status === 'approved' || parent?.status === 'approved' || !previousSibling || previousSibling.status === 'approved'} className="min-h-11 min-w-11" aria-label={`${record.title || '無題の構成項目'}を${siblingLocation}上へ`}><ArrowUp className="h-4 w-4" /></Button>
-                      <Button type="button" size="sm" variant="outline" onClick={() => handleMoveChapter(record, 'down')} disabled={busy || record.status === 'approved' || parent?.status === 'approved' || !nextSibling || nextSibling.status === 'approved'} className="min-h-11 min-w-11" aria-label={`${record.title || '無題の構成項目'}を${siblingLocation}下へ`}><ArrowDown className="h-4 w-4" /></Button>
-                    </>}
-                    {canAddChild && (
-                      <Button type="button" size="sm" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: defaultChildType, parentId: record.id })} className="min-h-11 border-neon-pink/30 text-neon-pink"><CornerDownRight className="h-4 w-4" />この中に追加</Button>
-                    )}
-                    <Button type="button" size="sm" variant="outline" onClick={() => openDetail(activeSection, record)} className="min-h-11 border-white/15 text-foreground"><BookOpenText className="h-4 w-4" />内容を見る</Button>
-                    {activeSection !== 'chapters' && <Button type="button" size="sm" variant="outline" onClick={() => openChapterLinkEditor(activeSection, record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Link2 className="h-4 w-4" />目次との紐づけだけ変更</Button>}
-                    {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => openEditRecord(activeSection, record)} className="min-h-11"><Pencil className="h-4 w-4" />編集</Button>}
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => openDuplicate(activeSection, record)}
-                      disabled={busy || duplicateBlocked}
-                      title={duplicateBlocked ? '本人承認済みの親項目には子を複製できません' : hasChildren ? 'この項目だけを複製し、中の項目は含めません' : undefined}
-                      className="min-h-11 border-neon-cyan/30 text-neon-cyan"
-                    >
-                      <Copy className="h-4 w-4" />{activeSection === 'chapters' && hasChildren ? 'この項目だけ複製' : '複製'}
-                    </Button>
-                    {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => handleDelete(activeSection, record)} className="min-h-11 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" />削除</Button>}
+                )}
+                <div
+                  id={activeSection === 'chapters' ? outlineCardBodyId(outlineCardKey) : undefined}
+                  hidden={activeSection === 'chapters' && outlineCardCollapsed}
+                >
+                  <div className={`${activeSection === 'chapters' ? 'mt-3 border-t border-white/10 pt-3' : ''} flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between`}>
+                    <div className="min-w-0 flex-1">
+                      {activeSection === 'chapters' && pathLabel && (
+                        <p className="mb-2 flex min-w-0 items-start gap-1.5 break-words text-[11px] text-muted-foreground">
+                          <CornerDownRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                          入っている場所：{pathLabel}
+                        </p>
+                      )}
+                      {activeSection !== 'chapters' && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="break-words font-bold text-foreground">{recordTitle(activeSection, record)}</h3>
+                          <StatusBadge status={record.status} />
+                          {record.sourcePriority !== 'unspecified' && <span className="rounded-full border border-neon-cyan/25 px-2 py-0.5 text-[10px] text-neon-cyan">{PLANNING_SOURCE_PRIORITIES[record.sourcePriority]}</span>}
+                          {activeSection === 'interviews' && <span className="rounded-full border border-amber-400/25 px-2 py-0.5 text-[10px] text-amber-200">{record.visibility === 'private' ? '非公開' : '公開候補'}</span>}
+                        </div>
+                      )}
+                      {recordSummary(activeSection, record) && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{recordSummary(activeSection, record)}</p>}
+                      {record.chapterIds.length > 0 && <p className="mt-2 break-words text-[11px] text-neon-cyan/80">紐づく構成：{record.chapterIds.map(id => chapterReferenceLabel(id, allChapters, activeChapterIds)).join('／')}</p>}
+                      <p className="mt-2 break-all text-[10px] text-muted-foreground">ID: {record.id}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {activeSection === 'chapters' && record.status !== 'rejected' && <>
+                        <Button type="button" size="sm" variant="outline" onClick={() => handleMoveChapter(record, 'up')} disabled={busy || record.status === 'approved' || parent?.status === 'approved' || !previousSibling || previousSibling.status === 'approved'} className="min-h-11 min-w-11" aria-label={`${record.title || '無題の構成項目'}を${siblingLocation}上へ`}><ArrowUp className="h-4 w-4" /></Button>
+                        <Button type="button" size="sm" variant="outline" onClick={() => handleMoveChapter(record, 'down')} disabled={busy || record.status === 'approved' || parent?.status === 'approved' || !nextSibling || nextSibling.status === 'approved'} className="min-h-11 min-w-11" aria-label={`${record.title || '無題の構成項目'}を${siblingLocation}下へ`}><ArrowDown className="h-4 w-4" /></Button>
+                      </>}
+                      {canAddChild && (
+                        <Button type="button" size="sm" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: defaultChildType, parentId: record.id })} className="min-h-11 border-neon-pink/30 text-neon-pink"><CornerDownRight className="h-4 w-4" />この中に追加</Button>
+                      )}
+                      <Button type="button" size="sm" variant="outline" onClick={() => openDetail(activeSection, record)} className="min-h-11 border-white/15 text-foreground"><BookOpenText className="h-4 w-4" />内容を見る</Button>
+                      {activeSection !== 'chapters' && <Button type="button" size="sm" variant="outline" onClick={() => openChapterLinkEditor(activeSection, record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Link2 className="h-4 w-4" />目次との紐づけだけ変更</Button>}
+                      {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => openEditRecord(activeSection, record)} className="min-h-11"><Pencil className="h-4 w-4" />編集</Button>}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openDuplicate(activeSection, record)}
+                        disabled={busy || duplicateBlocked}
+                        title={duplicateBlocked ? '本人承認済みの親項目には子を複製できません' : hasChildren ? 'この項目だけを複製し、中の項目は含めません' : undefined}
+                        className="min-h-11 border-neon-cyan/30 text-neon-cyan"
+                      >
+                        <Copy className="h-4 w-4" />{activeSection === 'chapters' && hasChildren ? 'この項目だけ複製' : '複製'}
+                      </Button>
+                      {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => handleDelete(activeSection, record)} className="min-h-11 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" />削除</Button>}
+                    </div>
                   </div>
+                  {activeSection === 'chapters' && record.status !== 'rejected' && (chapterQuestions.length > 0 || !hasChildren) && (
+                    <ChapterWritingQuestions
+                      record={record}
+                      questions={chapterQuestions}
+                      onCopyInstruction={copyInstructionQuestion}
+                      onOpenDetail={question => openDetail('instructionVersions', question)}
+                      onAddQuestion={openNewQuestionForChapter}
+                    />
+                  )}
+                  {activeSection === 'chapters' && record.status !== 'rejected' && (
+                    <ChapterManuscriptControls
+                      record={record}
+                      manuscript={chapterManuscript}
+                      busy={busy}
+                      onToggleComplete={toggleChapterManuscriptComplete}
+                      onEditLink={openManuscriptLinkEditor}
+                    />
+                  )}
                 </div>
-                {activeSection === 'chapters' && record.status !== 'rejected' && ((questionsByChapterId.get(record.id)?.length || 0) > 0 || !hasChildren) && (
-                  <ChapterWritingQuestions
-                    record={record}
-                    questions={questionsByChapterId.get(record.id) || []}
-                    onCopyInstruction={copyInstructionQuestion}
-                    onOpenDetail={question => openDetail('instructionVersions', question)}
-                    onAddQuestion={openNewQuestionForChapter}
-                  />
-                )}
-                {activeSection === 'chapters' && record.status !== 'rejected' && (
-                  <ChapterManuscriptControls
-                    record={record}
-                    manuscript={manuscriptByChapterId.get(record.id)}
-                    busy={busy}
-                    onToggleComplete={toggleChapterManuscriptComplete}
-                    onEditLink={openManuscriptLinkEditor}
-                  />
-                )}
               </article>
                 );
               })}

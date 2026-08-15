@@ -78,6 +78,11 @@ test('storage反映後に閲覧中projectが消えたら日程の変更を代替
 
 test('閲覧状態は専用localStorageだけに置き、共有・バックアップ・本文へ混ぜない', () => {
   assert.match(homeSource, /persistViewResumeState\(nextState\)/);
+  assert.match(homeSource, /collapsedOutlineCardKeys=\{collapsedOutlineCardKeys\}/);
+  assert.match(homeSource, /onCollapsedOutlineCardKeysChange=\{handleCollapsedOutlineCardKeysChange\}/);
+  assert.match(homeSource, /collapsedOutlineCardKeys: nextKeys/);
+  assert.match(planningSource, /collapsedOutlineCardKeys = \[\]/);
+  assert.match(planningSource, /onCollapsedOutlineCardKeysChange\(nextKeys\)/);
   assert.doesNotMatch(homeSource, /planning_notes[^\n]*viewResume|onProjectUpdate[^\n]*viewResume/i);
   assert.doesNotMatch(backupSource, /VIEW_RESUME_STORAGE_KEY|kindle_publishing_navi_view_resume_v1/);
   assert.doesNotMatch(planningDataSource, /VIEW_RESUME_STORAGE_KEY|kindle_publishing_navi_view_resume_v1/);

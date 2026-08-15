@@ -1,4 +1,4 @@
-export const MANUSCRIPT_FORMATTER_MANUAL_UPDATED_AT = '2026年8月9日';
+export const MANUSCRIPT_FORMATTER_MANUAL_UPDATED_AT = '2026年8月15日';
 
 const MANUSCRIPT_FORMATTER_MANUAL_GROUPS_SOURCE = [
   {
@@ -13,7 +13,7 @@ const MANUSCRIPT_FORMATTER_MANUAL_GROUPS_SOURCE = [
   {
     label: 'Kindle原稿',
     sections: [
-      'Kindle原稿を完成させる流れ',
+      '完成原稿をKindle用に仕上げる流れ',
       '新しい原稿を作る・既存原稿を開く',
       '画面の見方',
       '本文ツールバーの記号と機能',
