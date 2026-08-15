@@ -92,7 +92,7 @@ import {
   upsertPlanningRecord,
   updatePlanningRecordChapterLinks,
   updatePlanningChapterManuscript,
-  validatePlanningGoogleDocumentUrl,
+  validatePlanningManuscriptUrl,
   withdrawPlanningDecision,
 } from '@/lib/planningNotes';
 
@@ -866,7 +866,7 @@ function ChapterManuscriptControls({ record, manuscript, busy, onToggleComplete,
               href={documentUrl}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label={`${itemLabel}の原稿をGoogleドキュメントで開く（新しいタブ）`}
+              aria-label={`${itemLabel}の原稿リンクを開く（新しいタブ）`}
             >
               <ExternalLink className="h-4 w-4" aria-hidden="true" />原稿を開く
             </a>
@@ -879,9 +879,9 @@ function ChapterManuscriptControls({ record, manuscript, busy, onToggleComplete,
           onClick={event => onEditLink(record, event)}
           disabled={busy}
           className="min-h-11 flex-1 border-white/15 text-foreground sm:flex-none"
-          aria-label={`${itemLabel}のGoogleドキュメントURLを${documentUrl ? '変更' : '設定'}`}
+          aria-label={`${itemLabel}の原稿URLを${documentUrl ? '変更' : '設定'}`}
         >
-          <Link2 className="h-4 w-4" aria-hidden="true" />{documentUrl ? 'リンクを変更' : 'Googleドキュメントを設定'}
+          <Link2 className="h-4 w-4" aria-hidden="true" />{documentUrl ? 'リンクを変更' : '原稿リンクを設定'}
         </Button>
       </div>
     </div>
@@ -910,14 +910,20 @@ function ManuscriptLinkDialog({ value, busy, returnFocusRef, onChange, onSave, o
       >
         <form noValidate onSubmit={event => { event.preventDefault(); onSave(); }}>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-neon-cyan"><Link2 className="h-5 w-5" aria-hidden="true" />原稿のGoogleドキュメント</DialogTitle>
+            <DialogTitle className="flex items-center gap-2 text-neon-cyan"><Link2 className="h-5 w-5" aria-hidden="true" />原稿の保存先リンク</DialogTitle>
             <DialogDescription className="leading-relaxed">
-              {value ? `${getPlanningChapterNodeLabel(value.nodeType)}「${value.title || '無題'}」` : 'この項目'}のGoogleドキュメントを設定します。目次本文や承認状態は変わりません。
+              {value ? `${getPlanningChapterNodeLabel(value.nodeType)}「${value.title || '無題'}」` : 'この項目'}の原稿を置いている場所へのリンクを設定します。目次本文や承認状態は変わりません。
             </DialogDescription>
           </DialogHeader>
 
           {value && <div className="mt-4 space-y-3">
-            <label htmlFor="planning-manuscript-document-url" className="block text-xs font-bold text-foreground">GoogleドキュメントURL</label>
+            <div id="planning-manuscript-a5-help" className="rounded-lg border border-cyan-400/25 bg-cyan-400/5 p-3 text-xs leading-relaxed text-cyan-50">
+              <div className="flex items-start gap-2">
+                <BookOpenText className="mt-0.5 h-4 w-4 flex-shrink-0 text-neon-cyan" aria-hidden="true" />
+                <p><span className="font-bold text-neon-cyan">Googleドキュメントを使う場合の執筆用目安</span><br />［ファイル］→［ページ設定］で「ページ形式」・A5にしておくと、紙面量の目安をつかみやすくなります。これはKDP電子書籍の指定ではありません。通常のKindle電子書籍は端末や文字設定に合わせて表示が組み直されるため、A5固定表示にはなりません。電子版はKindle Previewerで確認し、A5判の紙版は入稿先の判型・余白・裁ち落とし仕様へ別途調整してください。</p>
+              </div>
+            </div>
+            <label htmlFor="planning-manuscript-document-url" className="block text-xs font-bold text-foreground">原稿URL（HTTPS）</label>
             <input
               ref={inputRef}
               id="planning-manuscript-document-url"
@@ -925,13 +931,13 @@ function ManuscriptLinkDialog({ value, busy, returnFocusRef, onChange, onSave, o
               inputMode="url"
               value={nextUrl}
               onChange={event => onChange({ ...value, documentUrl: event.target.value, error: '' })}
-              placeholder="https://docs.google.com/document/d/.../edit"
+              placeholder="https://..."
               aria-invalid={Boolean(value.error)}
-              aria-describedby="planning-manuscript-document-help planning-manuscript-document-error"
+              aria-describedby="planning-manuscript-a5-help planning-manuscript-document-help planning-manuscript-document-error"
               className={INPUT_CLASS}
             />
             <p id="planning-manuscript-document-help" className="text-xs leading-relaxed text-muted-foreground">
-              Googleドキュメントの「共有」からURLをコピーして貼り付けます。閲覧できる相手はGoogleドライブ側でも確認してください。このURLは完全バックアップには含まれますが、共有用JSON／Markdownには含めません。
+              Googleドキュメント、Notion、OneDrive、Dropboxなど、原稿を置いているサービスの共有URLを貼り付けます。閲覧できる相手は保存先サービス側でも確認してください。このURLは完全バックアップには含まれますが、共有用JSON／Markdownには含めません。
             </p>
             {willDelete && (
               <p className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-xs leading-relaxed text-amber-100">
@@ -2476,7 +2482,12 @@ export default function PlanningNotesTab({
   };
 
   const closeManuscriptLinkEditor = () => {
+    const returnTarget = manuscriptLinkReturnFocusRef.current;
     setManuscriptLinkEditor(null);
+    // Radixの閉じる処理とReactの再描画が完了した後でも、呼び出し元へ確実に戻す。
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => returnTarget?.focus());
+    });
   };
 
   const openManuscriptLinkEditor = (record, event) => {
@@ -2509,9 +2520,9 @@ export default function PlanningNotesTab({
     if (!manuscriptLinkEditor || manuscriptLinkEditor.projectId !== project.id) return;
     let documentUrl;
     try {
-      documentUrl = validatePlanningGoogleDocumentUrl(manuscriptLinkEditor.documentUrl);
+      documentUrl = validatePlanningManuscriptUrl(manuscriptLinkEditor.documentUrl);
     } catch (error) {
-      setManuscriptLinkEditor(current => current ? { ...current, error: error?.message || 'GoogleドキュメントURLを確認してください' } : current);
+      setManuscriptLinkEditor(current => current ? { ...current, error: error?.message || '原稿URLを確認してください' } : current);
       return;
     }
     const targetProjectId = manuscriptLinkEditor.projectId;
@@ -2521,7 +2532,7 @@ export default function PlanningNotesTab({
       { documentUrl },
       { expectedRevision: manuscriptLinkEditor.expectedRevision },
     ), documentUrl
-      ? `「${manuscriptLinkEditor.title || '無題'}」のGoogleドキュメントURLを保存しました`
+      ? `「${manuscriptLinkEditor.title || '無題'}」の原稿URLを保存しました`
       : `「${manuscriptLinkEditor.title || '無題'}」の原稿リンクを削除しました`, { closeEditor: false });
     if (next && activeProjectIdRef.current === targetProjectId) closeManuscriptLinkEditor();
   };
@@ -3212,7 +3223,7 @@ export default function PlanningNotesTab({
                 </div>
               </div>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                <span className="font-bold text-foreground">仮目次</span>は何度でも編集できます。<span className="font-bold text-foreground">確定目次</span>は目次本文を変えない保存版ですが、原稿の完成チェックとGoogleドキュメントだけは更新できます。<span className="font-bold text-foreground">過去の目次</span>は変更できません。各項目の「本人承認済み」とは別です。
+                <span className="font-bold text-foreground">仮目次</span>は何度でも編集できます。<span className="font-bold text-foreground">確定目次</span>は目次本文を変えない保存版ですが、原稿の完成チェックと原稿リンクだけは更新できます。<span className="font-bold text-foreground">過去の目次</span>は変更できません。各項目の「本人承認済み」とは別です。
               </p>
               {outlineView === 'draft' && (
                 <div className="space-y-3 border-t border-white/10 pt-3">
@@ -3308,7 +3319,7 @@ export default function PlanningNotesTab({
                       仮目次に、まだ確定目次へ反映していない変更があります。確定目次はそのまま残っています。
                     </p>
                   )}
-                  <p className="text-xs leading-relaxed text-muted-foreground">目次本文は読み取り専用です。本文を変えるときは仮目次を編集します。原稿の完成チェックとGoogleドキュメントURLだけは、確定目次の各カードから更新できます。</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">目次本文は読み取り専用です。本文を変えるときは仮目次を編集します。原稿の完成チェックと原稿URLだけは、確定目次の各カードから更新できます。</p>
                   <OutlineSnapshotTree
                     snapshot={confirmedOutline}
                     current
@@ -3570,7 +3581,7 @@ export default function PlanningNotesTab({
       />
 
       <section className="rounded-xl border border-neon-cyan/20 bg-neon-cyan/5 p-4 text-xs leading-relaxed text-muted-foreground">
-        <div className="flex items-start gap-2"><ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-neon-cyan" /><p><span className="font-bold text-foreground">保存と共有について：</span>通常バックアップには全記録が含まれます。「共有用」は非公開取材を除外します。章ごとの原稿完成チェックとGoogleドキュメントURLは完全バックアップに含まれますが、共有用JSON／MarkdownからURLは除外します。Googleドキュメントの本文を同期・保存する機能ではありません。市場調査の正本Markdownだけは、内容確認と差分プレビュー後に追加できます。任意形式のJSON／Markdownや添付ファイル本体は自動取込せず、既存承認版を無断で上書きしません。完全バックアップは上部の「データ管理」から保存してください。</p></div>
+        <div className="flex items-start gap-2"><ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-neon-cyan" /><p><span className="font-bold text-foreground">保存と共有について：</span>通常バックアップには全記録が含まれます。「共有用」は非公開取材を除外します。章ごとの原稿完成チェックと原稿URLは完全バックアップに含まれますが、共有用JSON／MarkdownからURLは除外します。外部サービスの原稿本文を同期・保存する機能ではありません。市場調査の正本Markdownだけは、内容確認と差分プレビュー後に追加できます。任意形式のJSON／Markdownや添付ファイル本体は自動取込せず、既存承認版を無断で上書きしません。完全バックアップは上部の「データ管理」から保存してください。</p></div>
         {onNavigateTab && <button type="button" onClick={() => onNavigateTab('manual')} className="mt-2 min-h-11 font-bold text-neon-cyan underline underline-offset-4">使い方マニュアルを確認</button>}
       </section>
     </div>
