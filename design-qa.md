@@ -60,6 +60,51 @@
 
 final result: passed
 
+---
+
+# Design QA: 章ごとの原稿進捗とGoogleドキュメント v1.17.0
+
+## Visual source and evidence
+
+- Before: `C:\Users\myabe\AppData\Local\Temp\kindle-chapter-manuscript-before-v1160.jpg`（1275 x 717、原稿管理欄なし）
+- PC final: `C:\Users\myabe\AppData\Local\Temp\kindle-chapter-manuscript-v1170-pc-final.png`（1280 x 720）
+- Mobile final: `C:\Users\myabe\AppData\Local\Temp\kindle-chapter-manuscript-v1170-mobile-final.png`（390 x 844）
+- Before / afterは同じ比較入力で確認し、既存カードの階層・ネオン配色・操作群を崩さず、原稿管理だけを下段へ追加した。
+
+## Functional checks
+
+- 仮目次の部カードで完成チェックを保存し、再読み込み後も保持。
+- Googleドキュメント以外のURLを日本語エラーで停止。`https://docs.google.com/document/...`だけを保存。
+- 保存後に「原稿を開く」と「リンクを変更」を表示。外部リンクは`target="_blank"`と`rel="noopener noreferrer"`。
+- 空欄保存でリンクだけを削除し、完成状態と目次本文は維持。
+- 現在の確定目次に同じ完成状態・リンクを表示し、確定目次側の更新を仮目次へ反映。
+- 過去の目次では原稿進捗・リンク操作を表示せず、保存版を読み取り専用で維持。
+- URLダイアログをEscで閉じると、発火元の「リンクを変更」へフォーカス復帰。
+- Console warning / error: 0（Vite debugとReact DevTools案内だけ）。
+
+## Responsive and accessibility checks
+
+| View | Result |
+| --- | --- |
+| 1280 x 720 | 既存カード内へ1行で収まり、不要な縦余白なし |
+| 390 x 844 | document 385px / viewport 390px、横あふれなし |
+| 320 x 568（200%相当の狭幅） | document 315px / viewport 320px、横あふれなし |
+
+- 390px: 完成チェックlabel 335 x 44px、「原稿を開く」「リンクを変更」は各164 x 44px。
+- 320px: 完成チェックlabel 265 x 44px、リンク操作は各129 x 44px。
+- ネイティブcheckbox、部・章・話・節とタイトルを含むアクセシブル名、状態文言と時計／完了アイコンを使い、色だけに依存しない。
+- ダイアログは初期フォーカス、Esc、発火元フォーカス復帰、`noValidate`による日本語エラー、44px操作域を確認。
+
+## Data and release gates
+
+- schema v6。旧v1〜v5は原稿進捗未設定のままID・階層・保存版を維持して移行。
+- 完全バックアップ／結合／全置換は完成状態とURLを保持。同じ章の差は競合停止。
+- 共有JSON／Markdownは完成状態だけを残し、URL・ドキュメントID・queryを除外。
+- 章削除は、保存版にIDがなければ進捗も同時削除し、保存版に残れば進捗を保持。リンクを先に一件ずつ外す必要はない。
+- Automated checks: 306/306 tests passed, lint passed, GitHub Pages production build passed, diff check passed（CRLF予告のみ）。
+
+final result: passed
+
 # Design QA: 目次の一括書き直し v1.16.0
 
 ## 比較資料

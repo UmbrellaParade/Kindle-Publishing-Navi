@@ -48,6 +48,7 @@ const PLANNING_CONFLICT_SECTION_LABELS = Object.freeze({
   marketSummary: '市場調査サマリー',
   competitors: '競合・市場調査',
   chapters: '目次・章構成',
+  chapterWritingStates: '章ごとの原稿進捗',
   outlineSnapshots: '目次の保存版・確定版',
   interviews: '取材記録',
   instructionVersions: '執筆設計・GPTs指示書',
@@ -63,6 +64,7 @@ const PLANNING_CONFLICT_REASON_LABELS = Object.freeze({
   outline_version_number_conflict: '目次の版番号の重なり',
   confirmed_outline_conflict: '現在使う確定目次の指定違い',
   draft_outline_membership_conflict: '編集中の仮目次が異なる（自動では切り替えない）',
+  chapter_writing_state_requires_review: '同じ章の完成状態・リンクが異なる',
   instruction_canonical_scope_conflict: '指示書の正本指定の重なり',
   instruction_first_read_conflict: '最初に見る指示書の重なり',
   decision_canonical_conflict: '意思決定の正本指定の重なり',
@@ -176,7 +178,7 @@ export default function DataBackupDialog({
       setPlanningMergeConflicts(conflicts);
       setPendingBackup(backup);
       if (conflicts.length > 0) {
-        toast.warning(`企画・取材・構成ノートに内容・章順・版・正本指定の競合が${conflicts.length}件あります。結合は停止しています`);
+        toast.warning(`企画・取材・構成ノートに内容・章順・版・正本指定・原稿進捗の競合が${conflicts.length}件あります。結合は停止しています`);
       } else {
         toast.success('バックアップの検証が完了しました');
       }
@@ -226,7 +228,7 @@ export default function DataBackupDialog({
   const runImport = async (mode) => {
     if (!pendingBackup || busy) return;
     if (mode === 'merge' && planningMergeConflicts.length > 0) {
-      const message = '企画・取材・構成ノートに内容・章順・版・正本指定の競合があるため、結合を停止しました。全置換を使うか、競合内容を整理したバックアップを選んでください';
+      const message = '企画・取材・構成ノートに内容・章順・版・正本指定・原稿進捗の競合があるため、結合を停止しました。全置換を使うか、競合内容を整理したバックアップを選んでください';
       setErrorMessage(message);
       toast.error(message);
       return;
@@ -434,7 +436,7 @@ export default function DataBackupDialog({
                       <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                       企画・取材・構成ノートの結合を停止しています
                     </div>
-                    内容・章順・版・正本指定の競合が{planningMergeConflicts.length}件あります。
+                    内容・章順・版・正本指定・原稿進捗の競合が{planningMergeConflicts.length}件あります。
                     承認済みの内容を静かに上書きしないため、このファイルは「結合して復元」できません。
                     競合を整理したバックアップを選ぶか、内容をすべてバックアップ側へ置き換える場合だけ「すべて置き換える」を選んでください。
                     <ul className="mt-2 space-y-1 rounded-md border border-amber-300/20 bg-black/10 p-2">
@@ -480,7 +482,7 @@ export default function DataBackupDialog({
             <AlertDialogTitle>バックアップを結合しますか？</AlertDialogTitle>
             <AlertDialogDescription>
               {planningMergeConflicts.length > 0
-                ? `企画・取材・構成ノートに内容・章順・版・正本指定の競合が${planningMergeConflicts.length}件あるため、結合できません。`
+                ? `企画・取材・構成ノートに内容・章順・版・正本指定・原稿進捗の競合が${planningMergeConflicts.length}件あるため、結合できません。`
                 : '現在のプロジェクトは残ります。同じプロジェクトID、画像ID、原稿データはバックアップ側の内容で更新されます。'}
             </AlertDialogDescription>
           </AlertDialogHeader>
