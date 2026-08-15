@@ -1570,7 +1570,7 @@ test('企画ノートv6の市場サマリー・正本・意思決定参照をバ
   assert.equal(migratedLegacy.chapters.find(record => record.id === 'episode-backup').parentId, 'part-backup');
 });
 
-test('章ごとの原稿完成とGoogleドキュメントURLを完全バックアップ・結合・全置換で安全に保つ', async () => {
+test('章ごとの原稿完成と任意HTTPS原稿URLを完全バックアップ・結合・全置換で安全に保つ', async () => {
   let notes = createEmptyPlanningNotes();
   const chapter = createPlanningRecord('chapters', {
     id: 'manuscript-backup-chapter', title: '原稿バックアップ章', order: 0,
@@ -1578,7 +1578,7 @@ test('章ごとの原稿完成とGoogleドキュメントURLを完全バック�
   notes = upsertPlanningRecord(notes, 'chapters', chapter, { expectedUpdatedAt: null, now });
   notes = updatePlanningChapterManuscript(notes, chapter.id, {
     completed: true,
-    documentUrl: 'https://docs.google.com/document/d/private-backup-doc/edit?usp=sharing',
+    documentUrl: 'https://www.notion.so/private/private-backup-manuscript',
   }, { expectedRevision: 0, now });
 
   const storage = new MemoryStorage({
@@ -1598,7 +1598,7 @@ test('章ごとの原稿完成とGoogleドキュメントURLを完全バック�
     updatedAt: FIXED_DATE,
     completed: true,
     completedAt: FIXED_DATE,
-    documentUrl: 'https://docs.google.com/document/d/private-backup-doc/edit?usp=sharing',
+    documentUrl: 'https://www.notion.so/private/private-backup-manuscript',
   });
 
   const withoutProgress = serializePlanningNotes({ ...notes, chapterWritingStates: [] });
@@ -1610,7 +1610,7 @@ test('章ごとの原稿完成とGoogleドキュメントURLを完全バック�
       readPlanningNotes(merged.projects[0].planning_notes).data,
       chapter.id,
     ).documentUrl,
-    'https://docs.google.com/document/d/private-backup-doc/edit?usp=sharing',
+    'https://www.notion.so/private/private-backup-manuscript',
   );
 
   const replaced = buildDataRestorePlan(
@@ -1618,12 +1618,20 @@ test('章ごとの原稿完成とGoogleドキュメントURLを完全バック�
     exported,
     'replace',
   );
-  assert.equal(
+  assert.deepEqual(
     getPlanningChapterManuscript(
       readPlanningNotes(replaced.projects[0].planning_notes).data,
       chapter.id,
-    ).completed,
-    true,
+    ),
+    {
+      chapterId: chapter.id,
+      revision: 1,
+      createdAt: FIXED_DATE,
+      updatedAt: FIXED_DATE,
+      completed: true,
+      completedAt: FIXED_DATE,
+      documentUrl: 'https://www.notion.so/private/private-backup-manuscript',
+    },
   );
 
   const legacyV5 = clone(notes);
@@ -1647,7 +1655,7 @@ test('章ごとの原稿完成とGoogleドキュメントURLを完全バック�
   );
 
   const conflictingNotes = updatePlanningChapterManuscript(notes, chapter.id, {
-    documentUrl: 'https://docs.google.com/document/d/different-doc/edit',
+    documentUrl: 'https://1drv.ms/w/c/different-manuscript',
   }, { expectedRevision: 1, now });
   const conflictingBackup = backup({ projects: [{
     id: 'manuscript-project',

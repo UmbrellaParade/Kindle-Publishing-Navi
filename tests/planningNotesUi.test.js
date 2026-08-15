@@ -365,22 +365,31 @@ test('空の仮目次をもう一度空にせず、完了表示で履歴追加�
   assert.match(source, /outlineRewriteHistoryMessage\(lastOutlineRewriteSummary\)/);
 });
 
-test('仮目次と確定目次だけで章ごとの原稿進捗とGoogleドキュメントを更新できる', () => {
+test('仮目次と確定目次だけで章ごとの原稿進捗と原稿リンクを更新できる', () => {
   assert.match(source, /function ChapterManuscriptControls\(/);
   assert.match(source, /activeSection === 'chapters' && record\.status !== 'rejected'[\s\S]*<ChapterManuscriptControls/);
   assert.match(source, /<OutlineSnapshotTree[\s\S]*snapshot=\{confirmedOutline\}[\s\S]*current[\s\S]*onToggleManuscriptComplete=\{toggleChapterManuscriptComplete\}[\s\S]*onEditManuscriptLink=\{openManuscriptLinkEditor\}/);
   assert.match(source, /current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink/);
   assert.match(source, /<OutlineSnapshotTree snapshot=\{snapshot\} includeRejected \/>/);
-  assert.match(source, /確定目次<\/span>は目次本文を変えない保存版ですが、原稿の完成チェックとGoogleドキュメントだけは更新できます/);
+  assert.match(source, /確定目次<\/span>は目次本文を変えない保存版ですが、原稿の完成チェックと原稿リンクだけは更新できます/);
   assert.match(source, /過去の目次<\/span>は変更できません/);
 });
 
-test('原稿完成チェックとGoogleドキュメントURL設定は初心者向けで安全に操作できる', () => {
+test('原稿完成チェックと任意HTTPS原稿URLは初心者向けで安全に操作できる', () => {
   assert.match(source, /getPlanningChapterManuscript\(data, record\.id\)/);
   assert.match(source, /new Map\(data\.chapterWritingStates\.map\(state => \[state\.chapterId, state\]\)\)/);
   assert.match(source, /updatePlanningChapterManuscript\(/);
-  assert.match(source, /validatePlanningGoogleDocumentUrl\(manuscriptLinkEditor\.documentUrl\)/);
-  assert.match(source, /原稿のGoogleドキュメント/);
+  assert.match(source, /validatePlanningManuscriptUrl\(manuscriptLinkEditor\.documentUrl\)/);
+  assert.match(source, /原稿の保存先リンク/);
+  assert.match(source, /原稿リンクを設定/);
+  assert.match(source, /Googleドキュメント、Notion、OneDrive、Dropbox/);
+  assert.match(source, /Googleドキュメントを使う場合の執筆用目安/);
+  assert.match(source, /［ファイル］→［ページ設定］/);
+  assert.match(source, /これはKDP電子書籍の指定ではありません/);
+  assert.match(source, /通常のKindle電子書籍は端末や文字設定に合わせて表示が組み直される/);
+  assert.match(source, /電子版はKindle Previewerで確認/);
+  assert.match(source, /A5判の紙版は入稿先の判型・余白・裁ち落とし仕様へ別途調整/);
+  assert.match(source, /aria-describedby="planning-manuscript-a5-help planning-manuscript-document-help planning-manuscript-document-error"/);
   assert.match(source, /type="checkbox"[\s\S]*aria-label=\{`\$\{itemLabel\}の原稿を書き終えた`\}/);
   assert.match(source, /原稿：完成/);
   assert.match(source, /原稿：未完成/);
@@ -392,12 +401,14 @@ test('原稿完成チェックとGoogleドキュメントURL設定は初心者�
   assert.match(source, /onOpenAutoFocus=\{event =>/);
   assert.match(source, /onCloseAutoFocus=\{event =>/);
   assert.match(source, /returnFocusRef\.current\?\.focus\(\)/);
+  assert.match(source, /const returnTarget = manuscriptLinkReturnFocusRef\.current/);
+  assert.match(source, /window\.requestAnimationFrame\(\(\) => \{[\s\S]*window\.requestAnimationFrame\(\(\) => returnTarget\?\.focus\(\)\)/);
   assert.match(source, /className="mt-4 flex-col-reverse gap-2 sm:flex-row"/);
   assert.match(source, /setStatusMessage\(successMessage\)/);
   assert.match(source, /aria-live="polite"/);
   assert.match(source, /共有用JSON／Markdownには含めません/);
-  assert.match(source, /章ごとの原稿完成チェックとGoogleドキュメントURLは完全バックアップに含まれますが、共有用JSON／MarkdownからURLは除外します/);
-  assert.match(source, /Googleドキュメントの本文を同期・保存する機能ではありません/);
+  assert.match(source, /章ごとの原稿完成チェックと原稿URLは完全バックアップに含まれますが、共有用JSON／MarkdownからURLは除外します/);
+  assert.match(source, /外部サービスの原稿本文を同期・保存する機能ではありません/);
   assert.match(source, /原稿完成チェックとリンクは、過去または確定済みの目次側に残ります/);
   assert.match(source, /削除が実行される場合、この項目だけの原稿完成チェックとリンクも一緒に削除されます/);
   assert.match(source, /outlineSnapshots\.some\([\s\S]*snapshot\.chapters\.some\(chapter => chapter\.id === record\.id\)/);

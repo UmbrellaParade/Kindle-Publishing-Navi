@@ -50,6 +50,7 @@ import {
   updatePlanningRecordChapterLinks,
   updatePlanningChapterManuscript,
   validatePlanningGoogleDocumentUrl,
+  validatePlanningManuscriptUrl,
   withdrawPlanningDecision,
 } from './planningNotes.js';
 
@@ -797,7 +798,7 @@ test('共有用書き出しは非公開取材と外部ファイル所在を除�
   assert.match(planningNotesShareToMarkdown(shared), /````json[\s\S]*本文 ``` コード例[\s\S]*````/);
 });
 
-test('共有JSONとMarkdownは章の完成状態だけを残しGoogleドキュメントURLを完全に除外する', () => {
+test('共有JSONとMarkdownは章の完成状態だけを残し外部サービスの原稿URLを完全に除外する', () => {
   let data = createEmptyPlanningNotes();
   const confirmedChapter = createPlanningRecord('chapters', {
     id: 'share-manuscript-confirmed', title: '確定版だけに残る章', order: 0,
@@ -811,7 +812,7 @@ test('共有JSONとMarkdownは章の完成状態だけを残しGoogleドキュ�
   });
   data = updatePlanningChapterManuscript(data, confirmedChapter.id, {
     completed: true,
-    documentUrl: 'https://docs.google.com/document/d/PRIVATE_DOC_ID_CONFIRMED/edit?usp=sharing',
+    documentUrl: 'https://www.notion.so/private/CONFIRMED_MANUSCRIPT_PAGE',
   }, { expectedRevision: 0, now: fixedNow });
   const activeChapter = createPlanningRecord('chapters', {
     id: 'share-manuscript-active', title: '現在執筆中の章', order: 0,
@@ -823,7 +824,7 @@ test('共有JSONとMarkdownは章の完成状態だけを残しGoogleドキュ�
     idFactory: idFactory('share-manuscript-history'),
   }).data;
   data = updatePlanningChapterManuscript(data, activeChapter.id, {
-    documentUrl: 'https://docs.google.com/document/d/PRIVATE_DOC_ID_ACTIVE/edit?tab=t.0',
+    documentUrl: 'https://www.dropbox.com/scl/fi/PRIVATE_ACTIVE_DOC/manuscript.docx?rlkey=PRIVATE_SHARE_KEY&dl=0',
   }, { expectedRevision: 0, now: fixedNow });
 
   const share = buildPlanningNotesSharePackage(data, { bookTitle: '共有確認本', now: fixedNow });
@@ -834,10 +835,10 @@ test('共有JSONとMarkdownは章の完成状態だけを残しGoogleドキュ�
     true,
   );
   const json = JSON.stringify(share);
-  assert.doesNotMatch(json, /docs\.google\.com|PRIVATE_DOC_ID|usp=sharing|tab=t\.0|documentUrl/);
+  assert.doesNotMatch(json, /notion\.so|dropbox\.com|CONFIRMED_MANUSCRIPT_PAGE|PRIVATE_ACTIVE_DOC|PRIVATE_SHARE_KEY|documentUrl/);
 
   const markdown = planningNotesShareToMarkdown(share);
-  assert.doesNotMatch(markdown, /docs\.google\.com|PRIVATE_DOC_ID|usp=sharing|tab=t\.0|documentUrl/);
+  assert.doesNotMatch(markdown, /notion\.so|dropbox\.com|CONFIRMED_MANUSCRIPT_PAGE|PRIVATE_ACTIVE_DOC|PRIVATE_SHARE_KEY|documentUrl/);
   const draftBlock = markdown.slice(
     markdown.indexOf('### 仮目次（編集中）'),
     markdown.indexOf('### 現在の確定目次'),
@@ -1262,7 +1263,7 @@ test('v5のactive目次・退避台帳・保存版を変えず原稿進捗未設
   assert.equal(migrated.chapters.some(chapter => chapter.id === 'legacy-v5-old'), true);
 });
 
-test('仮目次と確定目次は章IDごとに原稿完成・Googleドキュメントを共有しsnapshot本文を変えない', () => {
+test('仮目次と確定目次は章IDごとに原稿完成・原稿リンクを共有しsnapshot本文を変えない', () => {
   let data = createEmptyPlanningNotes();
   const chapter = createPlanningRecord('chapters', {
     id: 'manuscript-shared-chapter', title: '共有する第一章', order: 0,
@@ -1351,23 +1352,39 @@ test('仮目次と確定目次は章IDごとに原稿完成・Googleドキュメ
   assert.equal(getPlanningChapterManuscript(data, chapter.id).revision, 2);
 });
 
-test('GoogleドキュメントURLを厳格検証し、章削除時は保存版の有無に応じて原稿情報を安全に扱う', () => {
-  assert.equal(validatePlanningGoogleDocumentUrl(''), '');
-  assert.equal(
-    validatePlanningGoogleDocumentUrl('  https://docs.google.com/document/d/valid_doc-123/edit  '),
+test('HTTPSの原稿保存先URLを検証し、章削除時は保存版の有無に応じて原稿情報を安全に扱う', () => {
+  assert.equal(validatePlanningManuscriptUrl(''), '');
+  for (const valid of [
     'https://docs.google.com/document/d/valid_doc-123/edit',
+    'https://www.notion.so/workspace/manuscript-123',
+    'https://1drv.ms/w/c/example-document',
+    'https://www.dropbox.com/scl/fi/example/manuscript.docx?rlkey=share-key&dl=0',
+    'https://drive.google.com/file/d/manuscript-file/view',
+  ]) {
+    assert.equal(validatePlanningManuscriptUrl(`  ${valid}  `), valid);
+  }
+  assert.equal(
+    validatePlanningGoogleDocumentUrl('https://www.notion.so/workspace/legacy-api-alias'),
+    'https://www.notion.so/workspace/legacy-api-alias',
   );
   for (const invalid of [
     'http://docs.google.com/document/d/doc/edit',
-    'https://drive.google.com/file/d/doc/view',
-    'https://docs.google.com/spreadsheets/d/sheet/edit',
-    'https://docs.google.com.evil.example/document/d/doc/edit',
     'https://user@docs.google.com/document/d/doc/edit',
+    'https://user:password@example.com/manuscript',
+    'ftp://example.com/manuscript.docx',
     'javascript:alert(1)',
-    'https://docs.google.com/document/',
-    'https://docs.google.com/document/d/doc/edit?token=private-token',
+    'data:text/plain,manuscript',
+    'file:///C:/manuscript.docx',
+    'https://example.com/manuscript?token=private-token',
+    'https://example.com/manuscript?%74oken=encoded-private-token',
+    'https://example.com/manuscript?auth=private-auth',
+    'https://example.com/manuscript?sessionId=private-session',
+    'https://example.com/manuscript?X-Amz-Signature=signed-value',
+    'https://example.com/manuscript#signature=signed-value',
+    'https://example.com/#access_token=private-token',
+    'https://chatgpt.com/c/private-conversation-id',
   ]) {
-    assert.throws(() => validatePlanningGoogleDocumentUrl(invalid), /URL|保存できません/);
+    assert.throws(() => validatePlanningManuscriptUrl(invalid), /URL|保存できません/);
   }
 
   let data = createEmptyPlanningNotes();
