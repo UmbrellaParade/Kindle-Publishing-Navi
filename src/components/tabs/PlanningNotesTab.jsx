@@ -44,6 +44,10 @@ import {
 } from '@/components/ui/dialog';
 import { flushPendingSaves } from '@/lib/saveCoordinator';
 import { mutatePublishingProject } from '@/lib/projectMutation';
+import {
+  copyPlanningInstructionText,
+  getPlanningInstructionCopyText,
+} from '@/lib/planningInstructionCopy';
 import { normalizePlanningViewSection } from '@/lib/viewResumeState';
 import {
   PLANNING_NOTE_STATUSES,
@@ -369,10 +373,33 @@ function ReferenceTargetBadge({ value }) {
   return <MetaBadge icon={UserRound}>対象：{REFERENCE_TARGET_LABELS[value] || '未設定'}</MetaBadge>;
 }
 
-function RecordDetailDialog({ detail, chapters, activeChapterIds, onEditChapterLinks, onClose }) {
+function InstructionCopyButton({ record, onCopyInstruction, className = '' }) {
+  const hasText = Boolean(getPlanningInstructionCopyText(record).trim());
+  const displayName = record?.name || '無題の指示書';
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      onClick={() => onCopyInstruction(record)}
+      aria-label={`「${displayName}」v${record?.versionNumber || 1}の質問文をコピー（指示書本文のみ）`}
+      title={hasText ? '指示書本文だけをクリップボードへコピーします' : 'コピーする指示書本文がありません'}
+      className={`min-h-11 border-neon-cyan/35 text-neon-cyan ${className}`}
+    >
+      <Copy className="h-4 w-4" aria-hidden="true" />質問文をコピー
+    </Button>
+  );
+}
+
+function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, onCopyInstruction, onEditChapterLinks, onClose }) {
   const record = detail?.record;
   const section = detail?.section === 'conceptHistory' ? 'concept' : detail?.section;
   const fields = FORM_FIELDS[section] || [];
+  const activeCopyFeedback = record
+    && detail.section === 'instructionVersions'
+    && copyFeedback?.recordId === record.id
+    ? copyFeedback
+    : null;
   return (
     <Dialog open={Boolean(detail)} onOpenChange={open => { if (!open) onClose(); }}>
       <DialogContent
@@ -453,11 +480,30 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, onEditChapterL
             <p className="break-all text-[10px] text-muted-foreground">ID: {record.id}</p>
           </div>
         )}
-        <DialogFooter className="border-t border-[#2a2a4a] bg-[#121222] px-5 py-4">
-          {record && !['chapters', 'concept', 'conceptHistory'].includes(detail.section) && (
-            <Button type="button" variant="outline" onClick={() => onEditChapterLinks(detail.section, record)} className="min-h-11 border-neon-cyan/35 text-neon-cyan"><Link2 className="h-4 w-4" aria-hidden="true" />目次との紐づけだけ変更</Button>
+        {activeCopyFeedback && (
+          <div
+            key={activeCopyFeedback.sequence}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            className={`mx-5 flex flex-shrink-0 items-start gap-2 rounded-lg border p-3 text-sm leading-relaxed ${activeCopyFeedback.tone === 'error'
+              ? 'border-red-400/30 bg-red-400/10 text-red-100'
+              : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-100'}`}
+          >
+            {activeCopyFeedback.tone === 'error'
+              ? <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+              : <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+            <span>{activeCopyFeedback.message}</span>
+          </div>
+        )}
+        <DialogFooter className="flex-col gap-2 border-t border-[#2a2a4a] bg-[#121222] px-5 py-4 sm:flex-row sm:space-x-0">
+          {record && detail.section === 'instructionVersions' && (
+            <InstructionCopyButton record={record} onCopyInstruction={onCopyInstruction} className="w-full sm:w-auto" />
           )}
-          <Button type="button" variant="outline" onClick={onClose} className="min-h-11">閉じる</Button>
+          {record && !['chapters', 'concept', 'conceptHistory'].includes(detail.section) && (
+            <Button type="button" variant="outline" onClick={() => onEditChapterLinks(detail.section, record)} className="min-h-11 w-full border-neon-cyan/35 text-neon-cyan sm:w-auto"><Link2 className="h-4 w-4" aria-hidden="true" />目次との紐づけだけ変更</Button>
+          )}
+          <Button type="button" variant="outline" onClick={onClose} className="min-h-11 w-full sm:w-auto">閉じる</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1805,6 +1851,7 @@ function InstructionReferenceSection({
   activeChapterIds,
   busy,
   onAdd,
+  onCopyInstruction,
   onOpenDetail,
   onEditChapterLinks,
   onEdit,
@@ -1835,6 +1882,7 @@ function InstructionReferenceSection({
         <div>
           <h2 id="instruction-reference-title" className="text-lg font-black text-neon-cyan">執筆設計・GPTs指示書</h2>
           <p className="mt-1 text-xs text-muted-foreground">最新と正本は別です。最初に見る資料は、著者が明示して初めて決まります。</p>
+          <p className="mt-1 text-xs text-muted-foreground">「質問文をコピー」は指示書本文だけをコピーします。指示書名・版・状態・外部ファイルの所在は含めません。</p>
         </div>
         <Button type="button" onClick={onAdd} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus className="h-4 w-4" />新しく追加</Button>
       </div>
@@ -1853,6 +1901,7 @@ function InstructionReferenceSection({
                 <p className="mt-1 text-xs text-muted-foreground">{INSTRUCTION_ROLE_LABELS[record.role] || record.role} ／ 更新：{formatPlanningDateTimeJst(record.updatedAt)}（日本時間）</p>
                 <ChapterReferenceSummary record={record} allChapters={allChapters} activeChapterIds={activeChapterIds} className="mt-2" />
                 <div className="mt-3 flex flex-wrap gap-2">
+                  <InstructionCopyButton record={record} onCopyInstruction={onCopyInstruction} />
                   <Button type="button" size="sm" variant="outline" onClick={() => onOpenDetail(record)} className="min-h-10"><BookOpenText className="h-4 w-4" />内容を見る</Button>
                   <Button type="button" size="sm" variant="outline" onClick={() => onClearCanonical(record, target)} disabled={busy} className="min-h-10 border-white/15 text-muted-foreground"><X className="h-4 w-4" />指定を外す</Button>
                 </div>
@@ -1916,6 +1965,7 @@ function InstructionReferenceSection({
                       </Button>
                     ))}
                     {record.audience === 'unset' && <p className="w-full text-xs text-amber-200">正本にする対象を選ぶと、この資料の対象も同時に設定されます。</p>}
+                    <InstructionCopyButton record={record} onCopyInstruction={onCopyInstruction} />
                     <Button type="button" size="sm" variant="outline" onClick={() => onOpenDetail(record)} className="min-h-11 border-white/15 text-foreground"><BookOpenText className="h-4 w-4" />内容を見る</Button>
                     <Button type="button" size="sm" variant="outline" onClick={() => onEditChapterLinks(record)} className="min-h-11 border-neon-cyan/30 text-neon-cyan"><Link2 className="h-4 w-4" />目次との紐づけだけ変更</Button>
                     {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => onEdit(record)} className="min-h-11"><Pencil className="h-4 w-4" />編集</Button>}
@@ -2061,6 +2111,7 @@ export default function PlanningNotesTab({
   const [manuscriptLinkEditor, setManuscriptLinkEditor] = useState(null);
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  const [instructionCopyFeedback, setInstructionCopyFeedback] = useState(null);
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [chapterFilter, setChapterFilter] = useState('all');
@@ -2092,6 +2143,7 @@ export default function PlanningNotesTab({
     operationGenerationRef.current += 1;
     setBusy(false);
     setStatusMessage('');
+    setInstructionCopyFeedback(null);
     const parsed = readPlanningNotes(project?.planning_notes);
     setData(parsed.data);
     setLoadError(parsed.error);
@@ -2142,6 +2194,17 @@ export default function PlanningNotesTab({
   useEffect(() => {
     if (editor?.projectId) draftCacheRef.current.set(editor.projectId, editor);
   }, [editor]);
+
+  useEffect(() => {
+    if (instructionCopyFeedback?.surface !== 'card') return undefined;
+    const sequence = instructionCopyFeedback.sequence;
+    const timerId = window.setTimeout(() => {
+      setInstructionCopyFeedback(current => (
+        current?.surface === 'card' && current.sequence === sequence ? null : current
+      ));
+    }, 4500);
+    return () => window.clearTimeout(timerId);
+  }, [instructionCopyFeedback]);
 
   useEffect(() => {
     const container = sectionNavScrollRef.current;
@@ -2718,6 +2781,49 @@ export default function PlanningNotesTab({
     }
   };
 
+  const copyInstructionQuestion = async record => {
+    const text = getPlanningInstructionCopyText(record);
+    const displayName = record?.name || '無題の指示書';
+    const targetProjectId = project.id;
+    const generation = operationGenerationRef.current;
+    const isDetailCopy = detail?.projectId === targetProjectId
+      && detail.section === 'instructionVersions'
+      && detail.record?.id === record?.id;
+    try {
+      if (findPlanningNotesSensitiveData({ markdown: text }).length > 0) {
+        throw new Error('APIキー・認証情報・非公開会話URLらしき文字列が含まれるため、コピーを停止しました。本文を確認してください');
+      }
+      const writeText = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+      await copyPlanningInstructionText(record, writeText);
+      if (activeProjectIdRef.current !== targetProjectId || operationGenerationRef.current !== generation) return;
+      const message = `「${displayName}」の質問文をコピーしました`;
+      setInstructionCopyFeedback(current => ({
+        recordId: record.id,
+        message,
+        tone: 'success',
+        surface: isDetailCopy ? 'detail' : 'card',
+        sequence: (current?.sequence || 0) + 1,
+      }));
+    } catch (error) {
+      if (activeProjectIdRef.current !== targetProjectId || operationGenerationRef.current !== generation) return;
+      const knownMessage = typeof error?.message === 'string' && (
+        error.message === 'コピーする指示書本文がありません'
+        || error.message === 'このブラウザではクリップボードを利用できません'
+        || error.message.startsWith('APIキー・認証情報・非公開会話URLらしき文字列')
+      );
+      const message = knownMessage
+        ? error.message
+        : '質問文をコピーできませんでした。ブラウザのクリップボード許可を確認するか、「内容を見る」から本文を選択してコピーしてください';
+      setInstructionCopyFeedback(current => ({
+        recordId: record?.id || '',
+        message,
+        tone: 'error',
+        surface: isDetailCopy ? 'detail' : 'card',
+        sequence: (current?.sequence || 0) + 1,
+      }));
+    }
+  };
+
   const applyOutlineRewrite = async () => {
     if (!outlineRewrite || outlineRewrite.projectId !== project.id || outlineRewrite.step !== 3 || !outlineRewrite.preview) return;
     let rewriteSummary = null;
@@ -2791,6 +2897,7 @@ export default function PlanningNotesTab({
   };
 
   const openDetail = (section, record) => {
+    setInstructionCopyFeedback(null);
     setDetail({ projectId: project.id, section, record });
   };
 
@@ -3137,6 +3244,7 @@ export default function PlanningNotesTab({
           activeChapterIds={activeChapterIds}
           busy={busy}
           onAdd={() => openNewRecord('instructionVersions')}
+          onCopyInstruction={copyInstructionQuestion}
           onOpenDetail={record => openDetail('instructionVersions', record)}
           onEditChapterLinks={record => openChapterLinkEditor('instructionVersions', record)}
           onEdit={record => openEditRecord('instructionVersions', record)}
@@ -3504,6 +3612,30 @@ export default function PlanningNotesTab({
       )}
 
       {statusMessage && <p className="sr-only" aria-live="polite">{statusMessage}</p>}
+      {instructionCopyFeedback?.surface === 'card' && (
+        <div
+          key={instructionCopyFeedback.sequence}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className={`fixed bottom-4 left-4 right-4 z-40 flex items-start gap-2 rounded-xl border p-3 pr-12 text-sm leading-relaxed shadow-2xl backdrop-blur sm:right-auto sm:max-w-md ${instructionCopyFeedback.tone === 'error'
+            ? 'border-red-400/40 bg-[#2a151d]/95 text-red-100'
+            : 'border-emerald-400/40 bg-[#10261f]/95 text-emerald-100'}`}
+        >
+          {instructionCopyFeedback.tone === 'error'
+            ? <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            : <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+          <span>{instructionCopyFeedback.message}</span>
+          <button
+            type="button"
+            onClick={() => setInstructionCopyFeedback(null)}
+            className="absolute right-1 top-1 flex min-h-11 min-w-11 items-center justify-center rounded-lg text-current/75 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+            aria-label="コピー結果の通知を閉じる"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      )}
       <input
         ref={marketImportInputRef}
         type="file"
@@ -3576,8 +3708,10 @@ export default function PlanningNotesTab({
         detail={detail?.projectId === project.id ? detail : null}
         chapters={allChapters}
         activeChapterIds={activeChapterIds}
+        copyFeedback={instructionCopyFeedback}
+        onCopyInstruction={copyInstructionQuestion}
         onEditChapterLinks={openChapterLinkEditor}
-        onClose={() => setDetail(null)}
+        onClose={() => { setDetail(null); setInstructionCopyFeedback(null); }}
       />
 
       <section className="rounded-xl border border-neon-cyan/20 bg-neon-cyan/5 p-4 text-xs leading-relaxed text-muted-foreground">

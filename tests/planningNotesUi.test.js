@@ -142,6 +142,34 @@ test('指示書はCodex・著者の正本枠を常設し、正本・最新を別
   assert.match(source, /同じ役割・対象の旧正本は旧版になります/);
 });
 
+test('指示書カードと詳細画面から本文だけを1クリックでコピーできる', () => {
+  assert.match(source, /function InstructionCopyButton\(\{ record, onCopyInstruction/);
+  assert.match(source, /質問文をコピー（指示書本文のみ）/);
+  assert.match(source, /指示書本文だけをクリップボードへコピーします/);
+  assert.match(source, /className=\{`min-h-11 border-neon-cyan\/35 text-neon-cyan/);
+  assert.match(source, /コピーする指示書本文がありません/);
+  assert.match(source, /DialogFooter className="flex-col gap-2[\s\S]*?sm:flex-row sm:space-x-0"/);
+  assert.match(source, /onCopyInstruction=\{onCopyInstruction\} className="w-full sm:w-auto"/);
+  assert.match(source, /「質問文をコピー」は指示書本文だけをコピーします。指示書名・版・状態・外部ファイルの所在は含めません/);
+  assert.equal((source.match(/<InstructionCopyButton record=\{record\} onCopyInstruction=\{onCopyInstruction\}/g) || []).length, 3);
+  assert.match(source, /detail\.section === 'instructionVersions'/);
+  assert.match(source, /const text = getPlanningInstructionCopyText\(record\)/);
+  assert.match(source, /findPlanningNotesSensitiveData\(\{ markdown: text \}\)/);
+  assert.match(source, /await copyPlanningInstructionText\(record, writeText\)/);
+  assert.match(source, /role="status"[\s\S]*?aria-live="polite"[\s\S]*?aria-atomic="true"/);
+  assert.match(source, /copyFeedback=\{instructionCopyFeedback\}/);
+  assert.match(source, /setInstructionCopyFeedback\(current => \(\{/);
+  assert.match(source, /surface: isDetailCopy \? 'detail' : 'card'/);
+  assert.match(source, /instructionCopyFeedback\?\.surface === 'card'/);
+  assert.match(source, /fixed bottom-4 left-4 right-4 z-40/);
+  assert.match(source, /window\.setTimeout\([\s\S]*?4500/);
+  assert.match(source, /aria-label="コピー結果の通知を閉じる"/);
+  assert.match(source, /ブラウザのクリップボード許可を確認するか、「内容を見る」から本文を選択してコピーしてください/);
+  assert.match(source, /onCopyInstruction=\{copyInstructionQuestion\}/);
+  const copyHandler = sourceBlock('const copyInstructionQuestion = async record => {', 'const applyOutlineRewrite = async () => {');
+  assert.doesNotMatch(copyHandler, /persist\(|mutatePublishingProject|serializePlanningNotes|providerToast|toast\./);
+});
+
 test('意思決定は現在の正本と最新順の履歴を分け、差替え・撤回・相互参照を示す', () => {
   assert.match(source, /現在の判断・正本（まずここを見る）/);
   assert.match(source, /表示順：更新日時の新しい順（最新が上）/);
