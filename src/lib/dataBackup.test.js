@@ -27,6 +27,7 @@ import {
   createPlanningOutlineSnapshot,
   createPlanningRecord,
   getConfirmedPlanningOutline,
+  getPlanningChapterManuscript,
   getPlanningDraftOutlineChapters,
   PlanningNotesMergeConflictError,
   readPlanningNotes,
@@ -34,6 +35,7 @@ import {
   savePlanningMarketSummary,
   serializePlanningNotes,
   upsertPlanningRecord,
+  updatePlanningChapterManuscript,
 } from './planningNotes.js';
 
 const FIXED_DATE = '2026-08-03T00:00:00.000Z';
@@ -1422,7 +1424,7 @@ test('企画・取材・構成ノートを厳格に正規化してバックア�
   );
 });
 
-test('企画ノートv5の市場サマリー・正本・意思決定参照をバックアップと結合復元で保つ', async () => {
+test('企画ノートv6の市場サマリー・正本・意思決定参照をバックアップと結合復元で保つ', async () => {
   let notes = createEmptyPlanningNotes();
   const add = (section, record) => {
     notes = upsertPlanningRecord(notes, section, record, { expectedUpdatedAt: null, now });
@@ -1506,7 +1508,7 @@ test('企画ノートv5の市場サマリー・正本・意思決定参照をバ
   const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => {} };
   const exported = await createDataBackup({ storage, imageStore, now });
   const restored = readPlanningNotes(exported.data.projects[0].planning_notes).data;
-  assert.equal(restored.version, 5);
+  assert.equal(restored.version, 6);
   assert.equal(restored.chapters.find(record => record.id === 'episode-backup').parentId, 'part-backup');
   assert.equal(restored.marketSummary.versionId, 'MARKET-BACKUP');
   assert.deepEqual(restored.instructionVersions[0].canonicalFor, ['codex', 'author']);
@@ -1556,14 +1558,112 @@ test('企画ノートv5の市場サマリー・正本・意思決定参照をバ
   delete legacyV3.outlineRevision;
   delete legacyV3.confirmedOutlineId;
   delete legacyV3.outlineSnapshots;
+  delete legacyV3.chapterWritingStates;
   const normalizedLegacy = validateDataBackup(backup({
     projects: [{ id: 'legacy-v3', name: '旧v3企画ノート', planning_notes: JSON.stringify(legacyV3) }],
   }));
   const migratedLegacy = readPlanningNotes(normalizedLegacy.data.projects[0].planning_notes).data;
-  assert.equal(migratedLegacy.version, 5);
+  assert.equal(migratedLegacy.version, 6);
   assert.equal(migratedLegacy.confirmedOutlineId, '');
   assert.deepEqual(migratedLegacy.outlineSnapshots, []);
+  assert.deepEqual(migratedLegacy.chapterWritingStates, []);
   assert.equal(migratedLegacy.chapters.find(record => record.id === 'episode-backup').parentId, 'part-backup');
+});
+
+test('章ごとの原稿完成とGoogleドキュメントURLを完全バックアップ・結合・全置換で安全に保つ', async () => {
+  let notes = createEmptyPlanningNotes();
+  const chapter = createPlanningRecord('chapters', {
+    id: 'manuscript-backup-chapter', title: '原稿バックアップ章', order: 0,
+  }, { now, idFactory: () => 'manuscript-backup-chapter' });
+  notes = upsertPlanningRecord(notes, 'chapters', chapter, { expectedUpdatedAt: null, now });
+  notes = updatePlanningChapterManuscript(notes, chapter.id, {
+    completed: true,
+    documentUrl: 'https://docs.google.com/document/d/private-backup-doc/edit?usp=sharing',
+  }, { expectedRevision: 0, now });
+
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'manuscript-project',
+      name: '原稿リンクを持つ本',
+      planning_notes: serializePlanningNotes(notes),
+    }]),
+  });
+  const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => {} };
+  const exported = await createDataBackup({ storage, imageStore, now });
+  const exportedNotes = readPlanningNotes(exported.data.projects[0].planning_notes).data;
+  assert.deepEqual(getPlanningChapterManuscript(exportedNotes, chapter.id), {
+    chapterId: chapter.id,
+    revision: 1,
+    createdAt: FIXED_DATE,
+    updatedAt: FIXED_DATE,
+    completed: true,
+    completedAt: FIXED_DATE,
+    documentUrl: 'https://docs.google.com/document/d/private-backup-doc/edit?usp=sharing',
+  });
+
+  const withoutProgress = serializePlanningNotes({ ...notes, chapterWritingStates: [] });
+  const merged = buildDataRestorePlan(backup({ projects: [{
+    id: 'manuscript-project', name: '原稿リンクを持つ本', planning_notes: withoutProgress,
+  }] }), exported, 'merge');
+  assert.equal(
+    getPlanningChapterManuscript(
+      readPlanningNotes(merged.projects[0].planning_notes).data,
+      chapter.id,
+    ).documentUrl,
+    'https://docs.google.com/document/d/private-backup-doc/edit?usp=sharing',
+  );
+
+  const replaced = buildDataRestorePlan(
+    backup({ projects: [{ id: 'other-project', name: '置換前の本' }] }),
+    exported,
+    'replace',
+  );
+  assert.equal(
+    getPlanningChapterManuscript(
+      readPlanningNotes(replaced.projects[0].planning_notes).data,
+      chapter.id,
+    ).completed,
+    true,
+  );
+
+  const legacyV5 = clone(notes);
+  legacyV5.version = 5;
+  delete legacyV5.chapterWritingStates;
+  const legacyBackup = validateDataBackup(backup({ projects: [{
+    id: 'manuscript-project', name: '旧v5バックアップ', planning_notes: JSON.stringify(legacyV5),
+  }] }));
+  const mergedLegacy = buildDataRestorePlan(exported, legacyBackup, 'merge');
+  assert.equal(
+    getPlanningChapterManuscript(
+      readPlanningNotes(mergedLegacy.projects[0].planning_notes).data,
+      chapter.id,
+    ).completed,
+    true,
+  );
+  const replacedLegacy = buildDataRestorePlan(exported, legacyBackup, 'replace');
+  assert.deepEqual(
+    readPlanningNotes(replacedLegacy.projects[0].planning_notes).data.chapterWritingStates,
+    [],
+  );
+
+  const conflictingNotes = updatePlanningChapterManuscript(notes, chapter.id, {
+    documentUrl: 'https://docs.google.com/document/d/different-doc/edit',
+  }, { expectedRevision: 1, now });
+  const conflictingBackup = backup({ projects: [{
+    id: 'manuscript-project',
+    name: '異なる原稿リンクを持つ本',
+    planning_notes: serializePlanningNotes(conflictingNotes),
+  }] });
+  assert.equal(
+    previewDataBackupPlanningNotesConflicts(exported, conflictingBackup)
+      .some(conflict => conflict.reason === 'chapter_writing_state_requires_review'),
+    true,
+  );
+  assert.throws(
+    () => buildDataRestorePlan(exported, conflictingBackup, 'merge'),
+    error => error instanceof PlanningNotesMergeConflictError
+      && error.conflicts.some(conflict => conflict.reason === 'chapter_writing_state_requires_review'),
+  );
 });
 
 test('全面改稿後の新しい仮目次・旧ID台帳・取材リンクを完全バックアップと復元で保つ', async () => {

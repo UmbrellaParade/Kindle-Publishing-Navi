@@ -73,6 +73,7 @@ import {
   getPlanningDraftOutlineChapters,
   getNextPlanningChapterOrder,
   getPlanningChapterNodeLabel,
+  getPlanningChapterManuscript,
   getPlanningChapterParentOptions,
   isPlanningDraftChapter,
   movePlanningChapter,
@@ -90,6 +91,8 @@ import {
   sortPlanningOutlineSnapshotsNewest,
   upsertPlanningRecord,
   updatePlanningRecordChapterLinks,
+  updatePlanningChapterManuscript,
+  validatePlanningGoogleDocumentUrl,
   withdrawPlanningDecision,
 } from '@/lib/planningNotes';
 
@@ -835,7 +838,131 @@ function ChapterLinkDialog({
   );
 }
 
-function OutlineSnapshotTree({ snapshot, current = false, includeRejected = false }) {
+function ChapterManuscriptControls({ record, manuscript, busy, onToggleComplete, onEditLink }) {
+  const completed = Boolean(manuscript?.completed);
+  const documentUrl = String(manuscript?.documentUrl || '');
+  const title = record.title || '無題';
+  const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
+  const itemLabel = `${typeLabel}「${title}」`;
+  return (
+    <div role="group" aria-label={`${itemLabel}の原稿管理`} className="mt-3 flex flex-col gap-2 border-t border-white/10 pt-3 sm:flex-row sm:items-center sm:justify-between">
+      <label className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs font-bold transition ${completed ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-200' : 'border-white/15 bg-black/10 text-muted-foreground'} ${busy ? 'cursor-not-allowed opacity-60' : 'hover:border-neon-cyan/40'}`}>
+        <input
+          type="checkbox"
+          checked={completed}
+          disabled={busy}
+          onChange={event => onToggleComplete(record, event.target.checked)}
+          aria-label={`${itemLabel}の原稿を書き終えた`}
+          className="h-4 w-4 accent-emerald-400"
+        />
+        {completed ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <Clock3 className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+        <span>{completed ? '原稿：完成' : '原稿：未完成'}</span>
+      </label>
+
+      <div className="flex flex-wrap gap-2">
+        {documentUrl && (
+          <Button asChild size="sm" variant="outline" className="min-h-11 flex-1 border-neon-cyan/35 text-neon-cyan sm:flex-none">
+            <a
+              href={documentUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${itemLabel}の原稿をGoogleドキュメントで開く（新しいタブ）`}
+            >
+              <ExternalLink className="h-4 w-4" aria-hidden="true" />原稿を開く
+            </a>
+          </Button>
+        )}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={event => onEditLink(record, event)}
+          disabled={busy}
+          className="min-h-11 flex-1 border-white/15 text-foreground sm:flex-none"
+          aria-label={`${itemLabel}のGoogleドキュメントURLを${documentUrl ? '変更' : '設定'}`}
+        >
+          <Link2 className="h-4 w-4" aria-hidden="true" />{documentUrl ? 'リンクを変更' : 'Googleドキュメントを設定'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ManuscriptLinkDialog({ value, busy, returnFocusRef, onChange, onSave, onClose }) {
+  const inputRef = useRef(null);
+  const originalUrl = String(value?.originalDocumentUrl || '');
+  const nextUrl = String(value?.documentUrl || '');
+  const willDelete = Boolean(originalUrl) && !nextUrl.trim();
+  const isDirty = nextUrl.trim() !== originalUrl;
+  return (
+    <Dialog open={Boolean(value)} onOpenChange={open => { if (!open && !busy) onClose(); }}>
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] max-w-lg overflow-y-auto"
+        style={{ background: '#151527', border: '1px solid #2a2a4a' }}
+        onOpenAutoFocus={event => {
+          event.preventDefault();
+          window.requestAnimationFrame(() => inputRef.current?.focus());
+        }}
+        onCloseAutoFocus={event => {
+          event.preventDefault();
+          window.requestAnimationFrame(() => returnFocusRef.current?.focus());
+        }}
+      >
+        <form noValidate onSubmit={event => { event.preventDefault(); onSave(); }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-neon-cyan"><Link2 className="h-5 w-5" aria-hidden="true" />原稿のGoogleドキュメント</DialogTitle>
+            <DialogDescription className="leading-relaxed">
+              {value ? `${getPlanningChapterNodeLabel(value.nodeType)}「${value.title || '無題'}」` : 'この項目'}のGoogleドキュメントを設定します。目次本文や承認状態は変わりません。
+            </DialogDescription>
+          </DialogHeader>
+
+          {value && <div className="mt-4 space-y-3">
+            <label htmlFor="planning-manuscript-document-url" className="block text-xs font-bold text-foreground">GoogleドキュメントURL</label>
+            <input
+              ref={inputRef}
+              id="planning-manuscript-document-url"
+              type="url"
+              inputMode="url"
+              value={nextUrl}
+              onChange={event => onChange({ ...value, documentUrl: event.target.value, error: '' })}
+              placeholder="https://docs.google.com/document/d/.../edit"
+              aria-invalid={Boolean(value.error)}
+              aria-describedby="planning-manuscript-document-help planning-manuscript-document-error"
+              className={INPUT_CLASS}
+            />
+            <p id="planning-manuscript-document-help" className="text-xs leading-relaxed text-muted-foreground">
+              Googleドキュメントの「共有」からURLをコピーして貼り付けます。閲覧できる相手はGoogleドライブ側でも確認してください。このURLは完全バックアップには含まれますが、共有用JSON／Markdownには含めません。
+            </p>
+            {willDelete && (
+              <p className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-xs leading-relaxed text-amber-100">
+                空欄で保存すると、この原稿リンクだけを削除します。原稿完成チェックや目次本文は残ります。
+              </p>
+            )}
+            <p id="planning-manuscript-document-error" role={value.error ? 'alert' : undefined} className="min-h-5 text-xs text-red-300">{value.error || ''}</p>
+          </div>}
+
+          <DialogFooter className="mt-4 flex-col-reverse gap-2 sm:flex-row">
+            <Button type="button" variant="outline" onClick={onClose} disabled={busy} className="min-h-11">キャンセル</Button>
+            <Button type="submit" disabled={busy || !isDirty} className={`min-h-11 ${willDelete ? 'bg-red-500/20 text-red-200 hover:bg-red-500/30' : 'bg-neon-pink/20 text-neon-pink hover:bg-neon-pink/30'}`}>
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : willDelete ? <Trash2 className="h-4 w-4" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}
+              {willDelete ? 'リンクを削除' : 'リンクを保存'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OutlineSnapshotTree({
+  snapshot,
+  current = false,
+  includeRejected = false,
+  busy = false,
+  getManuscript,
+  onToggleManuscriptComplete,
+  onEditManuscriptLink,
+}) {
   if (!snapshot) return null;
   const rows = flattenPlanningOutlineSnapshot(snapshot, { includeRejected });
   const visibleRecords = rows.filter(({ record }) => includeRejected || record.status !== 'rejected');
@@ -874,6 +1001,15 @@ function OutlineSnapshotTree({ snapshot, current = false, includeRejected = fals
                 {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
               </div>
               {record.role && <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{record.role}</p>}
+              {current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
+                <ChapterManuscriptControls
+                  record={record}
+                  manuscript={getManuscript(record.id)}
+                  busy={busy}
+                  onToggleComplete={onToggleManuscriptComplete}
+                  onEditLink={onEditManuscriptLink}
+                />
+              )}
             </article>
           ))}
         </div>
@@ -1916,6 +2052,7 @@ export default function PlanningNotesTab({
   const [outlineRewrite, setOutlineRewrite] = useState(null);
   const [lastOutlineRewriteSummary, setLastOutlineRewriteSummary] = useState(null);
   const [chapterLinkEditor, setChapterLinkEditor] = useState(null);
+  const [manuscriptLinkEditor, setManuscriptLinkEditor] = useState(null);
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [query, setQuery] = useState('');
@@ -1933,6 +2070,7 @@ export default function PlanningNotesTab({
   const outlineTablistScrollRef = useRef(null);
   const outlineTabRefs = useRef(new Map());
   const outlineRewriteTriggerRef = useRef(null);
+  const manuscriptLinkReturnFocusRef = useRef(null);
   const activeSectionRef = useRef(activeSection);
 
   const selectActiveSection = section => {
@@ -1960,6 +2098,8 @@ export default function PlanningNotesTab({
     setOutlineRewrite(null);
     setLastOutlineRewriteSummary(null);
     setChapterLinkEditor(null);
+    setManuscriptLinkEditor(null);
+    manuscriptLinkReturnFocusRef.current = null;
     const restoredSection = normalizePlanningViewSection(initialSection);
     activeSectionRef.current = restoredSection;
     setActiveSection(restoredSection);
@@ -2065,6 +2205,10 @@ export default function PlanningNotesTab({
   const allChapters = data.chapters;
   const chapters = useMemo(() => getPlanningDraftOutlineChapters(data), [data]);
   const activeChapterIds = useMemo(() => new Set(chapters.map(chapter => chapter.id)), [chapters]);
+  const manuscriptByChapterId = useMemo(
+    () => new Map(data.chapterWritingStates.map(state => [state.chapterId, state])),
+    [data.chapterWritingStates],
+  );
   const chapterRows = useMemo(() => flattenPlanningChapterTree(data), [data]);
   const outlineSnapshots = useMemo(
     () => sortPlanningOutlineSnapshotsNewest(data),
@@ -2331,6 +2475,57 @@ export default function PlanningNotesTab({
     if (next) setChapterLinkEditor(null);
   };
 
+  const closeManuscriptLinkEditor = () => {
+    setManuscriptLinkEditor(null);
+  };
+
+  const openManuscriptLinkEditor = (record, event) => {
+    const manuscript = getPlanningChapterManuscript(data, record.id);
+    manuscriptLinkReturnFocusRef.current = event?.currentTarget || null;
+    setManuscriptLinkEditor({
+      projectId: project.id,
+      chapterId: record.id,
+      title: record.title,
+      nodeType: record.nodeType,
+      originalDocumentUrl: manuscript.documentUrl,
+      documentUrl: manuscript.documentUrl,
+      expectedRevision: manuscript.revision,
+      error: '',
+    });
+  };
+
+  const toggleChapterManuscriptComplete = async (record, completed) => {
+    const manuscript = getPlanningChapterManuscript(data, record.id);
+    const title = record.title || '無題';
+    await persist(current => updatePlanningChapterManuscript(
+      current,
+      record.id,
+      { completed },
+      { expectedRevision: manuscript.revision },
+    ), completed ? `「${title}」の原稿を完成にしました` : `「${title}」の原稿を未完成に戻しました`, { closeEditor: false });
+  };
+
+  const saveManuscriptDocumentUrl = async () => {
+    if (!manuscriptLinkEditor || manuscriptLinkEditor.projectId !== project.id) return;
+    let documentUrl;
+    try {
+      documentUrl = validatePlanningGoogleDocumentUrl(manuscriptLinkEditor.documentUrl);
+    } catch (error) {
+      setManuscriptLinkEditor(current => current ? { ...current, error: error?.message || 'GoogleドキュメントURLを確認してください' } : current);
+      return;
+    }
+    const targetProjectId = manuscriptLinkEditor.projectId;
+    const next = await persist(current => updatePlanningChapterManuscript(
+      current,
+      manuscriptLinkEditor.chapterId,
+      { documentUrl },
+      { expectedRevision: manuscriptLinkEditor.expectedRevision },
+    ), documentUrl
+      ? `「${manuscriptLinkEditor.title || '無題'}」のGoogleドキュメントURLを保存しました`
+      : `「${manuscriptLinkEditor.title || '無題'}」の原稿リンクを削除しました`, { closeEditor: false });
+    if (next && activeProjectIdRef.current === targetProjectId) closeManuscriptLinkEditor();
+  };
+
   const openDuplicate = (section, record) => {
     if (section === 'chapters') {
       const parent = record.parentId
@@ -2440,7 +2635,17 @@ export default function PlanningNotesTab({
   };
 
   const handleDelete = async (section, record) => {
-    if (!globalThis.window.confirm(`「${recordTitle(section, record)}」だけを削除しますか？\n\n子項目や取材との紐づけがある場合は削除せず停止します。目次全体を変えたいときは、キャンセルして「目次をまとめて書き直す」を使ってください。`)) return;
+    const manuscript = section === 'chapters' ? manuscriptByChapterId.get(record.id) : null;
+    const hasManuscriptProgress = Boolean(manuscript?.completed || manuscript?.documentUrl);
+    const remainsInSavedOutline = section === 'chapters' && outlineSnapshots.some(
+      snapshot => snapshot.chapters.some(chapter => chapter.id === record.id),
+    );
+    const manuscriptNotice = hasManuscriptProgress
+      ? remainsInSavedOutline
+        ? '\n\n原稿完成チェックとリンクは、過去または確定済みの目次側に残ります。'
+        : '\n\n削除が実行される場合、この項目だけの原稿完成チェックとリンクも一緒に削除されます。'
+      : '';
+    if (!globalThis.window.confirm(`「${recordTitle(section, record)}」だけを削除しますか？${manuscriptNotice}\n\n子項目や取材との紐づけがある場合は削除せず停止します。目次全体を変えたいときは、キャンセルして「目次をまとめて書き直す」を使ってください。`)) return;
     await persist(current => deletePlanningRecord(current, section, record.id, {
       expectedUpdatedAt: record.updatedAt,
     }), 'ノートを削除しました', { closeEditor: false });
@@ -3007,7 +3212,7 @@ export default function PlanningNotesTab({
                 </div>
               </div>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                <span className="font-bold text-foreground">仮目次</span>は何度でも編集できます。<span className="font-bold text-foreground">確定目次</span>は本全体で現在使う読み取り専用の保存版です。各項目の「本人承認済み」とは別です。
+                <span className="font-bold text-foreground">仮目次</span>は何度でも編集できます。<span className="font-bold text-foreground">確定目次</span>は目次本文を変えない保存版ですが、原稿の完成チェックとGoogleドキュメントだけは更新できます。<span className="font-bold text-foreground">過去の目次</span>は変更できません。各項目の「本人承認済み」とは別です。
               </p>
               {outlineView === 'draft' && (
                 <div className="space-y-3 border-t border-white/10 pt-3">
@@ -3103,8 +3308,15 @@ export default function PlanningNotesTab({
                       仮目次に、まだ確定目次へ反映していない変更があります。確定目次はそのまま残っています。
                     </p>
                   )}
-                  <p className="text-xs leading-relaxed text-muted-foreground">読み取り専用です。変更するときは仮目次を編集し、改めて「この仮目次を確定目次にする」を押します。</p>
-                  <OutlineSnapshotTree snapshot={confirmedOutline} current />
+                  <p className="text-xs leading-relaxed text-muted-foreground">目次本文は読み取り専用です。本文を変えるときは仮目次を編集します。原稿の完成チェックとGoogleドキュメントURLだけは、確定目次の各カードから更新できます。</p>
+                  <OutlineSnapshotTree
+                    snapshot={confirmedOutline}
+                    current
+                    busy={busy}
+                    getManuscript={chapterId => manuscriptByChapterId.get(chapterId)}
+                    onToggleManuscriptComplete={toggleChapterManuscriptComplete}
+                    onEditManuscriptLink={openManuscriptLinkEditor}
+                  />
                 </div>
               )}
             </div>
@@ -3233,6 +3445,15 @@ export default function PlanningNotesTab({
                     {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => handleDelete(activeSection, record)} className="min-h-11 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" />削除</Button>}
                   </div>
                 </div>
+                {activeSection === 'chapters' && record.status !== 'rejected' && (
+                  <ChapterManuscriptControls
+                    record={record}
+                    manuscript={manuscriptByChapterId.get(record.id)}
+                    busy={busy}
+                    onToggleComplete={toggleChapterManuscriptComplete}
+                    onEditLink={openManuscriptLinkEditor}
+                  />
+                )}
               </article>
                 );
               })}
@@ -3332,6 +3553,14 @@ export default function PlanningNotesTab({
         onSave={saveChapterLinks}
         onClose={() => setChapterLinkEditor(null)}
       />
+      <ManuscriptLinkDialog
+        value={manuscriptLinkEditor?.projectId === project.id ? manuscriptLinkEditor : null}
+        busy={busy}
+        returnFocusRef={manuscriptLinkReturnFocusRef}
+        onChange={setManuscriptLinkEditor}
+        onSave={saveManuscriptDocumentUrl}
+        onClose={closeManuscriptLinkEditor}
+      />
       <RecordDetailDialog
         detail={detail?.projectId === project.id ? detail : null}
         chapters={allChapters}
@@ -3341,7 +3570,7 @@ export default function PlanningNotesTab({
       />
 
       <section className="rounded-xl border border-neon-cyan/20 bg-neon-cyan/5 p-4 text-xs leading-relaxed text-muted-foreground">
-        <div className="flex items-start gap-2"><ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-neon-cyan" /><p><span className="font-bold text-foreground">保存と共有について：</span>通常バックアップには全記録が含まれます。「共有用」は非公開取材を除外します。市場調査の正本Markdownだけは、内容確認と差分プレビュー後に追加できます。任意形式のJSON／Markdownや添付ファイル本体は自動取込せず、既存承認版を無断で上書きしません。完全バックアップは上部の「データ管理」から保存してください。</p></div>
+        <div className="flex items-start gap-2"><ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-neon-cyan" /><p><span className="font-bold text-foreground">保存と共有について：</span>通常バックアップには全記録が含まれます。「共有用」は非公開取材を除外します。章ごとの原稿完成チェックとGoogleドキュメントURLは完全バックアップに含まれますが、共有用JSON／MarkdownからURLは除外します。Googleドキュメントの本文を同期・保存する機能ではありません。市場調査の正本Markdownだけは、内容確認と差分プレビュー後に追加できます。任意形式のJSON／Markdownや添付ファイル本体は自動取込せず、既存承認版を無断で上書きしません。完全バックアップは上部の「データ管理」から保存してください。</p></div>
         {onNavigateTab && <button type="button" onClick={() => onNavigateTab('manual')} className="mt-2 min-h-11 font-bold text-neon-cyan underline underline-offset-4">使い方マニュアルを確認</button>}
       </section>
     </div>

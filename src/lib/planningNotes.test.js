@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   PlanningNotesMergeConflictError,
   PlanningNotesImportConflictError,
+  PLANNING_NOTES_SAVE_LIMIT_BYTES,
   applyMarketResearchImport,
   assignDecisionCanonical,
   assignInstructionCanonical,
@@ -25,6 +26,7 @@ import {
   getNextPlanningChapterOrder,
   getPlanningChapterParentOptions,
   getConfirmedPlanningOutline,
+  getPlanningChapterManuscript,
   getPlanningDraftOutlineChapters,
   isPlanningDraftChapter,
   mergePlanningNotesValues,
@@ -46,6 +48,8 @@ import {
   sortPlanningOutlineSnapshotsNewest,
   upsertPlanningRecord,
   updatePlanningRecordChapterLinks,
+  updatePlanningChapterManuscript,
+  validatePlanningGoogleDocumentUrl,
   withdrawPlanningDecision,
 } from './planningNotes.js';
 
@@ -175,7 +179,7 @@ test('部の中へ話と節を作り、親子順で安定して平坦化する',
   assert.equal(duplicate.nodeType, 'episode');
   assert.equal(duplicate.order, 2);
   const markdown = planningNotesShareToMarkdown(buildPlanningNotesSharePackage(data, { now: fixedNow }));
-  assert.match(markdown, /- 部：第一部\n  - 話：第一話\n    - 節：最初の場面/);
+  assert.match(markdown, /- 部：第一部（原稿：未完了）\n  - 話：第一話（原稿：未完了）\n    - 節：最初の場面（原稿：未完了）/);
 });
 
 test('目次階層は存在しない親・循環・親子型違反・同じ親内の順序重複を拒否する', () => {
@@ -793,6 +797,61 @@ test('共有用書き出しは非公開取材と外部ファイル所在を除�
   assert.match(planningNotesShareToMarkdown(shared), /````json[\s\S]*本文 ``` コード例[\s\S]*````/);
 });
 
+test('共有JSONとMarkdownは章の完成状態だけを残しGoogleドキュメントURLを完全に除外する', () => {
+  let data = createEmptyPlanningNotes();
+  const confirmedChapter = createPlanningRecord('chapters', {
+    id: 'share-manuscript-confirmed', title: '確定版だけに残る章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('share-manuscript-confirmed') });
+  data = addRecord(data, 'chapters', confirmedChapter);
+  data = createPlanningOutlineSnapshot(data, { kind: 'confirmed', label: '共有確認の確定目次' }, {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('share-manuscript-confirmed-outline'),
+  });
+  data = updatePlanningChapterManuscript(data, confirmedChapter.id, {
+    completed: true,
+    documentUrl: 'https://docs.google.com/document/d/PRIVATE_DOC_ID_CONFIRMED/edit?usp=sharing',
+  }, { expectedRevision: 0, now: fixedNow });
+  const activeChapter = createPlanningRecord('chapters', {
+    id: 'share-manuscript-active', title: '現在執筆中の章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('share-manuscript-active') });
+  data = replacePlanningOutlineDraft(data, [activeChapter], {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('share-manuscript-history'),
+  }).data;
+  data = updatePlanningChapterManuscript(data, activeChapter.id, {
+    documentUrl: 'https://docs.google.com/document/d/PRIVATE_DOC_ID_ACTIVE/edit?tab=t.0',
+  }, { expectedRevision: 0, now: fixedNow });
+
+  const share = buildPlanningNotesSharePackage(data, { bookTitle: '共有確認本', now: fixedNow });
+  assert.equal(share.data.chapterWritingStates.length, 2);
+  assert.ok(share.data.chapterWritingStates.every(state => !Object.hasOwn(state, 'documentUrl')));
+  assert.equal(
+    share.data.chapterWritingStates.find(state => state.chapterId === confirmedChapter.id).completed,
+    true,
+  );
+  const json = JSON.stringify(share);
+  assert.doesNotMatch(json, /docs\.google\.com|PRIVATE_DOC_ID|usp=sharing|tab=t\.0|documentUrl/);
+
+  const markdown = planningNotesShareToMarkdown(share);
+  assert.doesNotMatch(markdown, /docs\.google\.com|PRIVATE_DOC_ID|usp=sharing|tab=t\.0|documentUrl/);
+  const draftBlock = markdown.slice(
+    markdown.indexOf('### 仮目次（編集中）'),
+    markdown.indexOf('### 現在の確定目次'),
+  );
+  assert.match(draftBlock, /現在執筆中の章（原稿：未完了）/);
+  const confirmedBlock = markdown.slice(
+    markdown.indexOf('### 現在の確定目次'),
+    markdown.indexOf('### 過去の目次'),
+  );
+  assert.match(confirmedBlock, /確定版だけに残る章（原稿：書き終えた）/);
+  const pastBlock = markdown.slice(markdown.indexOf('### 過去の目次'));
+  assert.doesNotMatch(pastBlock, /原稿：/);
+});
+
 test('共有用データにAPIキーや非公開会話URLがあれば書き出しを停止する', () => {
   let data = createEmptyPlanningNotes();
   const record = createPlanningRecord('decisions', {
@@ -863,6 +922,42 @@ test('長文容量を計測し、保存用上限を超えた場合は明示し�
     () => serializePlanningNotes(oversized, { enforceStorageBudget: true }),
     /約2MB/,
   );
+});
+
+test('章原稿進捗の保存で約2MBを超える場合は元データを変えず原子的に停止する', () => {
+  let data = createEmptyPlanningNotes();
+  const chapter = createPlanningRecord('chapters', {
+    id: 'manuscript-capacity-chapter', title: '容量確認章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('manuscript-capacity-chapter') });
+  data = addRecord(data, 'chapters', chapter);
+  data = normalizePlanningNotes({
+    ...data,
+    concept: {
+      ...data.concept,
+      targetReader: 'a'.repeat(450_000),
+      readerProblems: 'b'.repeat(450_000),
+      bookPromise: 'c'.repeat(450_000),
+      theme: 'd'.repeat(450_000),
+    },
+  });
+  const padding = PLANNING_NOTES_SAVE_LIMIT_BYTES
+    - estimatePlanningNotesBytes(serializePlanningNotes(data))
+    - 80;
+  assert.ok(padding > 0 && padding < 500_000);
+  data = normalizePlanningNotes({
+    ...data,
+    concept: { ...data.concept, uniqueness: 'e'.repeat(padding) },
+  });
+  assert.ok(estimatePlanningNotesBytes(serializePlanningNotes(data)) < PLANNING_NOTES_SAVE_LIMIT_BYTES);
+  const untouched = structuredClone(data);
+  assert.throws(
+    () => updatePlanningChapterManuscript(data, chapter.id, {
+      completed: true,
+      documentUrl: 'https://docs.google.com/document/d/capacity-doc/edit',
+    }, { expectedRevision: 0, now: fixedNow }),
+    /約2MB/,
+  );
+  assert.deepEqual(data, untouched);
 });
 
 function marketResearchMarkdown() {
@@ -945,7 +1040,7 @@ ${sources}
 `;
 }
 
-test('v1企画ノートを新フィールド未設定のv5へ安全に移行する', () => {
+test('v1企画ノートを新フィールド未設定のv6へ安全に移行する', () => {
   const legacy = createEmptyPlanningNotes();
   legacy.version = 1;
   delete legacy.marketSummary;
@@ -972,7 +1067,7 @@ test('v1企画ノートを新フィールド未設定のv5へ安全に移行す�
   }
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.equal(migrated.outlineRevision, 0);
   assert.equal(migrated.confirmedOutlineId, '');
   assert.deepEqual(migrated.outlineSnapshots, []);
@@ -1002,7 +1097,7 @@ test('部で絞り込むと配下の話・節と、それらへ紐づく記録�
   assert.deepEqual(ids, [part.id, episode.id, 'filter-interview']);
 });
 
-test('v2の平坦な章はID・本文・orderを変えずrootの仮目次としてv5へ移行する', () => {
+test('v2の平坦な章はID・本文・orderを変えずrootの仮目次としてv6へ移行する', () => {
   const legacy = createEmptyPlanningNotes();
   legacy.version = 2;
   delete legacy.outlineRevision;
@@ -1018,7 +1113,7 @@ test('v2の平坦な章はID・本文・orderを変えずrootの仮目次とし�
   delete legacy.chapters[0].parentId;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.equal(migrated.confirmedOutlineId, '');
   assert.deepEqual(migrated.outlineSnapshots, []);
   assert.deepEqual(
@@ -1076,7 +1171,7 @@ test('階層目次の結合は親ごとのorderを扱い、親子関係を保っ
   assert.ok(merged.outlineRevision > Math.max(current.outlineRevision, incoming.outlineRevision));
 });
 
-test('v3の階層目次はID・本文・親子順・章紐付けを変えずv5の仮目次へ移行する', () => {
+test('v3の階層目次はID・本文・親子順・章紐付けを変えずv6の仮目次へ移行する', () => {
   let legacy = createEmptyPlanningNotes();
   const part = createPlanningRecord('chapters', {
     id: 'legacy-part', nodeType: 'part', parentId: '', order: 0, title: '第一部',
@@ -1096,7 +1191,7 @@ test('v3の階層目次はID・本文・親子順・章紐付けを変えずv5�
   delete legacy.outlineSnapshots;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.deepEqual(
     migrated.chapters.map(record => ({
       id: record.id,
@@ -1117,7 +1212,7 @@ test('v3の階層目次はID・本文・親子順・章紐付けを変えずv5�
   assert.deepEqual(migrated.outlineSnapshots, []);
 });
 
-test('v4目次は全既存IDを編集中の仮目次としてv5へ移行する', () => {
+test('v4目次は全既存IDを編集中の仮目次としてv6へ移行する', () => {
   let legacy = createEmptyPlanningNotes();
   const chapter = createPlanningRecord('chapters', {
     id: 'legacy-v4-chapter', title: '旧版の章', order: 0,
@@ -1132,10 +1227,254 @@ test('v4目次は全既存IDを編集中の仮目次としてv5へ移行する',
   delete legacy.draftOutlineChapterIds;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.deepEqual(migrated.draftOutlineChapterIds, ['legacy-v4-chapter']);
   assert.deepEqual(migrated.chapters[0], expectedChapter);
   assert.deepEqual(migrated.interviews[0], expectedInterview);
+});
+
+test('v5のactive目次・退避台帳・保存版を変えず原稿進捗未設定のv6へ移行する', () => {
+  let legacy = createEmptyPlanningNotes();
+  const oldChapter = createPlanningRecord('chapters', {
+    id: 'legacy-v5-old', title: '退避済みの旧章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('legacy-v5-old') });
+  legacy = addRecord(legacy, 'chapters', oldChapter);
+  legacy = addRecord(legacy, 'interviews', createPlanningRecord('interviews', {
+    id: 'legacy-v5-interview', question: '旧章の取材', chapterIds: [oldChapter.id],
+  }, { now: fixedNow, idFactory: idFactory('legacy-v5-interview') }));
+  const nextChapter = createPlanningRecord('chapters', {
+    id: 'legacy-v5-active', title: '現在の仮目次', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('legacy-v5-active') });
+  legacy = replacePlanningOutlineDraft(legacy, [nextChapter], {
+    expectedOutlineRevision: legacy.outlineRevision,
+    expectedChapterOrderRevision: legacy.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('legacy-v5-snapshot'),
+  }).data;
+  legacy.version = 5;
+  delete legacy.chapterWritingStates;
+
+  const migrated = normalizePlanningNotes(legacy);
+  assert.equal(migrated.version, 6);
+  assert.deepEqual(migrated.draftOutlineChapterIds, ['legacy-v5-active']);
+  assert.deepEqual(migrated.chapterWritingStates, []);
+  assert.equal(migrated.outlineSnapshots[0].chapters[0].id, 'legacy-v5-old');
+  assert.equal(migrated.chapters.some(chapter => chapter.id === 'legacy-v5-old'), true);
+});
+
+test('仮目次と確定目次は章IDごとに原稿完成・Googleドキュメントを共有しsnapshot本文を変えない', () => {
+  let data = createEmptyPlanningNotes();
+  const chapter = createPlanningRecord('chapters', {
+    id: 'manuscript-shared-chapter', title: '共有する第一章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('manuscript-shared-chapter') });
+  data = addRecord(data, 'chapters', chapter);
+  data = createPlanningOutlineSnapshot(data, { kind: 'confirmed', label: '原稿進捗の確定目次' }, {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('manuscript-confirmed'),
+  });
+  const confirmedBefore = structuredClone(getConfirmedPlanningOutline(data));
+  const untouchedOutlineRevision = data.outlineRevision;
+  const untouchedOrderRevision = data.chapterOrderRevision;
+  assert.deepEqual(getPlanningChapterManuscript(data, chapter.id), {
+    chapterId: chapter.id,
+    revision: 0,
+    createdAt: '',
+    updatedAt: '',
+    completed: false,
+    completedAt: '',
+    documentUrl: '',
+  });
+
+  data = updatePlanningChapterManuscript(data, chapter.id, {
+    completed: true,
+    documentUrl: 'https://docs.google.com/document/d/private-doc-id-001/edit?usp=sharing',
+  }, {
+    expectedRevision: 0,
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+  });
+  const firstState = getPlanningChapterManuscript(data, chapter.id);
+  assert.equal(firstState.completed, true);
+  assert.equal(firstState.completedAt, '2026-08-15T00:00:00.000Z');
+  assert.equal(firstState.revision, 1);
+  assert.equal(data.outlineRevision, untouchedOutlineRevision);
+  assert.equal(data.chapterOrderRevision, untouchedOrderRevision);
+  assert.deepEqual(getConfirmedPlanningOutline(data), confirmedBefore);
+
+  const nextChapter = createPlanningRecord('chapters', {
+    id: 'manuscript-next-chapter', title: '全面改稿後の章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('manuscript-next-chapter') });
+  data = replacePlanningOutlineDraft(data, [nextChapter], {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: () => new Date('2026-08-16T00:00:00.000Z'),
+    idFactory: idFactory('manuscript-before-rewrite'),
+  }).data;
+  assert.equal(data.chapters.some(record => record.id === chapter.id), false);
+  assert.equal(getConfirmedPlanningOutline(data).chapters[0].id, chapter.id);
+
+  data = updatePlanningChapterManuscript(data, chapter.id, {
+    documentUrl: 'https://docs.google.com/document/u/0/d/private-doc-id-002/edit',
+  }, {
+    expectedRevision: 1,
+    now: () => new Date('2026-08-17T00:00:00.000Z'),
+  });
+  const snapshotOnlyState = getPlanningChapterManuscript(data, chapter.id);
+  assert.equal(snapshotOnlyState.completed, true);
+  assert.equal(snapshotOnlyState.completedAt, firstState.completedAt);
+  assert.equal(snapshotOnlyState.revision, 2);
+  assert.deepEqual(getConfirmedPlanningOutline(data), confirmedBefore);
+  assert.equal(getPlanningChapterManuscript(data, nextChapter.id).revision, 0);
+  assert.throws(
+    () => updatePlanningChapterManuscript(data, chapter.id, { completed: false }, {
+      expectedRevision: 1,
+      now: fixedNow,
+    }),
+    /別の画面で更新/,
+  );
+
+  data = createPlanningOutlineSnapshot(data, { kind: 'confirmed', label: '全面改稿後の確定目次' }, {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: () => new Date('2026-08-18T00:00:00.000Z'),
+    idFactory: idFactory('manuscript-next-confirmed'),
+  });
+  assert.equal(getConfirmedPlanningOutline(data).chapters[0].id, nextChapter.id);
+  assert.throws(
+    () => updatePlanningChapterManuscript(data, chapter.id, { completed: false }, {
+      expectedRevision: 2,
+      now: fixedNow,
+    }),
+    /過去の目次は変更できません/,
+  );
+  assert.equal(getPlanningChapterManuscript(data, chapter.id).revision, 2);
+});
+
+test('GoogleドキュメントURLを厳格検証し、章削除時は保存版の有無に応じて原稿情報を安全に扱う', () => {
+  assert.equal(validatePlanningGoogleDocumentUrl(''), '');
+  assert.equal(
+    validatePlanningGoogleDocumentUrl('  https://docs.google.com/document/d/valid_doc-123/edit  '),
+    'https://docs.google.com/document/d/valid_doc-123/edit',
+  );
+  for (const invalid of [
+    'http://docs.google.com/document/d/doc/edit',
+    'https://drive.google.com/file/d/doc/view',
+    'https://docs.google.com/spreadsheets/d/sheet/edit',
+    'https://docs.google.com.evil.example/document/d/doc/edit',
+    'https://user@docs.google.com/document/d/doc/edit',
+    'javascript:alert(1)',
+    'https://docs.google.com/document/',
+    'https://docs.google.com/document/d/doc/edit?token=private-token',
+  ]) {
+    assert.throws(() => validatePlanningGoogleDocumentUrl(invalid), /URL|保存できません/);
+  }
+
+  let data = createEmptyPlanningNotes();
+  const chapter = createPlanningRecord('chapters', {
+    id: 'manuscript-delete-chapter', title: '削除確認章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('manuscript-delete-chapter') });
+  data = addRecord(data, 'chapters', chapter);
+  data = updatePlanningChapterManuscript(data, chapter.id, {
+    completed: true,
+    documentUrl: 'https://docs.google.com/document/d/delete-check/edit',
+  }, { expectedRevision: 0, now: fixedNow });
+  data = deletePlanningRecord(data, 'chapters', chapter.id, {
+    expectedUpdatedAt: data.chapters[0].updatedAt,
+  });
+  assert.deepEqual(data.chapters, []);
+  assert.deepEqual(data.chapterWritingStates, []);
+
+  let saved = createEmptyPlanningNotes();
+  const savedChapter = createPlanningRecord('chapters', {
+    id: 'manuscript-snapshot-chapter', title: '保存版に残る章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('manuscript-snapshot-chapter') });
+  saved = addRecord(saved, 'chapters', savedChapter);
+  saved = updatePlanningChapterManuscript(saved, savedChapter.id, {
+    completed: true,
+    documentUrl: 'https://docs.google.com/document/d/snapshot-doc/edit',
+  }, { expectedRevision: 0, now: fixedNow });
+  saved = createPlanningOutlineSnapshot(saved, { kind: 'confirmed', label: '原稿リンクを残す確定目次' }, {
+    expectedOutlineRevision: saved.outlineRevision,
+    expectedChapterOrderRevision: saved.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('manuscript-delete-snapshot'),
+  });
+  saved = deletePlanningRecord(saved, 'chapters', savedChapter.id, {
+    expectedUpdatedAt: saved.chapters[0].updatedAt,
+  });
+  assert.deepEqual(saved.chapters, []);
+  assert.equal(saved.chapterWritingStates.length, 1);
+  assert.equal(getPlanningChapterManuscript(saved, savedChapter.id).completed, true);
+  assert.equal(
+    getPlanningChapterManuscript(saved, savedChapter.id).documentUrl,
+    'https://docs.google.com/document/d/snapshot-doc/edit',
+  );
+});
+
+test('章原稿進捗は別章を結合し同じ章の差・明示クリア・古い画面を競合停止する', () => {
+  let base = createEmptyPlanningNotes();
+  const first = createPlanningRecord('chapters', {
+    id: 'manuscript-merge-first', title: '第一章', order: 0,
+  }, { now: fixedNow, idFactory: idFactory('manuscript-merge-first') });
+  const second = createPlanningRecord('chapters', {
+    id: 'manuscript-merge-second', title: '第二章', order: 1,
+  }, { now: fixedNow, idFactory: idFactory('manuscript-merge-second') });
+  base = addRecord(base, 'chapters', first);
+  base = addRecord(base, 'chapters', second);
+  const current = updatePlanningChapterManuscript(base, first.id, { completed: true }, {
+    expectedRevision: 0,
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+  });
+  const incoming = updatePlanningChapterManuscript(base, second.id, {
+    documentUrl: 'https://docs.google.com/document/d/second-doc/edit',
+  }, {
+    expectedRevision: 0,
+    now: () => new Date('2026-08-16T00:00:00.000Z'),
+  });
+  const union = readPlanningNotes(mergePlanningNotesValues(
+    serializePlanningNotes(current),
+    serializePlanningNotes(incoming),
+  )).data;
+  assert.deepEqual(union.chapterWritingStates.map(state => state.chapterId), [first.id, second.id]);
+
+  const divergent = updatePlanningChapterManuscript(base, first.id, {
+    documentUrl: 'https://docs.google.com/document/d/other-first-doc/edit',
+  }, {
+    expectedRevision: 0,
+    now: () => new Date('2026-08-17T00:00:00.000Z'),
+  });
+  assert.ok(previewPlanningNotesMerge(
+    serializePlanningNotes(current),
+    serializePlanningNotes(divergent),
+  ).some(conflict => conflict.reason === 'chapter_writing_state_requires_review'));
+  assert.throws(
+    () => mergePlanningNotesValues(serializePlanningNotes(current), serializePlanningNotes(divergent)),
+    PlanningNotesMergeConflictError,
+  );
+
+  const withUrl = updatePlanningChapterManuscript(base, first.id, {
+    completed: true,
+    documentUrl: 'https://docs.google.com/document/d/old-value/edit',
+  }, { expectedRevision: 0, now: fixedNow });
+  const cleared = updatePlanningChapterManuscript(withUrl, first.id, {
+    completed: false,
+    documentUrl: '',
+  }, { expectedRevision: 1, now: () => new Date('2026-08-18T00:00:00.000Z') });
+  assert.deepEqual(
+    getPlanningChapterManuscript(cleared, first.id),
+    {
+      ...getPlanningChapterManuscript(cleared, first.id),
+      completed: false,
+      completedAt: '',
+      documentUrl: '',
+      revision: 2,
+    },
+  );
+  assert.throws(
+    () => mergePlanningNotesValues(serializePlanningNotes(cleared), serializePlanningNotes(withUrl)),
+    PlanningNotesMergeConflictError,
+  );
 });
 
 test('CodexのMarkdown目次を部・章・話・節へ安全に解析し、平坦な章も保持する', () => {
@@ -1333,6 +1672,22 @@ test('50項目を25回書き直しても参照のない旧台帳を蓄積せず�
   const confirmedOutlineId = data.confirmedOutlineId;
 
   for (let round = 1; round <= 25; round += 1) {
+    const currentDraft = getPlanningDraftOutlineChapters(data);
+    data = normalizePlanningNotes({
+      ...data,
+      chapterWritingStates: [
+        ...data.chapterWritingStates,
+        ...currentDraft.map(chapter => ({
+          chapterId: chapter.id,
+          revision: 1,
+          createdAt: fixedNow().toISOString(),
+          updatedAt: fixedNow().toISOString(),
+          completed: true,
+          completedAt: fixedNow().toISOString(),
+          documentUrl: '',
+        })),
+      ],
+    });
     const proposed = Array.from({ length: 50 }, (_, index) => createPlanningRecord('chapters', {
       id: `rewrite-stress-${round}-${index}`,
       title: `第${round}案 構成${index + 1}`,
@@ -1350,6 +1705,8 @@ test('50項目を25回書き直しても参照のない旧台帳を蓄積せず�
   }
 
   assert.equal(data.chapters.length, 51);
+  assert.equal(data.chapterWritingStates.length, 1_250);
+  assert.ok(data.chapterWritingStates.every(state => state.completed));
   assert.equal(getPlanningDraftOutlineChapters(data).length, 50);
   assert.deepEqual(
     data.chapters.find(chapter => chapter.id === linkedChapterBefore.id),
@@ -1996,7 +2353,7 @@ test('共有JSONとMarkdownは仮目次・現在の確定目次・過去の目�
   const share = buildPlanningNotesSharePackage(data, { bookTitle: '目次テスト本', now: fixedNow });
   const markdown = planningNotesShareToMarkdown(share);
   assert.equal(share.schemaVersion, 1);
-  assert.equal(share.data.version, 5);
+  assert.equal(share.data.version, 6);
   assert.equal(share.data.outlineSnapshots.length, 2);
   assert.match(markdown, /## 目次・章構成/);
   assert.match(markdown, /### 仮目次（編集中）[\s\S]*編集中の仮目次/);
@@ -2246,7 +2603,7 @@ test('MARKET-001 Markdownを5競合・6公開出典へ厳格preview/applyし、�
   );
   const share = buildPlanningNotesSharePackage(applied, { now: fixedNow });
   assert.equal(share.schemaVersion, 1);
-  assert.equal(share.data.version, 5);
+  assert.equal(share.data.version, 6);
   assert.match(planningNotesShareToMarkdown(share), /MARKET-001|市場調査サマリー/);
 });
 

@@ -227,9 +227,9 @@ test('仮目次・確定目次・過去の目次をアクセシブルな3タブ�
   assert.match(source, /setStatusMessage\(`\$\{OUTLINE_VIEW_META\[view\]\.label\}を表示しました`\)/);
 });
 
-test('仮目次だけに編集操作を置き、確定目次と履歴は読み取り専用で表示する', () => {
+test('目次本文の編集は仮目次だけに置き、確定目次は原稿管理だけ、履歴は読み取り専用にする', () => {
   assert.match(source, /outlineView === 'draft' && \([\s\S]*?openNewRecord\('chapters', \{ nodeType: 'part' \}\)[\s\S]*?openNewRecord\('chapters', \{ nodeType: 'chapter' \}\)[\s\S]*?openOutlineSnapshotDialog\('draft'\)[\s\S]*?openOutlineSnapshotDialog\('confirmed'\)/);
-  assert.match(source, /outlineView === 'confirmed'[\s\S]*?読み取り専用です。[\s\S]*?<OutlineSnapshotTree snapshot=\{confirmedOutline\} current \/>/);
+  assert.match(source, /outlineView === 'confirmed'[\s\S]*?目次本文は読み取り専用です。[\s\S]*?<OutlineSnapshotTree[\s\S]*?snapshot=\{confirmedOutline\}[\s\S]*?current/);
   assert.match(source, /outlineView === 'history'[\s\S]*?内容を見る（読み取り専用）[\s\S]*?<OutlineSnapshotTree/);
 
   const snapshotTreeSource = sourceBlock('function OutlineSnapshotTree', 'function EditorDialog');
@@ -262,7 +262,7 @@ test('仮目次の履歴保存と確定は確認ダイアログを経て既存�
 
 test('目次全体の確定と各項目の本人承認を初心者向け文言で区別する', () => {
   assert.match(source, /仮目次<\/span>は何度でも編集できます/);
-  assert.match(source, /確定目次<\/span>は本全体で現在使う読み取り専用の保存版です/);
+  assert.match(source, /確定目次<\/span>は目次本文を変えない保存版ですが/);
   assert.match(source, /各項目の「本人承認済み」とは別です/);
   assert.match(source, /各項目の「本人承認済み」は内容確認です/);
   assert.match(source, /ここで作る「確定目次」は、本全体で現在使う目次の保存版です/);
@@ -365,6 +365,44 @@ test('空の仮目次をもう一度空にせず、完了表示で履歴追加�
   assert.match(source, /outlineRewriteHistoryMessage\(lastOutlineRewriteSummary\)/);
 });
 
+test('仮目次と確定目次だけで章ごとの原稿進捗とGoogleドキュメントを更新できる', () => {
+  assert.match(source, /function ChapterManuscriptControls\(/);
+  assert.match(source, /activeSection === 'chapters' && record\.status !== 'rejected'[\s\S]*<ChapterManuscriptControls/);
+  assert.match(source, /<OutlineSnapshotTree[\s\S]*snapshot=\{confirmedOutline\}[\s\S]*current[\s\S]*onToggleManuscriptComplete=\{toggleChapterManuscriptComplete\}[\s\S]*onEditManuscriptLink=\{openManuscriptLinkEditor\}/);
+  assert.match(source, /current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink/);
+  assert.match(source, /<OutlineSnapshotTree snapshot=\{snapshot\} includeRejected \/>/);
+  assert.match(source, /確定目次<\/span>は目次本文を変えない保存版ですが、原稿の完成チェックとGoogleドキュメントだけは更新できます/);
+  assert.match(source, /過去の目次<\/span>は変更できません/);
+});
+
+test('原稿完成チェックとGoogleドキュメントURL設定は初心者向けで安全に操作できる', () => {
+  assert.match(source, /getPlanningChapterManuscript\(data, record\.id\)/);
+  assert.match(source, /new Map\(data\.chapterWritingStates\.map\(state => \[state\.chapterId, state\]\)\)/);
+  assert.match(source, /updatePlanningChapterManuscript\(/);
+  assert.match(source, /validatePlanningGoogleDocumentUrl\(manuscriptLinkEditor\.documentUrl\)/);
+  assert.match(source, /原稿のGoogleドキュメント/);
+  assert.match(source, /type="checkbox"[\s\S]*aria-label=\{`\$\{itemLabel\}の原稿を書き終えた`\}/);
+  assert.match(source, /原稿：完成/);
+  assert.match(source, /原稿：未完成/);
+  assert.match(source, /target="_blank"[\s\S]*rel="noopener noreferrer"/);
+  assert.match(source, /原稿を開く/);
+  assert.match(source, /空欄で保存すると、この原稿リンクだけを削除します/);
+  assert.match(source, /type="url"/);
+  assert.match(source, /<form noValidate/);
+  assert.match(source, /onOpenAutoFocus=\{event =>/);
+  assert.match(source, /onCloseAutoFocus=\{event =>/);
+  assert.match(source, /returnFocusRef\.current\?\.focus\(\)/);
+  assert.match(source, /className="mt-4 flex-col-reverse gap-2 sm:flex-row"/);
+  assert.match(source, /setStatusMessage\(successMessage\)/);
+  assert.match(source, /aria-live="polite"/);
+  assert.match(source, /共有用JSON／Markdownには含めません/);
+  assert.match(source, /章ごとの原稿完成チェックとGoogleドキュメントURLは完全バックアップに含まれますが、共有用JSON／MarkdownからURLは除外します/);
+  assert.match(source, /Googleドキュメントの本文を同期・保存する機能ではありません/);
+  assert.match(source, /原稿完成チェックとリンクは、過去または確定済みの目次側に残ります/);
+  assert.match(source, /削除が実行される場合、この項目だけの原稿完成チェックとリンクも一緒に削除されます/);
+  assert.match(source, /outlineSnapshots\.some\([\s\S]*snapshot\.chapters\.some\(chapter => chapter\.id === record\.id\)/);
+});
+
 test('長文入力中に全文の再解析・dirty比較・検索再正規化を繰り返さない', () => {
   assert.match(source, /useState\(\(\) => readPlanningNotes\(project\?\.planning_notes\)\)/);
   assert.doesNotMatch(source, /JSON\.stringify\(editor\.draft\)/);
@@ -376,12 +414,14 @@ test('長文入力中に全文の再解析・dirty比較・検索再正規化を
 test('バックアップ結合のノート競合は場所と理由を示して実行を止める', () => {
   assert.match(backupDialogSource, /previewDataBackupPlanningNotesConflicts/);
   assert.match(backupDialogSource, /planningMergeConflicts\.length > 0/);
-  assert.match(backupDialogSource, /内容・章順・版・正本指定の競合/);
+  assert.match(backupDialogSource, /内容・章順・版・正本指定・原稿進捗の競合/);
   assert.match(backupDialogSource, /conflict\.projectName/);
   assert.match(backupDialogSource, /conflict\.section/);
   assert.match(backupDialogSource, /conflict\.reason/);
   assert.match(backupDialogSource, /目次の保存履歴が上限100件を超える/);
   assert.match(backupDialogSource, /編集中の仮目次が異なる（自動では切り替えない）/);
+  assert.match(backupDialogSource, /chapterWritingStates: '章ごとの原稿進捗'/);
+  assert.match(backupDialogSource, /chapter_writing_state_requires_review: '同じ章の完成状態・リンクが異なる'/);
   assert.match(backupDialogSource, /disabled=\{busy \|\| planningMergeConflicts\.length > 0\}/);
   assert.match(backupDialogSource, /非公開取材は通常バックアップに含まれます/);
 });
