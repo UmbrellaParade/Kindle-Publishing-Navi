@@ -156,12 +156,18 @@ test('指示書カードと詳細画面から本文だけを1クリックでコ�
   assert.match(source, /const text = getPlanningInstructionCopyText\(record\)/);
   assert.match(source, /findPlanningNotesSensitiveData\(\{ markdown: text \}\)/);
   assert.match(source, /await copyPlanningInstructionText\(record, writeText\)/);
-  assert.match(source, /toast\.success\(message\)/);
-  assert.match(source, /setStatusMessage\(message\)/);
+  assert.match(source, /role="status"[\s\S]*?aria-live="polite"[\s\S]*?aria-atomic="true"/);
+  assert.match(source, /copyFeedback=\{instructionCopyFeedback\}/);
+  assert.match(source, /setInstructionCopyFeedback\(current => \(\{/);
+  assert.match(source, /surface: isDetailCopy \? 'detail' : 'card'/);
+  assert.match(source, /instructionCopyFeedback\?\.surface === 'card'/);
+  assert.match(source, /fixed bottom-4 left-4 right-4 z-40/);
+  assert.match(source, /window\.setTimeout\([\s\S]*?4500/);
+  assert.match(source, /aria-label="コピー結果の通知を閉じる"/);
   assert.match(source, /ブラウザのクリップボード許可を確認するか、「内容を見る」から本文を選択してコピーしてください/);
   assert.match(source, /onCopyInstruction=\{copyInstructionQuestion\}/);
   const copyHandler = sourceBlock('const copyInstructionQuestion = async record => {', 'const applyOutlineRewrite = async () => {');
-  assert.doesNotMatch(copyHandler, /persist\(|mutatePublishingProject|serializePlanningNotes/);
+  assert.doesNotMatch(copyHandler, /persist\(|mutatePublishingProject|serializePlanningNotes|providerToast|toast\./);
 });
 
 test('意思決定は現在の正本と最新順の履歴を分け、差替え・撤回・相互参照を示す', () => {

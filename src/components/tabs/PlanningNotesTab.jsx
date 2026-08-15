@@ -391,10 +391,15 @@ function InstructionCopyButton({ record, onCopyInstruction, className = '' }) {
   );
 }
 
-function RecordDetailDialog({ detail, chapters, activeChapterIds, onCopyInstruction, onEditChapterLinks, onClose }) {
+function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, onCopyInstruction, onEditChapterLinks, onClose }) {
   const record = detail?.record;
   const section = detail?.section === 'conceptHistory' ? 'concept' : detail?.section;
   const fields = FORM_FIELDS[section] || [];
+  const activeCopyFeedback = record
+    && detail.section === 'instructionVersions'
+    && copyFeedback?.recordId === record.id
+    ? copyFeedback
+    : null;
   return (
     <Dialog open={Boolean(detail)} onOpenChange={open => { if (!open) onClose(); }}>
       <DialogContent
@@ -473,6 +478,22 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, onCopyInstruct
               </div>
             )}
             <p className="break-all text-[10px] text-muted-foreground">ID: {record.id}</p>
+          </div>
+        )}
+        {activeCopyFeedback && (
+          <div
+            key={activeCopyFeedback.sequence}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            className={`mx-5 flex flex-shrink-0 items-start gap-2 rounded-lg border p-3 text-sm leading-relaxed ${activeCopyFeedback.tone === 'error'
+              ? 'border-red-400/30 bg-red-400/10 text-red-100'
+              : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-100'}`}
+          >
+            {activeCopyFeedback.tone === 'error'
+              ? <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+              : <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+            <span>{activeCopyFeedback.message}</span>
           </div>
         )}
         <DialogFooter className="flex-col gap-2 border-t border-[#2a2a4a] bg-[#121222] px-5 py-4 sm:flex-row sm:space-x-0">
@@ -2090,6 +2111,7 @@ export default function PlanningNotesTab({
   const [manuscriptLinkEditor, setManuscriptLinkEditor] = useState(null);
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  const [instructionCopyFeedback, setInstructionCopyFeedback] = useState(null);
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [chapterFilter, setChapterFilter] = useState('all');
@@ -2121,6 +2143,7 @@ export default function PlanningNotesTab({
     operationGenerationRef.current += 1;
     setBusy(false);
     setStatusMessage('');
+    setInstructionCopyFeedback(null);
     const parsed = readPlanningNotes(project?.planning_notes);
     setData(parsed.data);
     setLoadError(parsed.error);
@@ -2171,6 +2194,17 @@ export default function PlanningNotesTab({
   useEffect(() => {
     if (editor?.projectId) draftCacheRef.current.set(editor.projectId, editor);
   }, [editor]);
+
+  useEffect(() => {
+    if (instructionCopyFeedback?.surface !== 'card') return undefined;
+    const sequence = instructionCopyFeedback.sequence;
+    const timerId = window.setTimeout(() => {
+      setInstructionCopyFeedback(current => (
+        current?.surface === 'card' && current.sequence === sequence ? null : current
+      ));
+    }, 4500);
+    return () => window.clearTimeout(timerId);
+  }, [instructionCopyFeedback]);
 
   useEffect(() => {
     const container = sectionNavScrollRef.current;
@@ -2750,16 +2784,28 @@ export default function PlanningNotesTab({
   const copyInstructionQuestion = async record => {
     const text = getPlanningInstructionCopyText(record);
     const displayName = record?.name || '無題の指示書';
+    const targetProjectId = project.id;
+    const generation = operationGenerationRef.current;
+    const isDetailCopy = detail?.projectId === targetProjectId
+      && detail.section === 'instructionVersions'
+      && detail.record?.id === record?.id;
     try {
       if (findPlanningNotesSensitiveData({ markdown: text }).length > 0) {
         throw new Error('APIキー・認証情報・非公開会話URLらしき文字列が含まれるため、コピーを停止しました。本文を確認してください');
       }
       const writeText = navigator.clipboard?.writeText?.bind(navigator.clipboard);
       await copyPlanningInstructionText(record, writeText);
+      if (activeProjectIdRef.current !== targetProjectId || operationGenerationRef.current !== generation) return;
       const message = `「${displayName}」の質問文をコピーしました`;
-      toast.success(message);
-      setStatusMessage(message);
+      setInstructionCopyFeedback(current => ({
+        recordId: record.id,
+        message,
+        tone: 'success',
+        surface: isDetailCopy ? 'detail' : 'card',
+        sequence: (current?.sequence || 0) + 1,
+      }));
     } catch (error) {
+      if (activeProjectIdRef.current !== targetProjectId || operationGenerationRef.current !== generation) return;
       const knownMessage = typeof error?.message === 'string' && (
         error.message === 'コピーする指示書本文がありません'
         || error.message === 'このブラウザではクリップボードを利用できません'
@@ -2768,8 +2814,13 @@ export default function PlanningNotesTab({
       const message = knownMessage
         ? error.message
         : '質問文をコピーできませんでした。ブラウザのクリップボード許可を確認するか、「内容を見る」から本文を選択してコピーしてください';
-      toast.error(message);
-      setStatusMessage(message);
+      setInstructionCopyFeedback(current => ({
+        recordId: record?.id || '',
+        message,
+        tone: 'error',
+        surface: isDetailCopy ? 'detail' : 'card',
+        sequence: (current?.sequence || 0) + 1,
+      }));
     }
   };
 
@@ -2846,6 +2897,7 @@ export default function PlanningNotesTab({
   };
 
   const openDetail = (section, record) => {
+    setInstructionCopyFeedback(null);
     setDetail({ projectId: project.id, section, record });
   };
 
@@ -3560,6 +3612,30 @@ export default function PlanningNotesTab({
       )}
 
       {statusMessage && <p className="sr-only" aria-live="polite">{statusMessage}</p>}
+      {instructionCopyFeedback?.surface === 'card' && (
+        <div
+          key={instructionCopyFeedback.sequence}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className={`fixed bottom-4 left-4 right-4 z-40 flex items-start gap-2 rounded-xl border p-3 pr-12 text-sm leading-relaxed shadow-2xl backdrop-blur sm:right-auto sm:max-w-md ${instructionCopyFeedback.tone === 'error'
+            ? 'border-red-400/40 bg-[#2a151d]/95 text-red-100'
+            : 'border-emerald-400/40 bg-[#10261f]/95 text-emerald-100'}`}
+        >
+          {instructionCopyFeedback.tone === 'error'
+            ? <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            : <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+          <span>{instructionCopyFeedback.message}</span>
+          <button
+            type="button"
+            onClick={() => setInstructionCopyFeedback(null)}
+            className="absolute right-1 top-1 flex min-h-11 min-w-11 items-center justify-center rounded-lg text-current/75 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+            aria-label="コピー結果の通知を閉じる"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      )}
       <input
         ref={marketImportInputRef}
         type="file"
@@ -3632,9 +3708,10 @@ export default function PlanningNotesTab({
         detail={detail?.projectId === project.id ? detail : null}
         chapters={allChapters}
         activeChapterIds={activeChapterIds}
+        copyFeedback={instructionCopyFeedback}
         onCopyInstruction={copyInstructionQuestion}
         onEditChapterLinks={openChapterLinkEditor}
-        onClose={() => setDetail(null)}
+        onClose={() => { setDetail(null); setInstructionCopyFeedback(null); }}
       />
 
       <section className="rounded-xl border border-neon-cyan/20 bg-neon-cyan/5 p-4 text-xs leading-relaxed text-muted-foreground">
