@@ -458,6 +458,25 @@ test('仮・確定・過去の目次項目を個別に折りたたみ、見出�
   assert.doesNotMatch(source, /collapsed[^\n]*(?:filter|flatMap)[^\n]*(?:parentId|pathIds)/);
 });
 
+test('折りたたんだ仮目次と現在の確定目次でも原稿完成チェックを直接更新できる', () => {
+  assert.match(source, /function ManuscriptCompletionToggle\(/);
+  assert.match(source, /className=\{`flex min-h-11 cursor-pointer/);
+  assert.match(source, /focus-within:ring-2 focus-within:ring-neon-cyan\/80/);
+  assert.match(source, /onChange=\{event => onToggleComplete\(record, event\.target\.checked\)\}/);
+  assert.match(source, /const showCollapsedManuscriptToggle = Boolean\([\s\S]*showManuscript && collapsed && record && onToggleManuscriptComplete/);
+  assert.match(source, /showCollapsedManuscriptToggle && \([\s\S]*<ManuscriptCompletionToggle[\s\S]*compact/);
+  assert.match(source, /showManuscript && !showCollapsedManuscriptToggle/);
+  assert.ok((source.match(/collapsed=\{(?:collapsed|outlineCardCollapsed)\}/g) || []).length >= 2);
+  assert.ok((source.match(/onToggleManuscriptComplete=\{(?:onToggleManuscriptComplete|record\.status !== 'rejected' \? toggleChapterManuscriptComplete : undefined)\}/g) || []).length >= 2);
+  assert.match(source, /!collapsed && current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink/);
+  assert.match(source, /!outlineCardCollapsed && activeSection === 'chapters' && record\.status !== 'rejected'/);
+
+  const pastSnapshotTree = source.match(/<OutlineSnapshotTree\s+snapshot=\{snapshot\}[\s\S]*?\/>/)?.[0];
+  assert.ok(pastSnapshotTree);
+  assert.match(pastSnapshotTree, /includeRejected/);
+  assert.doesNotMatch(pastSnapshotTree, /onToggleManuscriptComplete/);
+});
+
 test('仮・確定・過去の表示範囲ごとに全項目をまとめて開閉できる', () => {
   assert.match(source, /function OutlineBulkCollapseControls\(/);
   assert.match(source, /すべて折りたたむ/);

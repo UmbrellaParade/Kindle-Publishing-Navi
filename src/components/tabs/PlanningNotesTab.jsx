@@ -1139,26 +1139,41 @@ function ChapterLinkDialog({
   );
 }
 
-function ChapterManuscriptControls({ record, itemLabel: providedItemLabel, manuscript, busy, onToggleComplete, onEditLink }) {
+function ManuscriptCompletionToggle({ record, itemLabel: providedItemLabel, manuscript, busy, onToggleComplete, compact = false }) {
   const completed = Boolean(manuscript?.completed);
+  const title = record.title || '無題';
+  const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
+  const itemLabel = providedItemLabel || `${typeLabel}「${title}」`;
+  return (
+    <label className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-md border font-bold transition focus-within:outline-none focus-within:ring-2 focus-within:ring-neon-cyan/80 ${compact ? 'px-2 py-1 text-[10px]' : 'px-3 py-2 text-xs'} ${completed ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-200' : 'border-white/15 bg-black/10 text-muted-foreground'} ${busy ? 'cursor-not-allowed opacity-60' : 'hover:border-neon-cyan/40'}`}>
+      <input
+        type="checkbox"
+        checked={completed}
+        disabled={busy}
+        onChange={event => onToggleComplete(record, event.target.checked)}
+        aria-label={`${itemLabel}の原稿を書き終えた`}
+        className="h-4 w-4 accent-emerald-400"
+      />
+      {completed ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <Clock3 className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+      <span>{completed ? '原稿：完成' : '原稿：未完成'}</span>
+    </label>
+  );
+}
+
+function ChapterManuscriptControls({ record, itemLabel: providedItemLabel, manuscript, busy, onToggleComplete, onEditLink }) {
   const documentUrl = String(manuscript?.documentUrl || '');
   const title = record.title || '無題';
   const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
   const itemLabel = providedItemLabel || `${typeLabel}「${title}」`;
   return (
     <div role="group" aria-label={`${itemLabel}の原稿管理`} className="mt-3 flex flex-col gap-2 border-t border-white/10 pt-3 sm:flex-row sm:items-center sm:justify-between">
-      <label className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs font-bold transition ${completed ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-200' : 'border-white/15 bg-black/10 text-muted-foreground'} ${busy ? 'cursor-not-allowed opacity-60' : 'hover:border-neon-cyan/40'}`}>
-        <input
-          type="checkbox"
-          checked={completed}
-          disabled={busy}
-          onChange={event => onToggleComplete(record, event.target.checked)}
-          aria-label={`${itemLabel}の原稿を書き終えた`}
-          className="h-4 w-4 accent-emerald-400"
-        />
-        {completed ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <Clock3 className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
-        <span>{completed ? '原稿：完成' : '原稿：未完成'}</span>
-      </label>
+      <ManuscriptCompletionToggle
+        record={record}
+        itemLabel={itemLabel}
+        manuscript={manuscript}
+        busy={busy}
+        onToggleComplete={onToggleComplete}
+      />
 
       <div className="flex flex-wrap gap-2">
         {documentUrl && (
@@ -1271,12 +1286,35 @@ function OutlineBulkCollapseControls({ viewLabel, cardKeys, collapsedCardKeys, o
   );
 }
 
-function OutlineCardSummaryBadges({ manuscript, showManuscript = false, questionCount = 0, childCount = 0 }) {
+function OutlineCardSummaryBadges({
+  record,
+  itemLabel,
+  manuscript,
+  showManuscript = false,
+  collapsed = false,
+  manuscriptBusy = false,
+  onToggleManuscriptComplete,
+  questionCount = 0,
+  childCount = 0,
+}) {
   const completed = Boolean(manuscript?.completed);
   const hasDocumentLink = Boolean(manuscript?.documentUrl);
+  const showCollapsedManuscriptToggle = Boolean(
+    showManuscript && collapsed && record && onToggleManuscriptComplete,
+  );
   return (
     <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold">
-      {showManuscript && (
+      {showCollapsedManuscriptToggle && (
+        <ManuscriptCompletionToggle
+          record={record}
+          itemLabel={itemLabel}
+          manuscript={manuscript}
+          busy={manuscriptBusy}
+          onToggleComplete={onToggleManuscriptComplete}
+          compact
+        />
+      )}
+      {showManuscript && !showCollapsedManuscriptToggle && (
         <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 ${completed ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-200' : 'border-white/15 bg-black/10 text-muted-foreground'}`}>
           {completed
             ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1550,8 +1588,13 @@ function OutlineSnapshotTree({
                       {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
                     </div>
                     <OutlineCardSummaryBadges
+                      record={record}
+                      itemLabel={itemLabel}
                       manuscript={manuscript}
                       showManuscript={current}
+                      collapsed={collapsed}
+                      manuscriptBusy={busy}
+                      onToggleManuscriptComplete={onToggleManuscriptComplete}
                       questionCount={current ? questions.length : 0}
                       childCount={childCount}
                     />
@@ -1577,7 +1620,7 @@ function OutlineSnapshotTree({
                       addQuestionUnavailableMessage={canAddQuestion?.(record.id) ? '' : 'この項目は以前の確定目次にだけ残っています。仮目次の項目へ質問を紐づけ直してから追加してください。'}
                     />
                   )}
-                  {current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
+                  {!collapsed && current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
                     <ChapterManuscriptControls
                       record={record}
                       itemLabel={itemLabel}
@@ -4238,8 +4281,13 @@ export default function PlanningNotesTab({
                         <StatusBadge status={record.status} />
                       </div>
                       <OutlineCardSummaryBadges
+                        record={record}
+                        itemLabel={outlineItemLabel}
                         manuscript={chapterManuscript}
                         showManuscript={record.status !== 'rejected'}
+                        collapsed={outlineCardCollapsed}
+                        manuscriptBusy={busy}
+                        onToggleManuscriptComplete={record.status !== 'rejected' ? toggleChapterManuscriptComplete : undefined}
                         questionCount={record.status !== 'rejected' ? chapterQuestions.length : 0}
                         childCount={hasChildren ? chapters.filter(chapter => chapter.parentId === record.id).length : 0}
                       />
@@ -4311,7 +4359,7 @@ export default function PlanningNotesTab({
                       onAddQuestion={openNewQuestionForChapter}
                     />
                   )}
-                  {activeSection === 'chapters' && record.status !== 'rejected' && (
+                  {!outlineCardCollapsed && activeSection === 'chapters' && record.status !== 'rejected' && (
                     <ChapterManuscriptControls
                       record={record}
                       itemLabel={outlineItemLabel}
