@@ -1111,6 +1111,74 @@ export function getPlanningChapterNodeLabel(nodeType) {
   return PLANNING_CHAPTER_NODE_TYPES[nodeType] || PLANNING_CHAPTER_NODE_TYPES.chapter;
 }
 
+function unwrapPlanningChapterRecord(value) {
+  if (!isPlainObject(value)) return null;
+  return isPlainObject(value.record) ? value.record : value;
+}
+
+function compareStablePlanningChapterOrder(left, right) {
+  const leftOrder = Number.isFinite(left.order) ? left.order : Number.MAX_SAFE_INTEGER;
+  const rightOrder = Number.isFinite(right.order) ? right.order : Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+  const leftId = typeof left.id === 'string' ? left.id : '';
+  const rightId = typeof right.id === 'string' ? right.id : '';
+  if (leftId === rightId) return 0;
+  return leftId < rightId ? -1 : 1;
+}
+
+/**
+ * Derive the visible ordinal for every outline record without changing stored data.
+ * Numbering restarts for each parent and node type. The input may be either chapter
+ * records or rows returned by the flatten helpers.
+ */
+export function buildPlanningChapterOrdinalLabels(chapters) {
+  const labels = new Map();
+  if (!Array.isArray(chapters)) return labels;
+
+  const groupsByParentAndType = new Map();
+  for (const value of chapters) {
+    const record = unwrapPlanningChapterRecord(value);
+    if (!record || typeof record.id !== 'string' || !record.id) continue;
+    const nodeType = CHAPTER_NODE_TYPE_VALUES.has(record.nodeType) ? record.nodeType : 'chapter';
+    const parentId = typeof record.parentId === 'string' ? record.parentId : '';
+    const groupKey = `${parentId}\u0000${nodeType}`;
+    const group = groupsByParentAndType.get(groupKey) || [];
+    group.push({ ...record, nodeType });
+    groupsByParentAndType.set(groupKey, group);
+  }
+
+  for (const group of groupsByParentAndType.values()) {
+    group.sort(compareStablePlanningChapterOrder);
+    group.forEach((record, index) => {
+      labels.set(record.id, `第${index + 1}${getPlanningChapterNodeLabel(record.nodeType)}`);
+    });
+  }
+  return labels;
+}
+
+export function getPlanningChapterOrdinalLabel(record, chapters) {
+  const safeRecord = unwrapPlanningChapterRecord(record);
+  if (!safeRecord || typeof safeRecord.id !== 'string' || !safeRecord.id) return '';
+  return buildPlanningChapterOrdinalLabels(chapters).get(safeRecord.id) || '';
+}
+
+// Only remove an unmistakable structural prefix followed by a separator and a
+// substantive title. Prefixes embedded in prose, such as "第一章では…", stay intact.
+const LEGACY_PLANNING_CHAPTER_ORDINAL_RE = /^(?:第[ \t\u3000]*)?[0-9０-９〇零一二三四五六七八九十百千]+[ \t\u3000]*(?:部|章|話|節)(?:[ \t\u3000]*[：:・\-—–][ \t\u3000]*|[ \t\u3000]+)(\S[\s\S]*)$/u;
+
+export function getPlanningChapterDisplayTitle(title) {
+  if (typeof title !== 'string') return '';
+  return LEGACY_PLANNING_CHAPTER_ORDINAL_RE.exec(title)?.[1] || title;
+}
+
+export function getPlanningChapterPresentation(record, chapters) {
+  const safeRecord = unwrapPlanningChapterRecord(record);
+  return {
+    ordinalLabel: getPlanningChapterOrdinalLabel(safeRecord, chapters),
+    displayTitle: getPlanningChapterDisplayTitle(safeRecord?.title),
+  };
+}
+
 export function getPlanningDraftOutlineChapters(data) {
   const normalized = normalizePlanningNotes(data);
   const activeIds = new Set(normalized.draftOutlineChapterIds);
@@ -3338,6 +3406,7 @@ function appendMarkdownOutline(lines, {
   }
 
   const visibleTree = flattenChapterRecords(chapters, { includeRejected: false });
+  const visibleOrdinalLabels = buildPlanningChapterOrdinalLabels(visibleTree);
   const writingStateByChapterId = Array.isArray(writingStates)
     ? new Map(writingStates.map(state => [state.chapterId, state]))
     : null;
@@ -3345,10 +3414,13 @@ function appendMarkdownOutline(lines, {
     lines.push('構成項目はまだありません。', '');
   } else {
     for (const { record, depth } of visibleTree) {
+      const ordinalLabel = visibleOrdinalLabels.get(record.id)
+        || `第1${getPlanningChapterNodeLabel(record.nodeType)}`;
+      const displayTitle = getPlanningChapterDisplayTitle(record.title) || '無題';
       const manuscriptLabel = writingStateByChapterId
         ? `（${writingStateByChapterId.get(record.id)?.completed ? '原稿：書き終えた' : '原稿：未完了'}）`
         : '';
-      lines.push(`${'  '.repeat(depth)}- ${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}${manuscriptLabel}`);
+      lines.push(`${'  '.repeat(depth)}- ${ordinalLabel}：${displayTitle}${manuscriptLabel}`);
     }
     lines.push('');
   }
@@ -3357,10 +3429,15 @@ function appendMarkdownOutline(lines, {
   if (completeTree.length === 0) return;
   lines.push(`${'#'.repeat(safeHeadingLevel + 1)} 構成項目の詳細`, '');
   for (const { record } of completeTree) {
-    const rejectedLabel = record.status === 'rejected' ? '（採用しない）' : '';
+    const displayTitle = getPlanningChapterDisplayTitle(record.title) || '無題';
+    const isRejected = record.status === 'rejected';
+    const outlineLabel = isRejected
+      ? getPlanningChapterNodeLabel(record.nodeType)
+      : visibleOrdinalLabels.get(record.id) || `第1${getPlanningChapterNodeLabel(record.nodeType)}`;
+    const rejectedLabel = isRejected ? ' ／ 採用しない（履歴）' : '';
     markdownJsonBlock(
       lines,
-      `${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}${rejectedLabel}`,
+      `${outlineLabel}：${displayTitle}${rejectedLabel}`,
       record,
       { headingLevel: safeHeadingLevel + 2 },
     );

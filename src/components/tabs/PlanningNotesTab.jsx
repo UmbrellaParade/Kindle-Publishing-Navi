@@ -61,6 +61,7 @@ import {
   applyMarketResearchImport,
   assignDecisionCanonical,
   assignInstructionCanonical,
+  buildPlanningChapterOrdinalLabels,
   buildPlanningNotesSharePackage,
   clearInstructionCanonical,
   createPlanningRecord,
@@ -75,6 +76,8 @@ import {
   flattenPlanningChapterTree,
   flattenPlanningOutlineSnapshot,
   formatPlanningDateTimeJst,
+  getPlanningChapterDisplayTitle,
+  getPlanningChapterPresentation,
   getPlanningMarketMetrics,
   getConfirmedPlanningOutline,
   getPlanningDraftOutlineChapters,
@@ -152,7 +155,7 @@ const FORM_FIELDS = {
     ['recheckStatus', '再確認状態', 'select', '', { needs_recheck: '要再確認', checked: '確認済み', not_required: '再確認不要' }],
   ],
   chapters: [
-    ['title', 'タイトル（例：第一部、第一話）', 'text'],
+    ['title', '題名（第1章などの番号は自動）', 'text', '番号は並び順から自動表示されます。題名だけを入力してください。'],
     ['role', 'この構成項目の役割', 'textarea'],
     ['readerQuestion', '読者の疑問', 'textarea'],
     ['personalSources', '使う本人体験・取材', 'textarea'],
@@ -229,6 +232,21 @@ function recordTitle(section, record) {
   return record.decision || '未入力の意思決定';
 }
 
+function chapterPresentation(record, chaptersOrOrdinalLabels) {
+  const ordinalLabel = chaptersOrOrdinalLabels instanceof Map
+    ? chaptersOrOrdinalLabels.get(record?.id)
+    : getPlanningChapterPresentation(record, chaptersOrOrdinalLabels).ordinalLabel;
+  return {
+    ordinalLabel: ordinalLabel || getPlanningChapterNodeLabel(record?.nodeType),
+    displayTitle: getPlanningChapterDisplayTitle(record?.title) || '無題',
+  };
+}
+
+function chapterPresentationLabel(record, chapters) {
+  const { ordinalLabel, displayTitle } = chapterPresentation(record, chapters);
+  return `${ordinalLabel} ${displayTitle}`;
+}
+
 function chapterPathLabel(recordOrId, chapters, { includeSelf = true } = {}) {
   const chapterById = new Map(chapters.map(chapter => [chapter.id, chapter]));
   let current = typeof recordOrId === 'string' ? chapterById.get(recordOrId) : recordOrId;
@@ -237,7 +255,7 @@ function chapterPathLabel(recordOrId, chapters, { includeSelf = true } = {}) {
   const visited = new Set();
   while (current && !visited.has(current.id)) {
     visited.add(current.id);
-    path.push(`${getPlanningChapterNodeLabel(current.nodeType)}：${current.title || '無題'}`);
+    path.push(chapterPresentationLabel(current, chapters));
     current = current.parentId ? chapterById.get(current.parentId) : null;
   }
   const ordered = path.reverse();
@@ -245,12 +263,51 @@ function chapterPathLabel(recordOrId, chapters, { includeSelf = true } = {}) {
   return ordered.join(' › ');
 }
 
+function chapterPlainPathLabel(recordOrId, chapters, { includeSelf = true } = {}) {
+  const chapterById = new Map(chapters.map(chapter => [chapter.id, chapter]));
+  let current = typeof recordOrId === 'string' ? chapterById.get(recordOrId) : recordOrId;
+  if (!current) return typeof recordOrId === 'string' ? recordOrId : '';
+  const path = [];
+  const visited = new Set();
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    path.push(`${getPlanningChapterNodeLabel(current.nodeType)} ${getPlanningChapterDisplayTitle(current.title) || '無題'}`);
+    current = current.parentId ? chapterById.get(current.parentId) : null;
+  }
+  const ordered = path.reverse();
+  if (!includeSelf) ordered.pop();
+  return ordered.join(' › ');
+}
+
+function chapterContextPresentation(record, allChapters, activeChapterIds) {
+  if (!activeChapterIds.has(record?.id) || record?.status === 'rejected') {
+    return {
+      ordinalLabel: getPlanningChapterNodeLabel(record?.nodeType),
+      displayTitle: getPlanningChapterDisplayTitle(record?.title) || '無題',
+    };
+  }
+  const numberedActiveChapters = allChapters.filter(chapter => (
+    activeChapterIds.has(chapter.id) && chapter.status !== 'rejected'
+  ));
+  return chapterPresentation(record, numberedActiveChapters);
+}
+
+function chapterContextPathLabel(record, allChapters, activeChapterIds, options = {}) {
+  if (!activeChapterIds.has(record?.id) || record?.status === 'rejected') {
+    return chapterPlainPathLabel(record, allChapters, options);
+  }
+  const numberedActiveChapters = allChapters.filter(chapter => (
+    activeChapterIds.has(chapter.id) && chapter.status !== 'rejected'
+  ));
+  return chapterPathLabel(record, numberedActiveChapters, options);
+}
+
 function chapterReferenceLabel(recordOrId, allChapters, activeChapterIds) {
   const record = typeof recordOrId === 'string'
     ? allChapters.find(chapter => chapter.id === recordOrId)
     : recordOrId;
   if (!record) return '削除済みの構成項目';
-  const path = chapterPathLabel(record, allChapters);
+  const path = chapterContextPathLabel(record, allChapters, activeChapterIds);
   return activeChapterIds.has(record.id) ? path : `旧目次：${path}`;
 }
 
@@ -264,9 +321,11 @@ function ChapterReferenceSummary({ record, allChapters, activeChapterIds, classN
 }
 
 function planningOutlineRewritePrompt(chapterRows, concept) {
-  const currentOutline = chapterRows.length > 0
-    ? chapterRows.map(({ record, depth }) => (
-      `${'#'.repeat(Math.min(depth + 1, 6))} ${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}`
+  const activeRows = chapterRows.filter(({ record }) => record.status !== 'rejected');
+  const ordinalLabels = buildPlanningChapterOrdinalLabels(activeRows);
+  const currentOutline = activeRows.length > 0
+    ? activeRows.map(({ record, depth }) => (
+      `${'#'.repeat(Math.min(depth + 1, 6))} ${chapterPresentationLabel(record, ordinalLabels)}`
     )).join('\n')
     : '（現在の仮目次は空です）';
   const conceptLines = [
@@ -398,6 +457,9 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, 
   const record = detail?.record;
   const section = detail?.section === 'conceptHistory' ? 'concept' : detail?.section;
   const fields = FORM_FIELDS[section] || [];
+  const chapterDetailPresentation = record && detail?.section === 'chapters'
+    ? chapterContextPresentation(record, chapters, activeChapterIds)
+    : null;
   const activeCopyFeedback = record
     && detail.section === 'instructionVersions'
     && copyFeedback?.recordId === record.id
@@ -412,7 +474,11 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, 
         <DialogHeader className="border-b border-[#2a2a4a] px-5 pb-4 pt-5">
           <DialogTitle className="flex items-center gap-2 text-neon-cyan">
             <BookOpenText className="h-5 w-5" aria-hidden="true" />
-            {record ? recordTitle(detail.section, record) : '保存内容'}
+            {record
+              ? chapterDetailPresentation
+                ? `${chapterDetailPresentation.ordinalLabel} ${chapterDetailPresentation.displayTitle}`
+                : recordTitle(detail.section, record)
+              : '保存内容'}
           </DialogTitle>
           <DialogDescription>保存済みの内容を読む画面です。ここでは変更しません。</DialogDescription>
         </DialogHeader>
@@ -422,7 +488,7 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, 
               <StatusBadge status={record.status} />
               {detail.section === 'chapters' && (
                 <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
-                  {getPlanningChapterNodeLabel(record.nodeType)}
+                  {chapterDetailPresentation.ordinalLabel}
                 </span>
               )}
               <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground">
@@ -451,12 +517,14 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, 
               <div className="rounded-lg border border-neon-cyan/20 bg-neon-cyan/5 p-3">
                 <p className="text-[10px] font-bold text-neon-cyan">入っている場所</p>
                 <p className="mt-1 break-words text-sm text-foreground">
-                  {chapterPathLabel(record, chapters, { includeSelf: false }) || '本全体の最上位'}
+                  {chapterContextPathLabel(record, chapters, activeChapterIds, { includeSelf: false }) || '本全体の最上位'}
                 </p>
               </div>
             )}
             {fields.map(([field, label, type, _help, options]) => {
-              const rawValue = record[field];
+              const rawValue = detail.section === 'chapters' && field === 'title'
+                ? getPlanningChapterDisplayTitle(record[field])
+                : record[field];
               if (rawValue === '' || rawValue === undefined || rawValue === null) return null;
               const value = options?.[rawValue] || String(rawValue);
               return (
@@ -608,6 +676,10 @@ function OutlineRewriteDialog({
     () => flattenOutlineProposal(value?.preview?.proposedChapters || []),
     [value?.preview],
   );
+  const previewOrdinalLabels = useMemo(
+    () => buildPlanningChapterOrdinalLabels(previewRows),
+    [previewRows],
+  );
   const step = value?.step || 1;
   const mode = value?.mode || 'paste';
   const stepLabels = ['方法を選ぶ', '新しい目次を用意', '安全確認'];
@@ -737,16 +809,19 @@ function OutlineRewriteDialog({
                   部 {value.preview?.counts?.part || 0}・章 {value.preview?.counts?.chapter || 0}・話 {value.preview?.counts?.episode || 0}・節 {value.preview?.counts?.section || 0}
                 </p>
                 <div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1" aria-label="新しい仮目次の階層プレビュー">
-                  {previewRows.map(({ record, depth }) => (
-                    <div
-                      key={record.id}
-                      className="rounded-lg border border-white/10 bg-black/10 px-3 py-2"
-                      style={{ marginLeft: `${Math.min(depth, 3) * 8}px` }}
-                    >
-                      <span className="mr-2 inline-block rounded-full border border-neon-pink/30 px-2 py-0.5 text-[10px] font-black text-neon-pink">{getPlanningChapterNodeLabel(record.nodeType)}</span>
-                      <span className="break-words text-sm font-bold text-foreground">{record.title || '無題'}</span>
-                    </div>
-                  ))}
+                  {previewRows.map(({ record, depth }) => {
+                    const { ordinalLabel, displayTitle } = chapterPresentation(record, previewOrdinalLabels);
+                    return (
+                      <div
+                        key={record.id}
+                        className="rounded-lg border border-white/10 bg-black/10 px-3 py-2"
+                        style={{ marginLeft: `${Math.min(depth, 3) * 8}px` }}
+                      >
+                        <span className="mr-2 inline-block rounded-full border border-neon-pink/30 px-2 py-0.5 text-[10px] font-black text-neon-pink">{ordinalLabel}</span>
+                        <span className="break-words text-sm font-bold text-foreground">{displayTitle}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </>}
               {(value.preview?.warnings || []).length > 0 && (
@@ -813,6 +888,12 @@ function ChapterLinkDialog({
       .map(chapterId => allChapters.find(chapter => chapter.id === chapterId))
       .filter(Boolean)
   ), [activeChapterIds, allChapters, value?.chapterIds]);
+  const chapterOrdinalLabels = useMemo(
+    () => buildPlanningChapterOrdinalLabels(
+      chapterRows.filter(({ record }) => record.status !== 'rejected'),
+    ),
+    [chapterRows],
+  );
   const dirty = value ? !sameStringSet(value.initialChapterIds, value.chapterIds) : false;
   const toggleChapter = (chapterId, checked) => onChange({
     ...value,
@@ -852,7 +933,7 @@ function ChapterLinkDialog({
                   return (
                     <label key={chapter.id} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-[#34345a] px-3 py-2 text-xs">
                       <input type="checkbox" checked={checked} onChange={event => toggleChapter(chapter.id, event.target.checked)} className="h-4 w-4 accent-cyan-400" />
-                      <span className="min-w-0 break-words">{'› '.repeat(Math.min(depth, 3))}{getPlanningChapterNodeLabel(chapter.nodeType)}：{chapter.title || '無題'}</span>
+                      <span className="min-w-0 break-words">{'› '.repeat(Math.min(depth, 3))}{chapterPresentationLabel(chapter, chapterOrdinalLabels)}</span>
                     </label>
                   );
                 })}
@@ -887,12 +968,12 @@ function ChapterLinkDialog({
   );
 }
 
-function ChapterManuscriptControls({ record, manuscript, busy, onToggleComplete, onEditLink }) {
+function ChapterManuscriptControls({ record, itemLabel: providedItemLabel, manuscript, busy, onToggleComplete, onEditLink }) {
   const completed = Boolean(manuscript?.completed);
   const documentUrl = String(manuscript?.documentUrl || '');
   const title = record.title || '無題';
   const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
-  const itemLabel = `${typeLabel}「${title}」`;
+  const itemLabel = providedItemLabel || `${typeLabel}「${title}」`;
   return (
     <div role="group" aria-label={`${itemLabel}の原稿管理`} className="mt-3 flex flex-col gap-2 border-t border-white/10 pt-3 sm:flex-row sm:items-center sm:justify-between">
       <label className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs font-bold transition ${completed ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-200' : 'border-white/15 bg-black/10 text-muted-foreground'} ${busy ? 'cursor-not-allowed opacity-60' : 'hover:border-neon-cyan/40'}`}>
@@ -962,6 +1043,63 @@ function OutlineCardCollapseButton({ cardKey, collapsed, itemLabel, onToggle }) 
   );
 }
 
+function OutlineBulkCollapseControls({ viewLabel, cardKeys, collapsedCardKeys, onSetCollapsed }) {
+  const collapseButtonRef = useRef(null);
+  const expandButtonRef = useRef(null);
+  const uniqueCardKeys = [...new Set(cardKeys)];
+  const itemCount = uniqueCardKeys.length;
+  const collapsedCount = uniqueCardKeys.filter(cardKey => collapsedCardKeys.has(cardKey)).length;
+  const allCollapsed = itemCount > 0 && collapsedCount === itemCount;
+  const allExpanded = collapsedCount === 0;
+  const statusText = itemCount === 0
+    ? `${viewLabel}に折りたためる項目はありません`
+    : `${viewLabel}：${itemCount}件中${collapsedCount}件を折りたたみ中`;
+  const focusAfterUpdate = targetRef => {
+    window.requestAnimationFrame(() => targetRef.current?.focus());
+  };
+  return (
+    <div
+      role="group"
+      aria-label={`${viewLabel}の項目をまとめて開閉`}
+      className="flex flex-col gap-2 rounded-lg border border-white/10 bg-black/10 p-3 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <p role="status" aria-live="polite" aria-atomic="true" className="text-[11px] font-bold text-muted-foreground">
+        {statusText}
+      </p>
+      <div className="flex flex-col gap-2 min-[420px]:flex-row">
+        <Button
+          ref={collapseButtonRef}
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            onSetCollapsed(uniqueCardKeys, true, viewLabel);
+            focusAfterUpdate(expandButtonRef);
+          }}
+          disabled={itemCount === 0 || allCollapsed}
+          className="min-h-11 flex-1 border-white/15 text-foreground min-[420px]:flex-none"
+        >
+          <ChevronRight className="h-4 w-4" aria-hidden="true" />すべて折りたたむ
+        </Button>
+        <Button
+          ref={expandButtonRef}
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            onSetCollapsed(uniqueCardKeys, false, viewLabel);
+            focusAfterUpdate(collapseButtonRef);
+          }}
+          disabled={itemCount === 0 || allExpanded}
+          className="min-h-11 flex-1 border-neon-cyan/30 text-neon-cyan min-[420px]:flex-none"
+        >
+          <ChevronDown className="h-4 w-4" aria-hidden="true" />すべて開く
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function OutlineCardSummaryBadges({ manuscript, showManuscript = false, questionCount = 0, childCount = 0 }) {
   const completed = Boolean(manuscript?.completed);
   const hasDocumentLink = Boolean(manuscript?.documentUrl);
@@ -996,6 +1134,7 @@ function OutlineCardSummaryBadges({ manuscript, showManuscript = false, question
 
 function ChapterWritingQuestions({
   record,
+  itemLabel: providedItemLabel,
   questions = [],
   currentConfirmed = false,
   onCopyInstruction,
@@ -1005,7 +1144,7 @@ function ChapterWritingQuestions({
 }) {
   const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
   const title = record.title || '無題';
-  const itemLabel = `${typeLabel}「${title}」`;
+  const itemLabel = providedItemLabel || `${typeLabel}「${title}」`;
   return (
     <section aria-label={`${itemLabel}の原稿を作る質問`} className="mt-3 border-t border-white/10 pt-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1164,6 +1303,7 @@ function OutlineSnapshotTree({
   collapseScope,
   collapsedCardKeys,
   onToggleCard,
+  onSetCardsCollapsed,
   current = false,
   includeRejected = false,
   busy = false,
@@ -1179,6 +1319,12 @@ function OutlineSnapshotTree({
   if (!snapshot) return null;
   const rows = flattenPlanningOutlineSnapshot(snapshot, { includeRejected });
   const visibleRecords = rows.filter(({ record }) => includeRejected || record.status !== 'rejected');
+  const visibleOrdinalLabels = buildPlanningChapterOrdinalLabels(
+    visibleRecords.filter(({ record }) => record.status !== 'rejected'),
+  );
+  const snapshotCardKeys = visibleRecords.map(({ record }) => (
+    `${collapseScope || `history:${snapshot.id}`}:${record.id}`
+  ));
   const counts = visibleRecords.reduce((result, { record }) => ({
     ...result,
     [record.nodeType]: (result[record.nodeType] || 0) + 1,
@@ -1195,6 +1341,12 @@ function OutlineSnapshotTree({
       <p className="text-xs text-muted-foreground">
         部 {counts.part || 0}・章 {counts.chapter || 0}・話 {counts.episode || 0}・節 {counts.section || 0}
       </p>
+      <OutlineBulkCollapseControls
+        viewLabel={current ? '確定目次' : `過去の目次「${snapshot.label}」`}
+        cardKeys={snapshotCardKeys}
+        collapsedCardKeys={collapsedCardKeys}
+        onSetCollapsed={onSetCardsCollapsed}
+      />
       {snapshot.note && <p className="whitespace-pre-wrap rounded-lg border border-white/10 bg-black/10 p-3 text-sm leading-relaxed text-foreground">{snapshot.note}</p>}
       {visibleRecords.length === 0 ? (
         <p className="rounded-lg border border-dashed border-white/15 p-4 text-center text-sm text-muted-foreground">表示する構成項目はありません。</p>
@@ -1205,7 +1357,8 @@ function OutlineSnapshotTree({
             const hasChildren = visibleRecords.some(({ record: child }) => child.parentId === record.id);
             const childCount = visibleRecords.filter(({ record: child }) => child.parentId === record.id).length;
             const manuscript = current && getManuscript ? getManuscript(record.id) : undefined;
-            const itemLabel = `${getPlanningChapterNodeLabel(record.nodeType)}「${record.title || '無題'}」`;
+            const { ordinalLabel, displayTitle } = chapterPresentation(record, visibleOrdinalLabels);
+            const itemLabel = `${ordinalLabel}「${displayTitle}」`;
             const cardKey = `${collapseScope || `history:${snapshot.id}`}:${record.id}`;
             const collapsed = collapsedCardKeys?.has(cardKey) || false;
             return (
@@ -1217,10 +1370,12 @@ function OutlineSnapshotTree({
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
-                        {getPlanningChapterNodeLabel(record.nodeType)}
-                      </span>
-                      <span className="break-words font-bold text-foreground">{record.title || '無題'}</span>
+                      <h3 className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="shrink-0 rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
+                          {ordinalLabel}
+                        </span>
+                        <span className="break-words font-bold text-foreground">{displayTitle}</span>
+                      </h3>
                       {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
                     </div>
                     <OutlineCardSummaryBadges
@@ -1242,6 +1397,7 @@ function OutlineSnapshotTree({
                   {current && getQuestions && onCopyQuestion && onOpenQuestion && (questions.length > 0 || !hasChildren) && (
                     <ChapterWritingQuestions
                       record={record}
+                      itemLabel={itemLabel}
                       questions={questions}
                       currentConfirmed
                       onCopyInstruction={onCopyQuestion}
@@ -1253,6 +1409,7 @@ function OutlineSnapshotTree({
                   {current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
                     <ChapterManuscriptControls
                       record={record}
+                      itemLabel={itemLabel}
                       manuscript={manuscript}
                       busy={busy}
                       onToggleComplete={onToggleManuscriptComplete}
@@ -1284,6 +1441,12 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
   const chapterRows = useMemo(
     () => planningData ? flattenPlanningChapterTree(planningData) : [],
     [planningData],
+  );
+  const chapterOrdinalLabels = useMemo(
+    () => buildPlanningChapterOrdinalLabels(
+      chapterRows.filter(({ record }) => record.status !== 'rejected'),
+    ),
+    [chapterRows],
   );
   const archivedLinkedChapters = useMemo(() => (
     (draft?.chapterIds || [])
@@ -1336,7 +1499,7 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="space-y-1.5 text-xs font-bold text-foreground">
-                  <span>項目の種類</span>
+                  <span>種類（部／章／話／節）</span>
                   <select
                     value={draft?.nodeType || 'chapter'}
                     onChange={event => {
@@ -1361,7 +1524,7 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
                     ))}
                   </select>
                   <span id="planning-node-type-help" className="block font-normal leading-relaxed text-muted-foreground">
-                    {currentChapterHasChildren ? '子項目があるため、種類は変更できません。' : '例：第一部は「部」、第一話は「話」を選びます。'}
+                    {currentChapterHasChildren ? '子項目があるため、種類は変更できません。' : '「章」から「話」への変更もできます。番号は並び順から自動表示されます。'}
                   </span>
                 </label>
                 <label className="space-y-1.5 text-xs font-bold text-foreground">
@@ -1375,7 +1538,7 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
                     <option value="">最上位に置く</option>
                     {chapterParentOptions.map(({ record, depth }) => (
                       <option key={record.id} value={record.id}>
-                        {`${'　'.repeat(Math.min(depth, 3))}${getPlanningChapterNodeLabel(record.nodeType)}：${record.title || '無題'}`}
+                        {`${'　'.repeat(Math.min(depth, 3))}${chapterPresentationLabel(record, chapterOrdinalLabels)}`}
                       </option>
                     ))}
                   </select>
@@ -1424,7 +1587,7 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
                             className="h-4 w-4 accent-cyan-400"
                           />
                           <span className="min-w-0 break-words">
-                            {'› '.repeat(Math.min(depth, 3))}{getPlanningChapterNodeLabel(chapter.nodeType)}：{chapter.title || '無題'}
+                            {'› '.repeat(Math.min(depth, 3))}{chapterPresentationLabel(chapter, chapterOrdinalLabels)}
                           </span>
                         </label>
                       );
@@ -2344,6 +2507,18 @@ export default function PlanningNotesTab({
     onCollapsedOutlineCardKeysChange(nextKeys);
   };
 
+  const setOutlineCardsCollapsed = (cardKeys, shouldCollapse, viewLabel) => {
+    if (!onCollapsedOutlineCardKeysChange) return;
+    const targetKeySet = new Set(cardKeys.filter(Boolean));
+    if (targetKeySet.size === 0) return;
+    const preservedKeys = collapsedOutlineCardKeys.filter(key => !targetKeySet.has(key));
+    const nextKeys = shouldCollapse
+      ? [...preservedKeys, ...targetKeySet]
+      : preservedKeys;
+    onCollapsedOutlineCardKeysChange(nextKeys);
+    setStatusMessage(`${viewLabel}の${targetKeySet.size}件を${shouldCollapse ? 'すべて折りたたみました' : 'すべて開きました'}`);
+  };
+
   const selectActiveSection = section => {
     const safeSection = normalizePlanningViewSection(section);
     if (safeSection === activeSectionRef.current) return;
@@ -2493,6 +2668,16 @@ export default function PlanningNotesTab({
     [data.chapterWritingStates],
   );
   const chapterRows = useMemo(() => flattenPlanningChapterTree(data), [data]);
+  const draftDisplayChapters = useMemo(
+    () => chapterRows
+      .filter(({ record }) => record.status !== 'rejected')
+      .map(({ record }) => record),
+    [chapterRows],
+  );
+  const draftOrdinalLabels = useMemo(
+    () => buildPlanningChapterOrdinalLabels(draftDisplayChapters),
+    [draftDisplayChapters],
+  );
   const outlineSnapshots = useMemo(
     () => sortPlanningOutlineSnapshotsNewest(data),
     [data],
@@ -2727,21 +2912,25 @@ export default function PlanningNotesTab({
   };
 
   const openNewQuestionForChapter = chapter => {
-    const typeLabel = getPlanningChapterNodeLabel(chapter.nodeType);
+    const itemLabel = chapterPresentationLabel(chapter, draftOrdinalLabels);
     openNewRecord('instructionVersions', {
       role: 'writing',
       chapterIds: [chapter.id],
     }, {
-      title: `${typeLabel}「${chapter.title || '無題'}」の原稿を作る質問を追加`,
+      title: `${itemLabel}の原稿を作る質問を追加`,
     });
   };
 
   const openEditRecord = (section, record) => {
+    const isChapter = section === 'chapters';
+    const editorRecord = isChapter
+      ? { ...record, title: getPlanningChapterDisplayTitle(record.title) }
+      : record;
     setEditor({
       projectId: project.id,
       section,
-      title: `${recordTitle(section, record)}を編集`,
-      draft: { ...record, chapterIds: [...record.chapterIds] },
+      title: `${isChapter ? chapterPresentationLabel(record, draftOrdinalLabels) : recordTitle(section, record)}を編集`,
+      draft: { ...editorRecord, chapterIds: [...record.chapterIds] },
       dirty: false,
       expectedUpdatedAt: record.updatedAt,
       initialStatus: record.status,
@@ -2791,7 +2980,7 @@ export default function PlanningNotesTab({
     setManuscriptLinkEditor({
       projectId: project.id,
       chapterId: record.id,
-      title: record.title,
+      title: getPlanningChapterDisplayTitle(record.title),
       nodeType: record.nodeType,
       originalDocumentUrl: manuscript.documentUrl,
       documentUrl: manuscript.documentUrl,
@@ -2802,7 +2991,7 @@ export default function PlanningNotesTab({
 
   const toggleChapterManuscriptComplete = async (record, completed) => {
     const manuscript = getPlanningChapterManuscript(data, record.id);
-    const title = record.title || '無題';
+    const title = chapterPresentationLabel(record, draftOrdinalLabels);
     await persist(current => updatePlanningChapterManuscript(
       current,
       record.id,
@@ -2842,7 +3031,10 @@ export default function PlanningNotesTab({
         return;
       }
     }
-    const draft = duplicatePlanningRecord(data, section, record.id);
+    const duplicated = duplicatePlanningRecord(data, section, record.id);
+    const draft = section === 'chapters'
+      ? { ...duplicated, title: getPlanningChapterDisplayTitle(duplicated.title) }
+      : duplicated;
     setEditor({
       projectId: project.id,
       section,
@@ -2951,7 +3143,10 @@ export default function PlanningNotesTab({
         ? '\n\n原稿完成チェックとリンクは、過去または確定済みの目次側に残ります。'
         : '\n\n削除が実行される場合、この項目だけの原稿完成チェックとリンクも一緒に削除されます。'
       : '';
-    if (!globalThis.window.confirm(`「${recordTitle(section, record)}」だけを削除しますか？${manuscriptNotice}\n\n子項目や取材との紐づけがある場合は削除せず停止します。目次全体を変えたいときは、キャンセルして「目次をまとめて書き直す」を使ってください。`)) return;
+    const displayName = section === 'chapters'
+      ? chapterPresentationLabel(record, draftOrdinalLabels)
+      : recordTitle(section, record);
+    if (!globalThis.window.confirm(`「${displayName}」だけを削除しますか？${manuscriptNotice}\n\n子項目や取材との紐づけがある場合は削除せず停止します。目次全体を変えたいときは、キャンセルして「目次をまとめて書き直す」を使ってください。`)) return;
     await persist(current => deletePlanningRecord(current, section, record.id, {
       expectedUpdatedAt: record.updatedAt,
     }), 'ノートを削除しました', { closeEditor: false });
@@ -2960,7 +3155,7 @@ export default function PlanningNotesTab({
   const handleMoveChapter = async (record, direction) => {
     const next = await persist(current => movePlanningChapter(current, record.id, direction, {
       expectedRevision: data.chapterOrderRevision,
-    }), `「${record.title || '無題の構成項目'}」を${direction === 'up' ? '上' : '下'}へ移動しました`, { closeEditor: false });
+    }), `「${chapterPresentationLabel(record, draftOrdinalLabels)}」を${direction === 'up' ? '上' : '下'}へ移動しました`, { closeEditor: false });
     if (next) setData(next);
   };
 
@@ -3348,7 +3543,7 @@ export default function PlanningNotesTab({
                 <option value="all">すべての部・章・話・節</option><option value="unlinked">構成項目へ未紐づけ</option><option value="archived">旧目次に紐づく記録</option>
                 {chapterRows.map(({ record: chapter, depth }) => (
                   <option key={chapter.id} value={chapter.id}>
-                    {`${'　'.repeat(Math.min(depth, 3))}${getPlanningChapterNodeLabel(chapter.nodeType)}：${chapter.title || '無題'}`}
+                    {`${'　'.repeat(Math.min(depth, 3))}${chapterPresentationLabel(chapter, draftOrdinalLabels)}`}
                   </option>
                 ))}
               </select>
@@ -3565,6 +3760,17 @@ export default function PlanningNotesTab({
               <p className="text-xs leading-relaxed text-muted-foreground">
                 <span className="font-bold text-foreground">仮目次</span>は何度でも編集できます。<span className="font-bold text-foreground">確定目次</span>は目次本文を変えない保存版ですが、原稿の完成チェックと原稿リンクだけは更新できます。<span className="font-bold text-foreground">過去の目次</span>は変更できません。各項目の「本人承認済み」とは別です。
               </p>
+              <p className="rounded-lg border border-neon-cyan/20 bg-neon-cyan/5 px-3 py-2 text-xs leading-relaxed text-cyan-50">
+                第N部／章／話／節は並び順から自動表示されます。「編集」で種類と題名を変更できます。
+              </p>
+              {outlineView === 'draft' && (
+                <OutlineBulkCollapseControls
+                  viewLabel="仮目次"
+                  cardKeys={sectionRows.map(({ record }) => `draft:${record.id}`)}
+                  collapsedCardKeys={collapsedOutlineCardKeySet}
+                  onSetCollapsed={setOutlineCardsCollapsed}
+                />
+              )}
               {outlineView === 'draft' && (
                 <div className="space-y-3 border-t border-white/10 pt-3">
                   <div className="flex flex-col gap-2 rounded-xl border border-neon-pink/30 bg-neon-pink/5 p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -3665,6 +3871,7 @@ export default function PlanningNotesTab({
                     collapseScope={`confirmed:${confirmedOutline.id}`}
                     collapsedCardKeys={collapsedOutlineCardKeySet}
                     onToggleCard={toggleOutlineCard}
+                    onSetCardsCollapsed={setOutlineCardsCollapsed}
                     current
                     busy={busy}
                     getManuscript={chapterId => manuscriptByChapterId.get(chapterId)}
@@ -3706,6 +3913,7 @@ export default function PlanningNotesTab({
                       collapseScope={`history:${snapshot.id}`}
                       collapsedCardKeys={collapsedOutlineCardKeySet}
                       onToggleCard={toggleOutlineCard}
+                      onSetCardsCollapsed={setOutlineCardsCollapsed}
                       includeRejected
                     />
                   </div>
@@ -3736,7 +3944,9 @@ export default function PlanningNotesTab({
               ? chapters.find(chapter => chapter.id === record.parentId)
               : null;
             const pathLabel = activeSection === 'chapters'
-              ? chapterPathLabel(record, chapters, { includeSelf: false })
+              ? record.status === 'rejected'
+                ? chapterPlainPathLabel(record, chapters, { includeSelf: false })
+                : chapterPathLabel(record, draftDisplayChapters, { includeSelf: false })
               : '';
             const hasChildren = activeSection === 'chapters'
               && chapters.some(chapter => chapter.parentId === record.id);
@@ -3746,8 +3956,11 @@ export default function PlanningNotesTab({
               && record.nodeType !== 'section';
             const defaultChildType = record.nodeType === 'part' ? 'episode' : 'section';
             const duplicateBlocked = activeSection === 'chapters' && parent?.status === 'approved';
+            const outlinePresentation = activeSection === 'chapters'
+              ? chapterPresentation(record, draftOrdinalLabels)
+              : null;
             const siblingLocation = parent
-              ? `${getPlanningChapterNodeLabel(parent.nodeType)}「${parent.title || '無題'}」の中で`
+              ? `${chapterPresentationLabel(parent, draftOrdinalLabels)}の中で`
               : '同じ階層で';
             const chapterQuestions = activeSection === 'chapters'
               ? questionsByChapterId.get(record.id) || []
@@ -3760,7 +3973,7 @@ export default function PlanningNotesTab({
               ? collapsedOutlineCardKeySet.has(outlineCardKey)
               : false;
             const outlineItemLabel = activeSection === 'chapters'
-              ? `${getPlanningChapterNodeLabel(record.nodeType)}「${record.title || '無題'}」`
+              ? `${outlinePresentation.ordinalLabel}「${outlinePresentation.displayTitle}」`
               : '';
             return (
               <article
@@ -3777,11 +3990,13 @@ export default function PlanningNotesTab({
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
-                          {getPlanningChapterNodeLabel(record.nodeType)}
-                        </span>
+                        <h3 className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="shrink-0 rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
+                            {outlinePresentation.ordinalLabel}
+                          </span>
+                          <span className="break-words font-bold text-foreground">{outlinePresentation.displayTitle}</span>
+                        </h3>
                         {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
-                        <h3 className="break-words font-bold text-foreground">{recordTitle(activeSection, record)}</h3>
                         <StatusBadge status={record.status} />
                       </div>
                       <OutlineCardSummaryBadges
@@ -3803,7 +4018,7 @@ export default function PlanningNotesTab({
                   id={activeSection === 'chapters' ? outlineCardBodyId(outlineCardKey) : undefined}
                   hidden={activeSection === 'chapters' && outlineCardCollapsed}
                 >
-                  <div className={`${activeSection === 'chapters' ? 'mt-3 border-t border-white/10 pt-3' : ''} flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between`}>
+                  <div className={`${activeSection === 'chapters' ? 'mt-3 border-t border-white/10 pt-3' : ''} flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between`}>
                     <div className="min-w-0 flex-1">
                       {activeSection === 'chapters' && pathLabel && (
                         <p className="mb-2 flex min-w-0 items-start gap-1.5 break-words text-[11px] text-muted-foreground">
@@ -3825,8 +4040,8 @@ export default function PlanningNotesTab({
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {activeSection === 'chapters' && record.status !== 'rejected' && <>
-                        <Button type="button" size="sm" variant="outline" onClick={() => handleMoveChapter(record, 'up')} disabled={busy || record.status === 'approved' || parent?.status === 'approved' || !previousSibling || previousSibling.status === 'approved'} className="min-h-11 min-w-11" aria-label={`${record.title || '無題の構成項目'}を${siblingLocation}上へ`}><ArrowUp className="h-4 w-4" /></Button>
-                        <Button type="button" size="sm" variant="outline" onClick={() => handleMoveChapter(record, 'down')} disabled={busy || record.status === 'approved' || parent?.status === 'approved' || !nextSibling || nextSibling.status === 'approved'} className="min-h-11 min-w-11" aria-label={`${record.title || '無題の構成項目'}を${siblingLocation}下へ`}><ArrowDown className="h-4 w-4" /></Button>
+                        <Button type="button" size="sm" variant="outline" onClick={() => handleMoveChapter(record, 'up')} disabled={busy || record.status === 'approved' || parent?.status === 'approved' || !previousSibling || previousSibling.status === 'approved'} className="min-h-11 min-w-11" aria-label={`${outlineItemLabel}を${siblingLocation}上へ`}><ArrowUp className="h-4 w-4" /></Button>
+                        <Button type="button" size="sm" variant="outline" onClick={() => handleMoveChapter(record, 'down')} disabled={busy || record.status === 'approved' || parent?.status === 'approved' || !nextSibling || nextSibling.status === 'approved'} className="min-h-11 min-w-11" aria-label={`${outlineItemLabel}を${siblingLocation}下へ`}><ArrowDown className="h-4 w-4" /></Button>
                       </>}
                       {canAddChild && (
                         <Button type="button" size="sm" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: defaultChildType, parentId: record.id })} className="min-h-11 border-neon-pink/30 text-neon-pink"><CornerDownRight className="h-4 w-4" />この中に追加</Button>
@@ -3851,6 +4066,7 @@ export default function PlanningNotesTab({
                   {activeSection === 'chapters' && record.status !== 'rejected' && (chapterQuestions.length > 0 || !hasChildren) && (
                     <ChapterWritingQuestions
                       record={record}
+                      itemLabel={outlineItemLabel}
                       questions={chapterQuestions}
                       onCopyInstruction={copyInstructionQuestion}
                       onOpenDetail={question => openDetail('instructionVersions', question)}
@@ -3860,6 +4076,7 @@ export default function PlanningNotesTab({
                   {activeSection === 'chapters' && record.status !== 'rejected' && (
                     <ChapterManuscriptControls
                       record={record}
+                      itemLabel={outlineItemLabel}
                       manuscript={chapterManuscript}
                       busy={busy}
                       onToggleComplete={toggleChapterManuscriptComplete}
@@ -3879,8 +4096,12 @@ export default function PlanningNotesTab({
         <section className="rounded-xl p-4" style={CARD_STYLE}>
           <h2 className="font-bold text-neon-cyan">検索結果</h2>
           <div className="mt-3 space-y-2">
-            {searchResults.map(({ section, record }) => (
-              <button
+            {searchResults.map(({ section, record }) => {
+              const resultChapterPresentation = section === 'chapters'
+                ? chapterContextPresentation(record, allChapters, activeChapterIds)
+                : null;
+              return (
+                <button
                 key={`${section}-${record.id}`}
                 type="button"
                 onClick={() => {
@@ -3893,14 +4114,17 @@ export default function PlanningNotesTab({
                 <span className="min-w-0">
                   <span className="block text-[10px] text-muted-foreground">
                     {section === 'chapters'
-                      ? `${activeChapterIds.has(record.id) ? '' : '旧目次 ／ '}${getPlanningChapterNodeLabel(record.nodeType)} ／ ${chapterPathLabel(record, allChapters, { includeSelf: false }) || '本全体の最上位'}`
+                      ? `${activeChapterIds.has(record.id) ? '' : '旧目次 ／ '}${resultChapterPresentation.ordinalLabel} ／ ${chapterContextPathLabel(record, allChapters, activeChapterIds, { includeSelf: false }) || '本全体の最上位'}`
                       : SECTION_META[section]?.label || '企画メモ履歴'}
                   </span>
-                  <span className="block break-words text-sm font-bold text-foreground">{recordTitle(section, record)}</span>
+                  <span className="block break-words text-sm font-bold text-foreground">
+                    {resultChapterPresentation?.displayTitle || recordTitle(section, record)}
+                  </span>
                 </span>
                 <StatusBadge status={record.status} />
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         </section>
       )}
