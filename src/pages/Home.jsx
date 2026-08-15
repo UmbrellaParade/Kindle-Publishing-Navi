@@ -38,6 +38,7 @@ import {
   calculateRestoredScrollY,
   createViewScrollPosition,
   DEFAULT_PLANNING_SECTION,
+  getProjectCollapsedOutlineCardKeys,
   getProjectPlanningSection,
   getSavedViewScroll,
   normalizePlanningViewSection,
@@ -78,6 +79,7 @@ export default function Home() {
   const [mobileTabsOpen, setMobileTabsOpen] = useState(false);
   const [mainNavigationHeight, setMainNavigationHeight] = useState(60);
   const [planningSection, setPlanningSection] = useState(DEFAULT_PLANNING_SECTION);
+  const [collapsedOutlineCardKeys, setCollapsedOutlineCardKeys] = useState([]);
   const [viewResumeReady, setViewResumeReady] = useState(false);
   const [resumeNoticeVisible, setResumeNoticeVisible] = useState(false);
   const [initialViewResumeState] = useState(() => readViewResumeState());
@@ -155,6 +157,10 @@ export default function Home() {
     });
     setCurrentProject(project);
     setPlanningSection(nextPlanningSection);
+    setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(
+      viewResumeStateRef.current,
+      projectId,
+    ));
     if (!projectId) setActiveTab('manual');
   };
 
@@ -186,6 +192,10 @@ export default function Home() {
       setCurrentProject(resolved.project);
       setActiveTab(resolved.mainTab);
       setPlanningSection(resolved.planningSection);
+      setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(
+        nextState,
+        resolved.project?.id,
+      ));
       viewResumeReadyRef.current = true;
       setViewResumeReady(true);
       if (resolved.resumed && !resumeNoticeShownRef.current) {
@@ -405,6 +415,10 @@ export default function Home() {
             planningSection: viewContextRef.current.planningSection,
           });
           storeViewResumeState(reconciledState);
+          setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(
+            reconciledState,
+            retainedProject.id,
+          ));
         } else {
           const fallbackProject = list[0] || null;
           const fallbackMainTab = fallbackProject ? 'creation' : 'manual';
@@ -432,6 +446,10 @@ export default function Home() {
           setCurrentProject(fallbackProject);
           setActiveTab(fallbackMainTab);
           setPlanningSection(DEFAULT_PLANNING_SECTION);
+          setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(
+            nextState,
+            fallbackProject?.id,
+          ));
           window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
         }
         toast.info('別のタブでの変更を反映しました');
@@ -563,6 +581,17 @@ export default function Home() {
     });
     setPlanningSection(safeSection);
   }, [captureCurrentViewScroll, rememberViewContext]);
+
+  const handleCollapsedOutlineCardKeysChange = useCallback(nextKeys => {
+    const projectId = viewContextRef.current.projectId;
+    if (!projectId) return;
+    const nextState = rememberViewResumeState(viewResumeStateRef.current, {
+      projectId,
+      collapsedOutlineCardKeys: nextKeys,
+    });
+    storeViewResumeState(nextState);
+    setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(nextState, projectId));
+  }, [storeViewResumeState]);
 
   const handleOpenManual = async () => {
     await handleTabChange('manual');
@@ -765,6 +794,8 @@ export default function Home() {
                 {...tabProps}
                 initialSection={planningSection}
                 onSectionChange={handlePlanningSectionChange}
+                collapsedOutlineCardKeys={collapsedOutlineCardKeys}
+                onCollapsedOutlineCardKeysChange={handleCollapsedOutlineCardKeysChange}
               />
             )}
             {activeTab === 'kdp'       && <KdpChecklistTab {...tabProps} />}

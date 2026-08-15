@@ -22,7 +22,7 @@ const EXPECTED_TITLES = [
   'パソコンで使用してください',
   'KindleとA5・A6の違い',
   '作業前に保存方法を確認する',
-  'Kindle原稿を完成させる流れ',
+  '完成原稿をKindle用に仕上げる流れ',
   '新しい原稿を作る・既存原稿を開く',
   '画面の見方',
   '本文ツールバーの記号と機能',
@@ -41,11 +41,11 @@ const EXPECTED_TITLES = [
   'よくある問題と最終チェック',
 ];
 
-test('利用マニュアル原文を2026年8月9日版のまま保持する', () => {
-  assert.equal(MANUSCRIPT_FORMATTER_MANUAL_UPDATED_AT, '2026年8月9日');
+test('利用マニュアル原文を2026年8月15日版のまま保持する', () => {
+  assert.equal(MANUSCRIPT_FORMATTER_MANUAL_UPDATED_AT, '2026年8月15日');
   assert.equal(
     createHash('sha256').update(manual.replace(/\r\n/g, '\n')).digest('hex'),
-    'd4c1abcfc48050866e1261e5428aff78904c0ecfb3365ca19e725f452d068b76',
+    'ceba072dad2d75d2049827d278bc62215b3b6741430ebfc9db40ca8fd565b1e8',
   );
   assert.equal(manualComponent.includes('2026年8月6日'), false);
   assert.equal(manualComponent.includes('{MANUSCRIPT_FORMATTER_MANUAL_UPDATED_AT}更新'), true);
@@ -66,6 +66,11 @@ test('目次は全21章を原文と同じ順序と安定IDで案内する', () =
 test('PC・DOCX・判型・操作名・最終確認の注意を省略しない', () => {
   const requiredPhrases = [
     'このツールはパソコン専用です。',
+    '長文をゼロから執筆する場所ではなく、完成原稿の見出し、改ページ、目次、画像、QRコードを整える工程で使用します。',
+    '文章は先にGoogleドキュメントやWordなどで完成させます。',
+    '紙の本を初めて作る方にも使いやすい選択肢の一つです。',
+    'A6は一般的な文庫本サイズです。',
+    'このツールは、しまうま出版の公式・提携ツールではありません。',
     'Kindle向けの基本出力はDOCXです。',
     'Kindle電子書籍に入稿するのは、このツールから書き出したDOCXです。',
     'A5の寸法を自分で調整したり、しまうま出版用PDFを使ったりする必要はありません。',

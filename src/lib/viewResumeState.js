@@ -16,6 +16,7 @@ export const PLANNING_VIEW_SECTIONS = Object.freeze([
 
 const MAX_PROJECT_VIEWS = 100;
 const MAX_SCROLL_POSITIONS_PER_PROJECT = 32;
+const MAX_COLLAPSED_OUTLINE_CARDS_PER_PROJECT = 1000;
 const MAX_TOKEN_LENGTH = 200;
 const MAX_SCROLL_COORDINATE = 100_000_000;
 const SAFE_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
@@ -84,6 +85,19 @@ function normalizeScrollPositions(value) {
   return positions;
 }
 
+function normalizeCollapsedOutlineCardKeys(value) {
+  if (!Array.isArray(value)) return [];
+  const keys = [];
+  const seen = new Set();
+  for (const rawKey of value.slice(-MAX_COLLAPSED_OUTLINE_CARDS_PER_PROJECT)) {
+    const key = safeToken(rawKey);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
 function normalizeProjectView(value) {
   if (!isPlainObject(value)) return null;
   const projectId = safeToken(value.projectId);
@@ -92,6 +106,7 @@ function normalizeProjectView(value) {
     projectId,
     planningSection: safeToken(value.planningSection) || DEFAULT_PLANNING_SECTION,
     scrollPositions: normalizeScrollPositions(value.scrollPositions),
+    collapsedOutlineCardKeys: normalizeCollapsedOutlineCardKeys(value.collapsedOutlineCardKeys),
   };
 }
 
@@ -187,6 +202,10 @@ export function getProjectPlanningSection(value, projectId) {
   return normalizePlanningViewSection(getProjectView(value, projectId)?.planningSection);
 }
 
+export function getProjectCollapsedOutlineCardKeys(value, projectId) {
+  return [...(getProjectView(value, projectId)?.collapsedOutlineCardKeys || [])];
+}
+
 export function getSavedViewScroll(value, projectId, mainTab, planningSection) {
   const projectView = getProjectView(value, projectId);
   if (!projectView) return null;
@@ -200,6 +219,7 @@ export function rememberViewResumeState(value, update = {}) {
     projectViews: state.projectViews.map(view => ({
       ...view,
       scrollPositions: { ...view.scrollPositions },
+      collapsedOutlineCardKeys: [...view.collapsedOutlineCardKeys],
     })),
   };
 
@@ -217,6 +237,7 @@ export function rememberViewResumeState(value, update = {}) {
       projectId,
       planningSection: DEFAULT_PLANNING_SECTION,
       scrollPositions: {},
+      collapsedOutlineCardKeys: [],
     };
     next.projectViews.push(projectView);
     if (next.projectViews.length > MAX_PROJECT_VIEWS) next.projectViews.shift();
@@ -224,6 +245,12 @@ export function rememberViewResumeState(value, update = {}) {
 
   if (Object.prototype.hasOwnProperty.call(update, 'planningSection')) {
     projectView.planningSection = normalizePlanningViewSection(update.planningSection);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, 'collapsedOutlineCardKeys')) {
+    projectView.collapsedOutlineCardKeys = normalizeCollapsedOutlineCardKeys(
+      update.collapsedOutlineCardKeys,
+    );
   }
 
   if (update.scrollPosition) {

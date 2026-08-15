@@ -4,6 +4,7 @@ import {
   calculateRestoredScrollY,
   createDefaultViewResumeState,
   createViewScrollPosition,
+  getProjectCollapsedOutlineCardKeys,
   getProjectPlanningSection,
   getSavedViewScroll,
   hasExplicitViewUrl,
@@ -81,6 +82,54 @@ test('プロジェクト別の内部タブと画面別スクロール位置を�
   assert.deepEqual(getSavedViewScroll(state, 'project-b', 'notes', 'competitors'), { contentY: 1320 });
   assert.deepEqual(getSavedViewScroll(state, 'project-b', 'kdp'), { contentY: 640 });
   assert.equal(getSavedViewScroll(state, 'project-a', 'notes', 'competitors'), null);
+});
+
+test('目次カードの折りたたみはプロジェクト別に保存し、旧状態は全展開として扱う', () => {
+  let state = rememberViewResumeState(createDefaultViewResumeState(), {
+    projectId: 'project-a',
+    collapsedOutlineCardKeys: ['draft:chapter-a', 'confirmed:snapshot-a:chapter-a'],
+  });
+  state = rememberViewResumeState(state, {
+    projectId: 'project-b',
+    collapsedOutlineCardKeys: ['draft:chapter-b'],
+  });
+
+  assert.deepEqual(getProjectCollapsedOutlineCardKeys(state, 'project-a'), [
+    'draft:chapter-a',
+    'confirmed:snapshot-a:chapter-a',
+  ]);
+  assert.deepEqual(getProjectCollapsedOutlineCardKeys(state, 'project-b'), ['draft:chapter-b']);
+  assert.deepEqual(getProjectCollapsedOutlineCardKeys({
+    version: 1,
+    selectedProjectId: 'project-a',
+    mainTab: 'notes',
+    projectViews: [{
+      projectId: 'project-a',
+      planningSection: 'chapters',
+      scrollPositions: {},
+    }],
+  }, 'project-a'), []);
+});
+
+test('壊れた・重複した・過剰な折りたたみキーを安全に正規化する', () => {
+  const rawKeys = [
+    '__proto__',
+    'draft:chapter-a',
+    'draft:chapter-a',
+    '空白を含むキー',
+    ...Array.from({ length: 1005 }, (_, index) => `draft:chapter-${index}`),
+  ];
+  const state = rememberViewResumeState(createDefaultViewResumeState(), {
+    projectId: 'project-a',
+    collapsedOutlineCardKeys: rawKeys,
+  });
+  const keys = getProjectCollapsedOutlineCardKeys(state, 'project-a');
+
+  assert.equal(keys.length, 1000);
+  assert.equal(new Set(keys).size, keys.length);
+  assert.equal(keys.includes('__proto__'), false);
+  assert.equal(keys.includes('空白を含むキー'), false);
+  assert.equal(keys.at(-1), 'draft:chapter-1004');
 });
 
 test('有効な前回位置を復元し、削除済みproject・不正tabは安全な既定画面へ戻す', () => {

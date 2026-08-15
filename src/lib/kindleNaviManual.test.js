@@ -289,6 +289,19 @@ test('現行10機能と外部操作・KDP最新確認の注意をすべて案内
   assert.equal(manual.includes('KDP公式画面と公式ヘルプの最新表示で確認してください。'), true);
 });
 
+test('目次の折りたたみと完成原稿の整形先を初心者向けに説明する', () => {
+  for (const phrase of [
+    '「詳細を折りたたむ」',
+    'タイトル、種類、状態、原稿の完成状況を残したまま',
+    '親項目を閉じても中の部・章・話・節は消えない',
+    '文章をゼロから書く場所ではなく',
+    'しまうま出版向けのA5・A6印刷用PDF',
+    'A6は一般的な文庫本サイズ',
+    'URLからQRコード付きカードを作り、本文へ配置できる',
+    'しまうま出版の公式・提携ツールではありません',
+  ]) assert.equal(manual.includes(phrase), true, `不足している案内: ${phrase}`);
+});
+
 test('使い方マニュアルはナビ先頭にあり、プロジェクト0件では自動表示する', () => {
   const tabBlock = homeSource.match(/const TABS = \[([\s\S]*?)\];/)?.[1] || '';
   assert.match(tabBlock.trimStart(), /^\{ id: 'manual',\s+label: '使い方マニュアル' \}/);

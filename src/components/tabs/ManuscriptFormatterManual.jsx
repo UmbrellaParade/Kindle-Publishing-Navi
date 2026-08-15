@@ -224,7 +224,7 @@ export default function ManuscriptFormatterManual({ onBack }) {
                 Umbrella Parade 原稿制作ツール 利用マニュアル
               </h1>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                PCでKindle原稿を作り、DOCXで書き出す流れを中心に案内します。後半では、しまうま出版用PDFも説明します。
+                完成した文章をKindle向けDOCXへ整える流れを中心に案内します。後半では、しまうま出版向けA5・A6印刷用PDFの仕上げも説明します。
               </p>
             </div>
           </div>

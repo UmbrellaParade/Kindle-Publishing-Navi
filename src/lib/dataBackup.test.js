@@ -37,6 +37,7 @@ import {
   upsertPlanningRecord,
   updatePlanningChapterManuscript,
 } from './planningNotes.js';
+import { VIEW_RESUME_STORAGE_KEY } from './viewResumeState.js';
 
 const FIXED_DATE = '2026-08-03T00:00:00.000Z';
 const now = () => new Date(FIXED_DATE);
@@ -173,6 +174,10 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
     [RUBY_DICTIONARY_STORAGE_KEY]: JSON.stringify({ 漢字: 'かんじ' }),
     [`${PROJECT_RUBY_DICTIONARY_STORAGE_PREFIX}p1`]: JSON.stringify({ 一般: 'いっぱん' }),
     kindle_navi_ai_settings: JSON.stringify({ apiKey: 'never-export-this' }),
+    [VIEW_RESUME_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      projectViews: [{ projectId: 'p1', collapsedOutlineCardKeys: ['draft:never-export-collapse'] }],
+    }),
     unrelated_key: 'unrelated-secret',
   });
   const imageStore = {
@@ -196,7 +201,7 @@ test('許可した保存キーとプロジェクト項目だけをバックア�
   assert.equal(result.data.formatGuideStates[0].value.sharedText, '整形中の本文');
   assert.equal(result.data.projectRubyDictionaries[0].value.一般, 'いっぱん');
   assert.equal(result.data.images[0].id, 'img1');
-  assert.doesNotMatch(serialized, /never-export-this|project-secret|project-api-secret|unrelated-secret/);
+  assert.doesNotMatch(serialized, /never-export-this|never-export-collapse|project-secret|project-api-secret|unrelated-secret/);
   assert.doesNotMatch(serialized, /kindle_navi_ai_settings|apiKey|token/);
 });
 
