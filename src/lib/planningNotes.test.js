@@ -8,6 +8,7 @@ import {
   assignDecisionCanonical,
   assignInstructionCanonical,
   buildPlanningNotesSharePackage,
+  buildPlanningChapterOrdinalLabels,
   clearInstructionCanonical,
   createEmptyPlanningNotes,
   createPlanningChapterRecord,
@@ -23,6 +24,9 @@ import {
   findPlanningNotesSensitiveData,
   formatPlanningDateTimeJst,
   getPlanningMarketMetrics,
+  getPlanningChapterDisplayTitle,
+  getPlanningChapterOrdinalLabel,
+  getPlanningChapterPresentation,
   getNextPlanningChapterOrder,
   getPlanningChapterParentOptions,
   getConfirmedPlanningOutline,
@@ -180,7 +184,7 @@ test('部の中へ話と節を作り、親子順で安定して平坦化する',
   assert.equal(duplicate.nodeType, 'episode');
   assert.equal(duplicate.order, 2);
   const markdown = planningNotesShareToMarkdown(buildPlanningNotesSharePackage(data, { now: fixedNow }));
-  assert.match(markdown, /- 部：第一部（原稿：未完了）\n  - 話：第一話（原稿：未完了）\n    - 節：最初の場面（原稿：未完了）/);
+  assert.match(markdown, /- 第1部：第一部（原稿：未完了）\n  - 第1話：第一話（原稿：未完了）\n    - 第1節：最初の場面（原稿：未完了）/);
 });
 
 test('目次階層は存在しない親・循環・親子型違反・同じ親内の順序重複を拒否する', () => {
@@ -2666,4 +2670,190 @@ test('市場調査Markdownの絶対パス・限定URL・同版異内容・同ID�
   const currentWithoutSummary = { ...applied, marketSummary: createEmptyPlanningNotes().marketSummary };
   const recordConflict = previewMarketResearchImport(currentWithoutSummary, changedRecord);
   assert.ok(recordConflict.conflicts.some(conflict => conflict.type === 'same_id_different_content'));
+});
+
+test('outline ordinal labels count independently by parent and node type using order then stable ID', () => {
+  const chapters = [
+    { id: 'root-chapter-b', parentId: '', nodeType: 'chapter', order: 10, title: 'B' },
+    { id: 'root-part', parentId: '', nodeType: 'part', order: 1, title: 'Part' },
+    { id: 'root-chapter-a', parentId: '', nodeType: 'chapter', order: 2, title: 'A' },
+    { id: 'part-chapter', parentId: 'root-part', nodeType: 'chapter', order: 0, title: 'Nested' },
+    { id: 'episode-b', parentId: 'root-part', nodeType: 'episode', order: 3, title: 'Episode B' },
+    { id: 'episode-a', parentId: 'root-part', nodeType: 'episode', order: 3, title: 'Episode A' },
+    { id: 'other-part', parentId: '', nodeType: 'part', order: 20, title: 'Other' },
+    { id: 'other-episode', parentId: 'other-part', nodeType: 'episode', order: 0, title: 'Reset' },
+    { id: 'nested-section', parentId: 'episode-a', nodeType: 'section', order: 0, title: 'Section' },
+  ];
+
+  const labels = buildPlanningChapterOrdinalLabels(chapters.map(record => ({ record, depth: 0 })));
+  assert.deepEqual(Object.fromEntries(labels), {
+    'root-chapter-a': '第1章',
+    'root-chapter-b': '第2章',
+    'root-part': '第1部',
+    'other-part': '第2部',
+    'part-chapter': '第1章',
+    'episode-a': '第1話',
+    'episode-b': '第2話',
+    'other-episode': '第1話',
+    'nested-section': '第1節',
+  });
+  assert.equal(getPlanningChapterOrdinalLabel(chapters[0], chapters), '第2章');
+  assert.equal(getPlanningChapterOrdinalLabel(null, chapters), '');
+  assert.deepEqual(buildPlanningChapterOrdinalLabels(null), new Map());
+});
+
+test('outline ordinal labels follow reorder without mutating legacy stored titles', () => {
+  const chapters = [
+    { id: 'chapter-a', parentId: '', nodeType: 'chapter', order: 0, title: '第1章 諦めることは、負けることなんだろうか。' },
+    { id: 'chapter-b', parentId: '', nodeType: 'chapter', order: 1, title: '第2章 次の題名' },
+  ];
+  const originalJson = JSON.stringify(chapters);
+  assert.equal(getPlanningChapterOrdinalLabel(chapters[0], chapters), '第1章');
+
+  const reordered = chapters.map(record => ({
+    ...record,
+    order: record.id === 'chapter-a' ? 1 : 0,
+  }));
+  assert.equal(getPlanningChapterOrdinalLabel(reordered[0], reordered), '第2章');
+  assert.equal(getPlanningChapterOrdinalLabel(reordered[1], reordered), '第1章');
+  assert.deepEqual(getPlanningChapterPresentation(reordered[0], reordered), {
+    ordinalLabel: '第2章',
+    displayTitle: '諦めることは、負けることなんだろうか。',
+  });
+  assert.equal(JSON.stringify(chapters), originalJson);
+});
+
+test('outline display title removes one clear Japanese or Arabic legacy ordinal only for presentation', () => {
+  for (const [title, expected] of [
+    ['第1章 諦めることは、負けることなんだろうか。', '諦めることは、負けることなんだろうか。'],
+    ['第一章　漢数字の見出し', '漢数字の見出し'],
+    ['第１章：全角数字の見出し', '全角数字の見出し'],
+    ['1話 - 数字だけの接頭辞', '数字だけの接頭辞'],
+    ['十二節・小見出し', '小見出し'],
+    ['第2部—後半', '後半'],
+    ['第1章 第2章 タイトル', '第2章 タイトル'],
+  ]) {
+    assert.equal(getPlanningChapterDisplayTitle(title), expected, title);
+  }
+
+  for (const title of [
+    '第一章では、何を扱うのか。',
+    '第1章',
+    '第1章タイトルそのもの',
+    '第1巻 タイトル',
+    '章立てを考える',
+    ' 第1章 先頭空白は意図として残す',
+  ]) {
+    assert.equal(getPlanningChapterDisplayTitle(title), title, title);
+  }
+  assert.equal(getPlanningChapterDisplayTitle(null), '');
+});
+
+test('outline node type changes renumber both affected type groups and keep a clean title', () => {
+  const chapters = [
+    { id: 'first', parentId: '', nodeType: 'chapter', order: 0, title: '第1章 章から話へ変える題名' },
+    { id: 'second', parentId: '', nodeType: 'chapter', order: 1, title: '第2章 残る章' },
+  ];
+  const changed = chapters.map(record => record.id === 'first'
+    ? { ...record, nodeType: 'episode' }
+    : record);
+
+  assert.deepEqual(getPlanningChapterPresentation(changed[0], changed), {
+    ordinalLabel: '第1話',
+    displayTitle: '章から話へ変える題名',
+  });
+  assert.deepEqual(getPlanningChapterPresentation(changed[1], changed), {
+    ordinalLabel: '第1章',
+    displayTitle: '残る章',
+  });
+  assert.equal(chapters[0].title, '第1章 章から話へ変える題名');
+});
+
+test('shared Markdown derives current ordinals while shared JSON preserves legacy titles', () => {
+  let data = createEmptyPlanningNotes();
+  for (const values of [
+    { id: 'legacy-first', order: 0, title: '第1章 古い先頭番号を持つ題名' },
+    { id: 'legacy-second', order: 1, title: '第2章 次の題名' },
+  ]) {
+    data = addRecord(data, 'chapters', createPlanningRecord('chapters', values, {
+      now: fixedNow,
+      idFactory: idFactory(values.id),
+    }));
+  }
+  data = createPlanningOutlineSnapshot(data, { kind: 'draft', label: '並べ替え前の仮目次' }, {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('legacy-draft-snapshot'),
+  });
+  data = createPlanningOutlineSnapshot(data, { kind: 'confirmed', label: '並べ替え前の確定目次' }, {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('legacy-confirmed-snapshot'),
+  });
+  data = movePlanningChapter(data, 'legacy-first', 'down', {
+    expectedRevision: data.chapterOrderRevision,
+  });
+
+  const share = buildPlanningNotesSharePackage(data, { bookTitle: '自動番号テスト', now: fixedNow });
+  assert.equal(
+    share.data.chapters.find(record => record.id === 'legacy-first').title,
+    '第1章 古い先頭番号を持つ題名',
+  );
+  const markdown = planningNotesShareToMarkdown(share);
+  const outlineList = markdown.slice(
+    markdown.indexOf('### 仮目次（編集中）'),
+    markdown.indexOf('#### 構成項目の詳細'),
+  );
+  assert.match(outlineList, /- 第1章：次の題名/);
+  assert.match(outlineList, /- 第2章：古い先頭番号を持つ題名/);
+  assert.doesNotMatch(outlineList, /第[12]章：第[12]章/);
+  const confirmedBlock = markdown.slice(
+    markdown.indexOf('### 現在の確定目次'),
+    markdown.indexOf('### 過去の目次（新しい順）'),
+  );
+  assert.match(confirmedBlock, /- 第1章：古い先頭番号を持つ題名/);
+  assert.match(confirmedBlock, /- 第2章：次の題名/);
+  assert.doesNotMatch(confirmedBlock, /第[12]章：第[12]章/);
+  const historyBlock = markdown.slice(
+    markdown.indexOf('### 過去の目次（新しい順）'),
+    markdown.indexOf('## 競合・市場調査'),
+  );
+  assert.match(historyBlock, /- 第1章：古い先頭番号を持つ題名/);
+  assert.match(historyBlock, /- 第2章：次の題名/);
+  assert.doesNotMatch(historyBlock, /第[12]章：第[12]章/);
+  assert.match(markdown, /"title": "第1章 古い先頭番号を持つ題名"/);
+});
+
+test('shared Markdown excludes rejected history from active ordinals and labels it without a number', () => {
+  let data = createEmptyPlanningNotes();
+  for (const values of [
+    { id: 'rejected-first', order: 0, title: '第1章 採用しなかった旧案', status: 'rejected' },
+    { id: 'active-after-rejected', order: 1, title: '第2章 現在採用している章' },
+  ]) {
+    data = addRecord(data, 'chapters', createPlanningRecord('chapters', values, {
+      now: fixedNow,
+      idFactory: idFactory(values.id),
+    }));
+  }
+
+  const share = buildPlanningNotesSharePackage(data, { bookTitle: '採用状態の採番テスト', now: fixedNow });
+  const markdown = planningNotesShareToMarkdown(share);
+  const outlineBlock = markdown.slice(
+    markdown.indexOf('### 仮目次（編集中）'),
+    markdown.indexOf('### 現在の確定目次'),
+  );
+  const visibleList = outlineBlock.slice(0, outlineBlock.indexOf('#### 構成項目の詳細'));
+  const completeHistory = outlineBlock.slice(outlineBlock.indexOf('#### 構成項目の詳細'));
+
+  assert.match(visibleList, /- 第1章：現在採用している章/);
+  assert.doesNotMatch(visibleList, /採用しなかった旧案/);
+  assert.match(completeHistory, /##### 章：採用しなかった旧案 ／ 採用しない（履歴）/);
+  assert.doesNotMatch(completeHistory, /##### 第\d+章：採用しなかった旧案/);
+  assert.match(completeHistory, /##### 第1章：現在採用している章/);
+  assert.equal(
+    share.data.chapters.find(record => record.id === 'rejected-first').title,
+    '第1章 採用しなかった旧案',
+  );
 });

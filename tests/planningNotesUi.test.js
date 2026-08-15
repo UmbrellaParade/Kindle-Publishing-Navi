@@ -238,15 +238,15 @@ test('容量警告・破損停止・明示保存・兄弟単位の並べ替え�
   assert.match(source, /空データで上書きせず停止しています/);
   assert.match(source, /保存するまで既存データは変わりません/);
   assert.match(source, /chapter\.parentId === record\.parentId/);
-  assert.match(source, /aria-label=\{`\$\{record\.title \|\| '無題の構成項目'\}を\$\{siblingLocation\}上へ`\}/);
-  assert.match(source, /aria-label=\{`\$\{record\.title \|\| '無題の構成項目'\}を\$\{siblingLocation\}下へ`\}/);
+  assert.match(source, /aria-label=\{`\$\{outlineItemLabel\}を\$\{siblingLocation\}上へ`\}/);
+  assert.match(source, /aria-label=\{`\$\{outlineItemLabel\}を\$\{siblingLocation\}下へ`\}/);
 });
 
 test('部・章・話・節を階層表示し、親選択・子追加・パンくずを配線する', () => {
   assert.match(source, /PLANNING_CHAPTER_NODE_TYPES/);
   assert.match(source, /flattenPlanningChapterTree\(data\)/);
   assert.match(source, /getPlanningChapterParentOptions\(planningData, draft\.id, draft\.nodeType\)/);
-  assert.match(source, /項目の種類/);
+  assert.match(source, /種類（部／章／話／節）/);
   assert.match(source, /入れる場所/);
   assert.match(source, /この中に追加/);
   assert.match(source, /入っている場所：\{pathLabel\}/);
@@ -255,7 +255,7 @@ test('部・章・話・節を階層表示し、親選択・子追加・パン�
   assert.match(source, /紐づく部・章・話・節/);
   assert.match(source, /planningData=\{data\}/);
   assert.match(source, /本全体の最上位/);
-  assert.match(source, /section === 'chapters'[\s\S]*?chapterPathLabel\(record, chapters/);
+  assert.match(source, /section === 'chapters'[\s\S]*?chapterPathLabel\(record, draftDisplayChapters/);
 });
 
 test('仮目次・確定目次・過去の目次をアクセシブルな3タブとして切り替える', () => {
@@ -377,6 +377,9 @@ test('Codex相談文は本の前提と現在目次だけを含め、非公開取
   }
   assert.match(promptSource, /既存項目の削除や承認解除はしません/);
   assert.match(promptSource, /出力は説明文を付けず、次のMarkdown形式だけ/);
+  assert.match(promptSource, /chapterRows\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/);
+  assert.match(promptSource, /buildPlanningChapterOrdinalLabels\(activeRows\)/);
+  assert.match(promptSource, /activeRows\.map/);
   assert.doesNotMatch(promptSource, /interviews|rawAnswer|publicAnswer|session/i);
 });
 
@@ -384,6 +387,8 @@ test('書き直し後の旧目次リンクを見える状態で保持し、再�
   assert.match(source, /getPlanningDraftOutlineChapters\(data\)/);
   assert.match(source, /const allChapters = data\.chapters/);
   assert.match(source, /旧目次：\$\{path\}/);
+  assert.match(source, /function chapterPlainPathLabel\(/);
+  assert.match(source, /activeChapterIds\.has\(chapter\.id\) && chapter\.status !== 'rejected'/);
   assert.match(source, /旧目次との紐づけ（参照用）/);
   assert.match(source, /目次を書き直す前の紐づけです/);
   assert.match(source, /<option value="archived">旧目次に紐づく記録<\/option>/);
@@ -451,6 +456,54 @@ test('仮・確定・過去の目次項目を個別に折りたたみ、見出�
   assert.match(source, /hidden=\{activeSection === 'chapters' && outlineCardCollapsed\}/);
   assert.match(source, /visibleRecords\.map\(\(\{ record, depth \}\) =>/);
   assert.doesNotMatch(source, /collapsed[^\n]*(?:filter|flatMap)[^\n]*(?:parentId|pathIds)/);
+});
+
+test('仮・確定・過去の表示範囲ごとに全項目をまとめて開閉できる', () => {
+  assert.match(source, /function OutlineBulkCollapseControls\(/);
+  assert.match(source, /すべて折りたたむ/);
+  assert.match(source, /すべて開く/);
+  assert.match(source, /role="group"[\s\S]*?aria-label=\{`\$\{viewLabel\}の項目をまとめて開閉`\}/);
+  assert.match(source, /role="status" aria-live="polite" aria-atomic="true"/);
+  assert.match(source, /disabled=\{itemCount === 0 \|\| allCollapsed\}/);
+  assert.match(source, /disabled=\{itemCount === 0 \|\| allExpanded\}/);
+  assert.match(source, /ref=\{collapseButtonRef\}/);
+  assert.match(source, /ref=\{expandButtonRef\}/);
+  assert.match(source, /focusAfterUpdate\(expandButtonRef\)/);
+  assert.match(source, /focusAfterUpdate\(collapseButtonRef\)/);
+  assert.match(source, /className="min-h-11 flex-1/);
+  assert.match(source, /const targetKeySet = new Set\(cardKeys\.filter\(Boolean\)\)/);
+  assert.match(source, /const preservedKeys = collapsedOutlineCardKeys\.filter\(key => !targetKeySet\.has\(key\)\)/);
+  assert.match(source, /\? \[\.\.\.preservedKeys, \.\.\.targetKeySet\][\s\S]*?: preservedKeys/);
+  assert.match(source, /cardKeys=\{sectionRows\.map\(\(\{ record \}\) => `draft:\$\{record\.id\}`\)\}/);
+  assert.match(source, /const snapshotCardKeys = visibleRecords\.map/);
+  assert.match(source, /viewLabel=\{current \? '確定目次' : `過去の目次/);
+  assert.equal((source.match(/onSetCardsCollapsed=\{setOutlineCardsCollapsed\}/g) || []).length, 2);
+});
+
+test('目次は並び順から自動番号を表示し、種類と題名を分けて編集できる', () => {
+  assert.match(source, /buildPlanningChapterOrdinalLabels/);
+  assert.match(source, /chapterRows\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/);
+  assert.ok((source.match(/chapterRows\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/g) || []).length >= 4);
+  assert.match(source, /getPlanningChapterDisplayTitle/);
+  assert.match(source, /getPlanningChapterPresentation/);
+  assert.match(source, /const \{ ordinalLabel, displayTitle \} = chapterPresentation/);
+  assert.match(source, /\{outlinePresentation\.ordinalLabel\}/);
+  assert.match(source, /\{outlinePresentation\.displayTitle\}/);
+  assert.match(source, /\{ordinalLabel\}[\s\S]*?\{displayTitle\}/);
+  assert.match(source, /第N部／章／話／節は並び順から自動表示されます/);
+  assert.match(source, /「編集」で種類と題名を変更できます/);
+  assert.match(source, /種類（部／章／話／節）/);
+  assert.match(source, /題名（第1章などの番号は自動）/);
+  assert.match(source, /chapterPresentationLabel\(chapter, draftOrdinalLabels\)/);
+  assert.match(source, /chapterContextPresentation\(record, allChapters, activeChapterIds\)/);
+  assert.match(source, /chapterContextPathLabel\(record, allChapters, activeChapterIds/);
+  assert.match(source, /getPlanningChapterDisplayTitle\(record\.title\)/);
+  assert.match(source, /title: getPlanningChapterDisplayTitle\(record\.title\)/);
+  assert.match(source, /visibleRecords\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/);
+  assert.match(source, /itemLabel=\{outlineItemLabel\}/);
+  assert.match(source, /itemLabel=\{itemLabel\}/);
+  assert.match(source, /aria-label=\{`\$\{outlineItemLabel\}を\$\{siblingLocation\}上へ`\}/);
+  assert.match(source, /aria-label=\{`\$\{outlineItemLabel\}を\$\{siblingLocation\}下へ`\}/);
 });
 
 test('原稿完成チェックと任意HTTPS原稿URLは初心者向けで安全に操作できる', () => {
