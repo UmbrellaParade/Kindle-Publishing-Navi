@@ -35,7 +35,7 @@ test('version.json の最低限の形式を厳格に検証する', () => {
 
 test('ビルド環境で未指定なら公開ファイルと揃えた既定値を使う', () => {
   assert.equal(CURRENT_APP_VERSION, FALLBACK_APP_VERSION);
-  assert.equal(FALLBACK_APP_VERSION, '1.22.0');
+  assert.equal(FALLBACK_APP_VERSION, '1.23.0');
   const packageInfo = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const publicVersion = JSON.parse(readFileSync(new URL('../public/version.json', import.meta.url), 'utf8'));
   assert.equal(packageInfo.version, FALLBACK_APP_VERSION);

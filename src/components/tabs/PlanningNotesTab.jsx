@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   BookOpenText,
   CheckCircle2,
@@ -24,6 +25,7 @@ import {
   MessageSquareText,
   Pencil,
   Plus,
+  RefreshCw,
   Save,
   Scale,
   Search,
@@ -91,9 +93,11 @@ import {
   parseMarketResearchSummaryMarkdown,
   planningNotesShareToMarkdown,
   planningOutlineMatchesSnapshot,
+  previewPlanningChapterNodeTypeBulkChange,
   previewMarketResearchImport,
   readPlanningNotes,
   replacePlanningOutlineDraft,
+  applyPlanningChapterNodeTypeBulkChange,
   savePlanningMarketSummary,
   savePlanningConcept,
   serializePlanningNotes,
@@ -632,6 +636,173 @@ function OutlineSnapshotDialog({ value, busy, onChange, onSave, onClose }) {
           <Button type="button" onClick={onSave} disabled={busy} className="min-h-11 bg-neon-cyan/20 text-neon-cyan">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}
             {value?.kind === 'confirmed' ? '確定目次として保存' : '履歴に保存'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OutlineBulkNodeTypeDialog({ value, busy, onChange, onApply, onClose }) {
+  const cancelButtonRef = useRef(null);
+  const preview = value?.preview;
+  const items = preview?.items || [];
+  const changedItems = items.filter(item => item.result === 'change');
+  const stoppedItems = items.filter(item => item.result !== 'change');
+  const globalBlockerCount = (preview?.blockers || []).filter(blocker => !blocker.chapterId).length;
+  const toLabel = preview?.toLabel || PLANNING_CHAPTER_NODE_TYPES[value?.toNodeType] || '種類';
+
+  return (
+    <Dialog open={Boolean(value)} onOpenChange={open => { if (!open && !busy) onClose(); }}>
+      <DialogContent
+        className="flex max-h-[92dvh] max-w-2xl flex-col overflow-hidden p-0"
+        style={{ background: '#151527', border: '1px solid #2a2a4a' }}
+        onOpenAutoFocus={event => {
+          event.preventDefault();
+          cancelButtonRef.current?.focus();
+        }}
+      >
+        <DialogHeader className="border-b border-[#2a2a4a] px-5 pb-4 pt-5">
+          <DialogTitle className="flex items-center gap-2 text-neon-cyan">
+            <RefreshCw className="h-5 w-5" aria-hidden="true" />
+            部・章・話・節をまとめて変更
+          </DialogTitle>
+          <DialogDescription>
+            画面の検索・絞り込みに関係なく、現在の仮目次にあるすべての「{preview?.fromLabel || PLANNING_CHAPTER_NODE_TYPES[value?.fromNodeType] || '選んだ種類'}」が対象です。確定目次・過去の目次・採用しない項目は変更しません。本人承認済みが含まれる場合は一括変更を停止します。
+          </DialogDescription>
+        </DialogHeader>
+
+        {value && <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <fieldset className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <legend className="sr-only">まとめて変更する種類を選ぶ</legend>
+            <label className="block space-y-1.5 text-sm font-bold text-foreground">
+              <span>現在の種類</span>
+              <select
+                value={value.fromNodeType}
+                onChange={event => onChange(event.target.value, value.toNodeType)}
+                disabled={busy}
+                className={INPUT_CLASS}
+              >
+                {Object.entries(PLANNING_CHAPTER_NODE_TYPES).map(([nodeType, label]) => (
+                  <option key={nodeType} value={nodeType}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block space-y-1.5 text-sm font-bold text-foreground">
+              <span>変更後の種類</span>
+              <select
+                value={value.toNodeType}
+                onChange={event => onChange(value.fromNodeType, event.target.value)}
+                disabled={busy}
+                className={INPUT_CLASS}
+              >
+                {Object.entries(PLANNING_CHAPTER_NODE_TYPES).map(([nodeType, label]) => (
+                  <option key={nodeType} value={nodeType}>{label}</option>
+                ))}
+              </select>
+            </label>
+          </fieldset>
+
+          <section aria-labelledby="outline-bulk-type-preview-title" className="rounded-xl border border-neon-cyan/25 bg-neon-cyan/5 p-4">
+            <h3 id="outline-bulk-type-preview-title" className="font-black text-neon-cyan">変更内容を確認</h3>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              現在の仮目次にあるすべての「{preview?.fromLabel || '現在の種類'}」を探し、「{toLabel}」へ変更できるか確認しました。題名・並び順・原稿リンク・取材との紐づけは変えません。
+            </p>
+            <div role="status" aria-live="polite" aria-atomic="true" className="mt-3 grid grid-cols-1 gap-2 min-[390px]:grid-cols-3">
+              <div className="rounded-lg border border-white/10 bg-black/10 p-3 text-center">
+                <span className="block text-[11px] font-bold text-muted-foreground">対象</span>
+                <strong className="mt-1 block text-lg text-foreground">{preview?.targetCount || 0}件</strong>
+              </div>
+              <div className="rounded-lg border border-emerald-400/25 bg-emerald-400/5 p-3 text-center">
+                <span className="block text-[11px] font-bold text-emerald-200">変更できる</span>
+                <strong className="mt-1 block text-lg text-emerald-100">{preview?.changeableCount || 0}件</strong>
+              </div>
+              <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-3 text-center">
+                <span className="block text-[11px] font-bold text-amber-200">停止・スキップ</span>
+                <strong className="mt-1 block text-lg text-amber-100">
+                  {stoppedItems.length}件{globalBlockerCount > 0 ? '＋全体停止' : ''}
+                </strong>
+              </div>
+            </div>
+          </section>
+
+          {value.error && (
+            <div role="alert" className="flex gap-2 rounded-lg border border-rose-400/40 bg-rose-400/10 p-3 text-xs leading-relaxed text-rose-100">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+              <span>{value.error}</span>
+            </div>
+          )}
+
+          {preview && !preview.canApply && (
+            <div role="alert" className="rounded-xl border border-amber-400/35 bg-amber-400/10 p-4 text-xs leading-relaxed text-amber-100">
+              <p className="flex items-center gap-2 font-black">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />一括変更を停止しています
+              </p>
+              <p className="mt-2">1件でも停止理由がある場合は、何も変更しません。本人承認済みが理由なら、キャンセル後に「目次をまとめて書き直す」で新しい案を作成してください。それ以外は下の理由を確認し、該当項目を個別に編集してください。</p>
+              {(preview.blockers || []).length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {preview.blockers.map((blocker, index) => <li key={`${blocker.code}-${blocker.chapterId || index}`}>・{blocker.reason}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {items.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-white/15 p-5 text-center text-sm text-muted-foreground">
+              現在の仮目次に「{preview?.fromLabel || '選んだ種類'}」の項目はありません。現在の種類を選び直してください。
+            </div>
+          ) : (
+            <section aria-label="種類をまとめて変更する項目のプレビュー" className="space-y-3">
+              {changedItems.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-black text-emerald-200">
+                    {preview.canApply ? '変更予定' : '条件を直せば変更できる候補'} {changedItems.length}件
+                  </h4>
+                  <ul className="mt-2 max-h-60 space-y-2 overflow-y-auto pr-1">
+                    {changedItems.map(item => (
+                      <li key={item.chapterId} className="rounded-lg border border-emerald-400/20 bg-emerald-400/5 px-3 py-2">
+                        <p className="break-words text-sm font-bold text-foreground">{getPlanningChapterDisplayTitle(item.title) || '無題'}</p>
+                        <p className="mt-1 flex items-center gap-2 text-xs text-emerald-200">
+                          <span>{item.fromLabel}</span><ArrowRight className="h-3.5 w-3.5" aria-hidden="true" /><span className="font-black">{item.toLabel}</span>
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {stoppedItems.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-black text-amber-200">変更しない項目と理由 {stoppedItems.length}件</h4>
+                  <ul className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
+                    {stoppedItems.map(item => (
+                      <li key={item.chapterId} className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2">
+                        <p className="break-words text-sm font-bold text-foreground">{getPlanningChapterDisplayTitle(item.title) || '無題'}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-amber-100">{item.reason || '安全に変更できないため停止しました'}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+
+          {(preview?.warnings || []).length > 0 && (
+            <ul className="space-y-1 rounded-lg border border-white/10 bg-black/10 p-3 text-xs leading-relaxed text-muted-foreground">
+              {preview.warnings.map((warning, index) => <li key={`${warning.code}-${warning.chapterId || index}`}>・{warning.reason}</li>)}
+            </ul>
+          )}
+        </div>}
+
+        <DialogFooter className="flex-col gap-2 border-t border-[#2a2a4a] bg-[#121222] px-5 py-4 sm:flex-row sm:space-x-0">
+          <Button ref={cancelButtonRef} type="button" variant="outline" onClick={onClose} disabled={busy} className="min-h-11 w-full sm:w-auto">キャンセル</Button>
+          <Button
+            type="button"
+            onClick={onApply}
+            disabled={busy || !preview?.canApply}
+            className="min-h-11 w-full gap-2 bg-neon-cyan/20 text-neon-cyan sm:w-auto"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}
+            仮目次の{preview?.changeableCount || 0}件を「{toLabel}」へ変更
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2471,6 +2642,7 @@ export default function PlanningNotesTab({
   const [outlineView, setOutlineView] = useState('draft');
   const [outlineDialog, setOutlineDialog] = useState(null);
   const [outlineRewrite, setOutlineRewrite] = useState(null);
+  const [outlineBulkNodeType, setOutlineBulkNodeType] = useState(null);
   const [lastOutlineRewriteSummary, setLastOutlineRewriteSummary] = useState(null);
   const [chapterLinkEditor, setChapterLinkEditor] = useState(null);
   const [manuscriptLinkEditor, setManuscriptLinkEditor] = useState(null);
@@ -2492,6 +2664,7 @@ export default function PlanningNotesTab({
   const outlineTablistScrollRef = useRef(null);
   const outlineTabRefs = useRef(new Map());
   const outlineRewriteTriggerRef = useRef(null);
+  const outlineBulkNodeTypeTriggerRef = useRef(null);
   const manuscriptLinkReturnFocusRef = useRef(null);
   const activeSectionRef = useRef(activeSection);
   const collapsedOutlineCardKeySet = useMemo(
@@ -2543,6 +2716,7 @@ export default function PlanningNotesTab({
     setOutlineView('draft');
     setOutlineDialog(null);
     setOutlineRewrite(null);
+    setOutlineBulkNodeType(null);
     setLastOutlineRewriteSummary(null);
     setChapterLinkEditor(null);
     setManuscriptLinkEditor(null);
@@ -3157,6 +3331,59 @@ export default function PlanningNotesTab({
       expectedRevision: data.chapterOrderRevision,
     }), `「${chapterPresentationLabel(record, draftOrdinalLabels)}」を${direction === 'up' ? '上' : '下'}へ移動しました`, { closeEditor: false });
     if (next) setData(next);
+  };
+
+  const closeOutlineBulkNodeType = () => {
+    setOutlineBulkNodeType(null);
+    window.requestAnimationFrame(() => outlineBulkNodeTypeTriggerRef.current?.focus());
+  };
+
+  const previewOutlineBulkNodeType = (fromNodeType, toNodeType) => {
+    try {
+      const preview = previewPlanningChapterNodeTypeBulkChange(data, {
+        fromNodeType,
+        toNodeType,
+      });
+      setOutlineBulkNodeType(current => ({
+        ...(current || {}),
+        projectId: project.id,
+        fromNodeType,
+        toNodeType,
+        preview,
+        error: '',
+      }));
+    } catch (error) {
+      setOutlineBulkNodeType(current => ({
+        ...(current || {}),
+        projectId: project.id,
+        fromNodeType,
+        toNodeType,
+        preview: null,
+        error: error?.message || '変更内容を確認できませんでした',
+      }));
+    }
+  };
+
+  const openOutlineBulkNodeType = () => {
+    previewOutlineBulkNodeType('chapter', 'episode');
+  };
+
+  const applyOutlineBulkNodeType = async () => {
+    if (!outlineBulkNodeType || outlineBulkNodeType.projectId !== project.id || !outlineBulkNodeType.preview?.canApply) return;
+    const targetProjectId = outlineBulkNodeType.projectId;
+    const preview = outlineBulkNodeType.preview;
+    let summary = null;
+    const next = await persist(current => {
+      const result = applyPlanningChapterNodeTypeBulkChange(current, preview, {
+        expectedOutlineRevision: preview.expectedOutlineRevision,
+        expectedChapterOrderRevision: preview.expectedChapterOrderRevision,
+      });
+      summary = result.summary;
+      return result.data;
+    }, `現在の仮目次にある${preview.changeableCount}件の「${preview.fromLabel}」を「${preview.toLabel}」へ変更しました`, { closeEditor: false });
+    if (!next || !summary?.changed || activeProjectIdRef.current !== targetProjectId) return;
+    setOutlineBulkNodeType(null);
+    window.requestAnimationFrame(() => outlineBulkNodeTypeTriggerRef.current?.focus());
   };
 
   const closeOutlineRewrite = () => {
@@ -3806,6 +4033,17 @@ export default function PlanningNotesTab({
                     <Button type="button" onClick={() => openNewRecord('chapters', { nodeType: 'part' })} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus />部を追加</Button>
                     <Button type="button" variant="outline" onClick={() => openNewRecord('chapters', { nodeType: 'chapter' })} className="min-h-11 gap-2 border-neon-pink/35 text-neon-pink"><Plus />章だけで始める</Button>
                     <Button
+                      ref={outlineBulkNodeTypeTriggerRef}
+                      type="button"
+                      variant="outline"
+                      onClick={openOutlineBulkNodeType}
+                      disabled={busy || activeOutlineChapterCount === 0}
+                      className="min-h-11 gap-2 border-neon-cyan/35 text-neon-cyan"
+                      aria-label="現在の仮目次にあるすべての同じ種類をまとめて変更"
+                    >
+                      <RefreshCw className="h-4 w-4" aria-hidden="true" />種類をまとめて変更
+                    </Button>
+                    <Button
                       type="button"
                       variant="outline"
                       onClick={() => openOutlineSnapshotDialog('draft')}
@@ -4203,6 +4441,13 @@ export default function PlanningNotesTab({
         onApply={applyOutlineRewrite}
         onCopyPrompt={copyOutlineRewritePrompt}
         onClose={closeOutlineRewrite}
+      />
+      <OutlineBulkNodeTypeDialog
+        value={outlineBulkNodeType?.projectId === project.id ? outlineBulkNodeType : null}
+        busy={busy}
+        onChange={previewOutlineBulkNodeType}
+        onApply={applyOutlineBulkNodeType}
+        onClose={closeOutlineBulkNodeType}
       />
       <ChapterLinkDialog
         value={chapterLinkEditor?.projectId === project.id ? chapterLinkEditor : null}

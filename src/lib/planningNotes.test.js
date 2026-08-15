@@ -4,6 +4,7 @@ import {
   PlanningNotesMergeConflictError,
   PlanningNotesImportConflictError,
   PLANNING_NOTES_SAVE_LIMIT_BYTES,
+  applyPlanningChapterNodeTypeBulkChange,
   applyMarketResearchImport,
   assignDecisionCanonical,
   assignInstructionCanonical,
@@ -42,6 +43,7 @@ import {
   parsePlanningOutlineMarkdown,
   planningOutlineMatchesSnapshot,
   previewMarketResearchImport,
+  previewPlanningChapterNodeTypeBulkChange,
   previewPlanningNotesMerge,
   readPlanningNotes,
   replacePlanningOutlineDraft,
@@ -185,6 +187,282 @@ test('部の中へ話と節を作り、親子順で安定して平坦化する',
   assert.equal(duplicate.order, 2);
   const markdown = planningNotesShareToMarkdown(buildPlanningNotesSharePackage(data, { now: fixedNow }));
   assert.match(markdown, /- 第1部：第一部（原稿：未完了）\n  - 第1話：第一話（原稿：未完了）\n    - 第1節：最初の場面（原稿：未完了）/);
+});
+
+test('現在の仮目次にある章だけを話へ一括変更し、ID・本文・階層・状態・リンク・保存版を維持する', () => {
+  let data = createEmptyPlanningNotes();
+  const addChapter = values => {
+    const record = createPlanningChapterRecord(data, values, {
+      now: fixedNow,
+      idFactory: idFactory(values.id),
+    });
+    data = addRecord(data, 'chapters', record);
+    return record;
+  };
+  const part = addChapter({ id: 'bulk-part', nodeType: 'part', title: '第一部' });
+  const chapter1 = addChapter({
+    id: 'bulk-chapter-1',
+    nodeType: 'chapter',
+    parentId: part.id,
+    order: 0,
+    title: '第1章 はじまり',
+    status: 'needs_confirmation',
+  });
+  const section = addChapter({
+    id: 'bulk-section',
+    nodeType: 'section',
+    parentId: chapter1.id,
+    order: 0,
+    title: '場面の整理',
+  });
+  const chapter2 = addChapter({
+    id: 'bulk-chapter-2',
+    nodeType: 'chapter',
+    parentId: part.id,
+    order: 1,
+    title: '第2章 次の一歩',
+  });
+  const rejected = addChapter({
+    id: 'bulk-rejected',
+    nodeType: 'chapter',
+    parentId: part.id,
+    order: 2,
+    title: '採用しない章',
+    status: 'rejected',
+  });
+  const archived = addChapter({
+    id: 'bulk-archived',
+    nodeType: 'chapter',
+    order: 1,
+    title: '退避済みの旧章',
+  });
+  data = normalizePlanningNotes({
+    ...data,
+    draftOutlineChapterIds: data.draftOutlineChapterIds.filter(id => id !== archived.id),
+  });
+  data = addRecord(data, 'interviews', createPlanningRecord('interviews', {
+    id: 'bulk-interview',
+    question: 'この出来事を教えてください',
+    chapterIds: [chapter1.id, archived.id],
+  }, { now: fixedNow, idFactory: idFactory('bulk-interview') }));
+  data = createPlanningOutlineSnapshot(data, {
+    kind: 'confirmed',
+    label: '一括変更前の確定目次',
+  }, {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('bulk-confirmed'),
+  });
+  data = createPlanningOutlineSnapshot(data, {
+    kind: 'draft',
+    label: '一括変更前の仮目次メモ',
+  }, {
+    expectedOutlineRevision: data.outlineRevision,
+    expectedChapterOrderRevision: data.chapterOrderRevision,
+    now: fixedNow,
+    idFactory: idFactory('bulk-draft-snapshot'),
+  });
+  data = updatePlanningChapterManuscript(data, chapter1.id, {
+    completed: true,
+    documentUrl: 'https://docs.google.com/document/d/bulk-chapter-1/edit',
+  }, { expectedRevision: 0, now: fixedNow });
+
+  const beforeSnapshots = structuredClone(data.outlineSnapshots);
+  const beforeLinks = structuredClone(data.interviews[0].chapterIds);
+  const beforeWritingStates = structuredClone(data.chapterWritingStates);
+  const beforeChapterInvariants = new Map(data.chapters.map(chapter => [chapter.id, {
+    id: chapter.id,
+    title: chapter.title,
+    order: chapter.order,
+    parentId: chapter.parentId,
+    status: chapter.status,
+    chapterIds: chapter.chapterIds,
+  }]));
+  const beforeOutlineRevision = data.outlineRevision;
+  const beforeOrderRevision = data.chapterOrderRevision;
+  const sameTypePreview = previewPlanningChapterNodeTypeBulkChange(data, {
+    fromNodeType: 'chapter',
+    toNodeType: 'chapter',
+  });
+  assert.equal(sameTypePreview.canApply, false);
+  assert.equal(sameTypePreview.blockedCount, 2);
+  assert.equal(sameTypePreview.historySkippedCount, 1);
+  assert.equal(sameTypePreview.skippedCount, 3);
+  const preview = previewPlanningChapterNodeTypeBulkChange(data, {
+    fromNodeType: 'chapter',
+    toNodeType: 'episode',
+  });
+
+  assert.equal(preview.canApply, true);
+  assert.deepEqual(preview.targetChapterIds, [chapter1.id, chapter2.id]);
+  assert.equal(preview.targetCount, 2);
+  assert.equal(preview.changeableCount, 2);
+  assert.equal(preview.blockedCount, 0);
+  assert.equal(preview.historySkippedCount, 1);
+  assert.equal(preview.skippedCount, 1);
+  assert.equal(preview.items.find(item => item.chapterId === rejected.id).result, 'skipped');
+  assert.ok(preview.warnings.some(warning => (
+    warning.code === 'children_preserved' && warning.chapterId === chapter1.id
+  )));
+
+  const result = applyPlanningChapterNodeTypeBulkChange(data, preview, {
+    expectedOutlineRevision: preview.expectedOutlineRevision,
+    expectedChapterOrderRevision: preview.expectedChapterOrderRevision,
+    now: () => new Date('2026-08-14T01:00:00.000Z'),
+  });
+  const next = result.data;
+  assert.equal(result.summary.changedChapterCount, 2);
+  assert.deepEqual(result.summary.chapterIds, [chapter1.id, chapter2.id]);
+  assert.equal(next.chapters.find(chapter => chapter.id === chapter1.id).nodeType, 'episode');
+  assert.equal(next.chapters.find(chapter => chapter.id === chapter2.id).nodeType, 'episode');
+  assert.equal(next.chapters.find(chapter => chapter.id === rejected.id).nodeType, 'chapter');
+  assert.equal(next.chapters.find(chapter => chapter.id === archived.id).nodeType, 'chapter');
+  assert.equal(next.chapters.find(chapter => chapter.id === part.id).nodeType, 'part');
+  assert.equal(next.chapters.find(chapter => chapter.id === section.id).nodeType, 'section');
+  for (const chapter of next.chapters) {
+    assert.deepEqual({
+      id: chapter.id,
+      title: chapter.title,
+      order: chapter.order,
+      parentId: chapter.parentId,
+      status: chapter.status,
+      chapterIds: chapter.chapterIds,
+    }, beforeChapterInvariants.get(chapter.id));
+  }
+  assert.deepEqual(next.interviews[0].chapterIds, beforeLinks);
+  assert.deepEqual(next.chapterWritingStates, beforeWritingStates);
+  assert.deepEqual(next.outlineSnapshots, beforeSnapshots);
+  assert.equal(next.confirmedOutlineId, data.confirmedOutlineId);
+  assert.equal(next.outlineRevision, beforeOutlineRevision + 1);
+  assert.equal(next.chapterOrderRevision, beforeOrderRevision + 1);
+
+  const restored = readPlanningNotes(serializePlanningNotes(next)).data;
+  assert.deepEqual(restored, next);
+  const share = buildPlanningNotesSharePackage(next, { now: fixedNow });
+  assert.equal(share.data.chapters.find(chapter => chapter.id === chapter1.id).nodeType, 'episode');
+  assert.equal(
+    share.data.outlineSnapshots
+      .find(snapshot => snapshot.id === data.confirmedOutlineId)
+      .chapters.find(chapter => chapter.id === chapter1.id).nodeType,
+    'chapter',
+  );
+  const shareMarkdown = planningNotesShareToMarkdown(share);
+  assert.match(shareMarkdown, /第1話：はじまり/);
+  assert.match(shareMarkdown, /第1章：はじまり/);
+});
+
+test('章から話への一括変更は本人承認済みをsilent skipせず全件を原子的に停止する', () => {
+  let data = createEmptyPlanningNotes();
+  const part = createPlanningChapterRecord(data, {
+    id: 'bulk-approved-part', nodeType: 'part', title: '第一部',
+  }, { now: fixedNow, idFactory: idFactory('bulk-approved-part') });
+  data = addRecord(data, 'chapters', part);
+  const draftChapter = createPlanningChapterRecord(data, {
+    id: 'bulk-draft-chapter', nodeType: 'chapter', parentId: part.id, order: 0, title: '変更できる章',
+  }, { now: fixedNow, idFactory: idFactory('bulk-draft-chapter') });
+  data = addRecord(data, 'chapters', draftChapter);
+  const approvedChapter = createPlanningChapterRecord(data, {
+    id: 'bulk-approved-chapter', nodeType: 'chapter', parentId: part.id, order: 1,
+    title: '承認済みの章', status: 'approved', approvedBy: '著者本人',
+  }, { now: fixedNow, idFactory: idFactory('bulk-approved-chapter') });
+  data = addRecord(data, 'chapters', approvedChapter);
+  const before = serializePlanningNotes(data);
+  const preview = previewPlanningChapterNodeTypeBulkChange(data, {
+    fromNodeType: 'chapter',
+    toNodeType: 'episode',
+  });
+
+  assert.equal(preview.canApply, false);
+  assert.equal(preview.targetCount, 2);
+  assert.equal(preview.changeableCount, 1);
+  assert.equal(preview.blockedCount, 1);
+  assert.equal(preview.skippedCount, 1);
+  assert.equal(preview.items.find(item => item.chapterId === approvedChapter.id).result, 'blocked');
+  assert.ok(preview.blockers.some(blocker => (
+    blocker.code === 'approved_chapter' && blocker.chapterId === approvedChapter.id
+  )));
+  assert.throws(
+    () => applyPlanningChapterNodeTypeBulkChange(data, preview, {
+      expectedOutlineRevision: preview.expectedOutlineRevision,
+      expectedChapterOrderRevision: preview.expectedChapterOrderRevision,
+      now: fixedNow,
+    }),
+    /本人承認済み/,
+  );
+  assert.equal(serializePlanningNotes(data), before);
+  assert.equal(data.chapters.find(chapter => chapter.id === draftChapter.id).nodeType, 'chapter');
+});
+
+test('子の型が不正になる一括変更をプレビューで示し、親子構造を変更せず停止する', () => {
+  let data = createEmptyPlanningNotes();
+  const part = createPlanningChapterRecord(data, {
+    id: 'bulk-tree-part', nodeType: 'part', title: '第一部',
+  }, { now: fixedNow, idFactory: idFactory('bulk-tree-part') });
+  data = addRecord(data, 'chapters', part);
+  const chapter = createPlanningChapterRecord(data, {
+    id: 'bulk-tree-chapter', nodeType: 'chapter', parentId: part.id, title: '親になる章',
+  }, { now: fixedNow, idFactory: idFactory('bulk-tree-chapter') });
+  data = addRecord(data, 'chapters', chapter);
+  const episode = createPlanningChapterRecord(data, {
+    id: 'bulk-tree-episode', nodeType: 'episode', parentId: chapter.id, title: '子の話',
+  }, { now: fixedNow, idFactory: idFactory('bulk-tree-episode') });
+  data = addRecord(data, 'chapters', episode);
+  const before = serializePlanningNotes(data);
+  const preview = previewPlanningChapterNodeTypeBulkChange(data, {
+    fromNodeType: 'chapter',
+    toNodeType: 'episode',
+  });
+
+  assert.equal(preview.canApply, false);
+  assert.equal(preview.blockedCount, 1);
+  assert.equal(preview.skippedCount, 1);
+  assert.ok(preview.blockers.some(blocker => (
+    blocker.code === 'incompatible_child_type'
+      && blocker.chapterId === chapter.id
+      && blocker.relatedChapterId === episode.id
+  )));
+  assert.match(preview.items[0].reason, /中には置けません/);
+  assert.throws(
+    () => applyPlanningChapterNodeTypeBulkChange(data, preview, {
+      expectedOutlineRevision: preview.expectedOutlineRevision,
+      expectedChapterOrderRevision: preview.expectedChapterOrderRevision,
+      now: fixedNow,
+    }),
+    /中には置けません/,
+  );
+  assert.equal(serializePlanningNotes(data), before);
+});
+
+test('一括変更プレビュー後に仮目次が更新された場合は古いプレビューを適用しない', () => {
+  let data = createEmptyPlanningNotes();
+  const chapter = createPlanningChapterRecord(data, {
+    id: 'bulk-stale-chapter', nodeType: 'chapter', title: '更新前の章',
+  }, { now: fixedNow, idFactory: idFactory('bulk-stale-chapter') });
+  data = addRecord(data, 'chapters', chapter);
+  const preview = previewPlanningChapterNodeTypeBulkChange(data, {
+    fromNodeType: 'chapter',
+    toNodeType: 'episode',
+  });
+  const updated = upsertPlanningRecord(data, 'chapters', {
+    ...data.chapters[0],
+    title: '別画面で更新された章',
+  }, {
+    expectedUpdatedAt: data.chapters[0].updatedAt,
+    now: () => new Date('2026-08-14T01:00:00.000Z'),
+  });
+  const beforeApply = serializePlanningNotes(updated);
+
+  assert.throws(
+    () => applyPlanningChapterNodeTypeBulkChange(updated, preview, {
+      expectedOutlineRevision: preview.expectedOutlineRevision,
+      expectedChapterOrderRevision: preview.expectedChapterOrderRevision,
+      now: fixedNow,
+    }),
+    /目次が別の画面で更新/,
+  );
+  assert.equal(serializePlanningNotes(updated), beforeApply);
+  assert.equal(updated.chapters[0].nodeType, 'chapter');
 });
 
 test('目次階層は存在しない親・循環・親子型違反・同じ親内の順序重複を拒否する', () => {

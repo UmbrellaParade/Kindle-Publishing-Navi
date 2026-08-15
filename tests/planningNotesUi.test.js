@@ -567,3 +567,42 @@ test('バックアップ結合のノート競合は場所と理由を示して�
   assert.match(backupDialogSource, /disabled=\{busy \|\| planningMergeConflicts\.length > 0\}/);
   assert.match(backupDialogSource, /非公開取材は通常バックアップに含まれます/);
 });
+
+test('仮目次にある同じ種類をプレビューしてから安全にまとめて変更できる', () => {
+  const bulkDialog = sourceBlock(
+    'function OutlineBulkNodeTypeDialog(',
+    '\n\nfunction flattenOutlineProposal(',
+  );
+  assert.match(source, /function OutlineBulkNodeTypeDialog\(/);
+  assert.match(source, /previewPlanningChapterNodeTypeBulkChange/);
+  assert.match(source, /applyPlanningChapterNodeTypeBulkChange/);
+  assert.match(source, /previewPlanningChapterNodeTypeBulkChange\(data, \{[\s\S]*?fromNodeType,[\s\S]*?toNodeType/);
+  assert.match(source, /previewOutlineBulkNodeType\('chapter', 'episode'\)/);
+  assert.match(source, /applyPlanningChapterNodeTypeBulkChange\(current, preview, \{[\s\S]*?expectedOutlineRevision: preview\.expectedOutlineRevision,[\s\S]*?expectedChapterOrderRevision: preview\.expectedChapterOrderRevision/);
+  assert.match(source, /summary = result\.summary;[\s\S]*?return result\.data/);
+  assert.match(source, /const targetProjectId = outlineBulkNodeType\.projectId;[\s\S]*?activeProjectIdRef\.current !== targetProjectId/);
+  const bulkApply = sourceBlock(
+    'const applyOutlineBulkNodeType = async () => {',
+    '\n\n  const closeOutlineRewrite = () => {',
+  );
+  assert.doesNotMatch(bulkApply, /selectOutlineView\('draft'\)/);
+  assert.match(bulkApply, /現在の仮目次にある\$\{preview\.changeableCount\}件の「\$\{preview\.fromLabel\}」を「\$\{preview\.toLabel\}」へ変更しました/);
+  assert.match(source, /画面の検索・絞り込みに関係なく、現在の仮目次にあるすべての/);
+  assert.match(source, /確定目次・過去の目次・採用しない項目は変更しません/);
+  assert.match(source, /本人承認済みが含まれる場合は一括変更を停止します/);
+  assert.match(source, /変更内容を確認/);
+  assert.match(source, /対象<\/span>[\s\S]*?変更できる<\/span>[\s\S]*?停止・スキップ<\/span>/);
+  assert.match(source, /1件でも停止理由がある場合は、何も変更しません/);
+  assert.match(source, /本人承認済みが理由なら、キャンセル後に「目次をまとめて書き直す」で新しい案を作成してください/);
+  assert.match(source, /preview\.blockers\.map/);
+  assert.match(source, /stoppedItems\.map/);
+  assert.match(source, /disabled=\{busy \|\| !preview\?\.canApply\}/);
+  assert.match(source, /ref=\{cancelButtonRef\}[\s\S]*?>キャンセル<\/Button>/);
+  assert.match(source, /onOpenAutoFocus=\{event => \{[\s\S]*?cancelButtonRef\.current\?\.focus\(\)/);
+  assert.match(source, /outlineBulkNodeTypeTriggerRef\.current\?\.focus\(\)/);
+  assert.match(source, /className="min-h-11 w-full gap-2[\s\S]*?sm:w-auto"/);
+  assert.doesNotMatch(bulkDialog, /aria-describedby=/);
+  assert.doesNotMatch(bulkDialog, /flex-col-reverse/);
+  assert.match(bulkDialog, /DialogFooter className="flex-col gap-2[\s\S]*?<Button ref=\{cancelButtonRef\}[\s\S]*?キャンセル<\/Button>[\s\S]*?onClick=\{onApply\}/);
+  assert.match(source, /outlineView === 'draft' && \([\s\S]*?ref=\{outlineBulkNodeTypeTriggerRef\}[\s\S]*?種類をまとめて変更/);
+});

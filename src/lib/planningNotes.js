@@ -1772,6 +1772,401 @@ function rejectedParent(chapters, parentId) {
   return parentId ? chapters.find(chapter => chapter.id === parentId && chapter.status === 'rejected') : null;
 }
 
+function normalizePlanningChapterNodeTypeBulkRequest({
+  fromNodeType = 'chapter',
+  toNodeType = 'episode',
+  chapterIds,
+} = {}) {
+  const safeFromNodeType = enumValue(
+    fromNodeType,
+    CHAPTER_NODE_TYPE_VALUES,
+    'chapter',
+    'bulkNodeType.fromNodeType',
+  );
+  const safeToNodeType = enumValue(
+    toNodeType,
+    CHAPTER_NODE_TYPE_VALUES,
+    'episode',
+    'bulkNodeType.toNodeType',
+  );
+  if (chapterIds === undefined) {
+    return {
+      fromNodeType: safeFromNodeType,
+      toNodeType: safeToNodeType,
+      requestedChapterIds: null,
+    };
+  }
+  if (!Array.isArray(chapterIds)) {
+    throw new TypeError('一括変更する構成項目IDは配列で指定してください');
+  }
+  const seen = new Set();
+  const requestedChapterIds = [];
+  for (let index = 0; index < chapterIds.length; index += 1) {
+    const chapterId = idValue(chapterIds[index], `bulkNodeType.chapterIds[${index}]`);
+    if (seen.has(chapterId)) continue;
+    seen.add(chapterId);
+    requestedChapterIds.push(chapterId);
+  }
+  return {
+    fromNodeType: safeFromNodeType,
+    toNodeType: safeToNodeType,
+    requestedChapterIds,
+  };
+}
+
+function addPlanningBulkNodeTypeIssue(issues, seen, issue) {
+  const key = [issue.code, issue.chapterId || '', issue.relatedChapterId || ''].join('\u0000');
+  if (seen.has(key)) return;
+  seen.add(key);
+  issues.push({
+    code: issue.code,
+    chapterId: issue.chapterId || '',
+    relatedChapterId: issue.relatedChapterId || '',
+    reason: issue.reason,
+  });
+}
+
+/**
+ * Preview an atomic node-type change against the complete current draft outline.
+ * Search and UI filters never narrow the default scope. Rejected records remain as
+ * history, while confirmed/history snapshots and all ID-based links are read-only.
+ */
+export function previewPlanningChapterNodeTypeBulkChange(data, request = {}) {
+  const normalized = normalizePlanningNotes(data);
+  const {
+    fromNodeType,
+    toNodeType,
+    requestedChapterIds,
+  } = normalizePlanningChapterNodeTypeBulkRequest(request);
+  const fromLabel = getPlanningChapterNodeLabel(fromNodeType);
+  const toLabel = getPlanningChapterNodeLabel(toNodeType);
+  const activeChapterIds = new Set(normalized.draftOutlineChapterIds);
+  const chapterById = new Map(normalized.chapters.map(chapter => [chapter.id, chapter]));
+  const childrenByParentId = new Map();
+  for (const chapter of normalized.chapters) {
+    const children = childrenByParentId.get(chapter.parentId) || [];
+    children.push(chapter);
+    childrenByParentId.set(chapter.parentId, children);
+  }
+  const activeRows = flattenChapterRecords(
+    normalized.chapters.filter(chapter => activeChapterIds.has(chapter.id)),
+    { includeRejected: true },
+  );
+  const activeOrder = new Map(activeRows.map(({ record }, index) => [record.id, index]));
+  const explicitSelection = requestedChapterIds !== null;
+  const candidateIds = explicitSelection
+    ? requestedChapterIds
+    : activeRows
+      .filter(({ record }) => record.nodeType === fromNodeType)
+      .map(({ record }) => record.id);
+  const sortedCandidateIds = [...candidateIds].sort((left, right) => (
+    (activeOrder.get(left) ?? Number.MAX_SAFE_INTEGER)
+      - (activeOrder.get(right) ?? Number.MAX_SAFE_INTEGER)
+    || left.localeCompare(right)
+  ));
+  const blockers = [];
+  const warnings = [];
+  const blockerKeys = new Set();
+  const warningKeys = new Set();
+  const intendedTargetIds = new Set();
+  const skippedReasons = new Map();
+
+  const addBlocker = issue => addPlanningBulkNodeTypeIssue(blockers, blockerKeys, issue);
+  const addWarning = issue => addPlanningBulkNodeTypeIssue(warnings, warningKeys, issue);
+
+  for (const chapterId of sortedCandidateIds) {
+    const chapter = chapterById.get(chapterId);
+    if (!chapter) {
+      addBlocker({
+        code: 'chapter_not_found',
+        chapterId,
+        reason: `構成項目（${chapterId}）が見つかりません。画面を更新してからやり直してください`,
+      });
+      continue;
+    }
+    if (!activeChapterIds.has(chapter.id)) {
+      addBlocker({
+        code: 'not_in_current_draft',
+        chapterId: chapter.id,
+        reason: `「${getPlanningChapterDisplayTitle(chapter.title)}」は現在の仮目次ではないため変更できません`,
+      });
+      continue;
+    }
+    if (chapter.nodeType !== fromNodeType) {
+      addBlocker({
+        code: 'source_type_mismatch',
+        chapterId: chapter.id,
+        reason: `「${getPlanningChapterDisplayTitle(chapter.title)}」は「${fromLabel}」ではありません。画面を更新してからやり直してください`,
+      });
+      continue;
+    }
+    if (chapter.status === 'rejected') {
+      if (explicitSelection) {
+        addBlocker({
+          code: 'rejected_history_selected',
+          chapterId: chapter.id,
+          reason: `「${getPlanningChapterDisplayTitle(chapter.title)}」は「採用しない」の履歴です。現在の仮目次だけを変更してください`,
+        });
+      } else {
+        skippedReasons.set(chapter.id, {
+          code: 'rejected_history',
+          reason: '「採用しない」の履歴は変更せず、そのまま残します',
+        });
+        addWarning({
+          code: 'rejected_history_preserved',
+          chapterId: chapter.id,
+          reason: `「${getPlanningChapterDisplayTitle(chapter.title)}」は「採用しない」の履歴として変更しません`,
+        });
+      }
+      continue;
+    }
+    intendedTargetIds.add(chapter.id);
+    if (isApproved(chapter)) {
+      addBlocker({
+        code: 'approved_chapter',
+        chapterId: chapter.id,
+        reason: `「${getPlanningChapterDisplayTitle(chapter.title)}」は本人承認済みのため一括変更できません`,
+      });
+    }
+    const pendingDescendants = [...(childrenByParentId.get(chapter.id) || [])];
+    let approvedDescendant = null;
+    while (pendingDescendants.length > 0 && !approvedDescendant) {
+      const descendant = pendingDescendants.pop();
+      if (isApproved(descendant)) {
+        approvedDescendant = descendant;
+        break;
+      }
+      pendingDescendants.push(...(childrenByParentId.get(descendant.id) || []));
+    }
+    if (approvedDescendant) {
+      addBlocker({
+        code: 'approved_descendant',
+        chapterId: chapter.id,
+        relatedChapterId: approvedDescendant.id,
+        reason: `「${getPlanningChapterDisplayTitle(chapter.title)}」の中に本人承認済みの「${getPlanningChapterDisplayTitle(approvedDescendant.title)}」があるため一括変更できません`,
+      });
+    }
+    const parent = chapter.parentId ? chapterById.get(chapter.parentId) : null;
+    if (isApproved(parent)) {
+      addBlocker({
+        code: 'approved_parent',
+        chapterId: chapter.id,
+        relatedChapterId: parent.id,
+        reason: `「${getPlanningChapterDisplayTitle(chapter.title)}」の親「${getPlanningChapterDisplayTitle(parent.title)}」が本人承認済みのため一括変更できません`,
+      });
+    }
+    if (parent?.status === 'rejected') {
+      addBlocker({
+        code: 'rejected_parent',
+        chapterId: chapter.id,
+        relatedChapterId: parent.id,
+        reason: `「${getPlanningChapterDisplayTitle(chapter.title)}」は「採用しない」の親項目に属するため一括変更できません`,
+      });
+    }
+  }
+
+  if (fromNodeType === toNodeType) {
+    if (intendedTargetIds.size > 0) {
+      for (const chapterId of intendedTargetIds) {
+        addBlocker({
+          code: 'same_node_type',
+          chapterId,
+          reason: `変更前と変更後がどちらも「${fromLabel}」です。別の種類を選んでください`,
+        });
+      }
+    } else {
+      addBlocker({
+        code: 'same_node_type',
+        reason: `変更前と変更後がどちらも「${fromLabel}」です。別の種類を選んでください`,
+      });
+    }
+  }
+
+  if (!explicitSelection && intendedTargetIds.size === 0) {
+    addBlocker({
+      code: 'no_matching_chapters',
+      reason: `現在の仮目次に、変更できる「${fromLabel}」がありません`,
+    });
+  }
+  if (explicitSelection && sortedCandidateIds.length === 0) {
+    addBlocker({
+      code: 'no_selected_chapters',
+      reason: '一括変更する構成項目が選ばれていません',
+    });
+  }
+
+  // Validate every resulting parent-child relation as one graph. This catches
+  // both an incompatible child left under a changed parent and nested targets
+  // whose parent and child would become the same, unsupported type.
+  for (const child of normalized.chapters) {
+    if (!child.parentId) continue;
+    const parent = chapterById.get(child.parentId);
+    if (!parent) continue;
+    const nextChildNodeType = intendedTargetIds.has(child.id) ? toNodeType : child.nodeType;
+    const nextParentNodeType = intendedTargetIds.has(parent.id) ? toNodeType : parent.nodeType;
+    if (CHAPTER_ALLOWED_PARENT_TYPES[nextChildNodeType].has(nextParentNodeType)) continue;
+    const childLabel = getPlanningChapterNodeLabel(nextChildNodeType);
+    const parentLabel = getPlanningChapterNodeLabel(nextParentNodeType);
+    const reason = `変更後の${childLabel}「${getPlanningChapterDisplayTitle(child.title)}」は、${parentLabel}「${getPlanningChapterDisplayTitle(parent.title)}」の中には置けません`;
+    if (intendedTargetIds.has(child.id)) {
+      addBlocker({
+        code: 'incompatible_parent_type',
+        chapterId: child.id,
+        relatedChapterId: parent.id,
+        reason,
+      });
+    }
+    if (intendedTargetIds.has(parent.id)) {
+      addBlocker({
+        code: 'incompatible_child_type',
+        chapterId: parent.id,
+        relatedChapterId: child.id,
+        reason,
+      });
+    }
+  }
+
+  for (const chapterId of intendedTargetIds) {
+    const directChildren = childrenByParentId.get(chapterId) || [];
+    if (directChildren.length > 0) {
+      addWarning({
+        code: 'children_preserved',
+        chapterId,
+        reason: `子項目${directChildren.length}件のIDと親子関係は変更せず、そのまま残します`,
+      });
+    }
+  }
+
+  const blockersByChapterId = new Map();
+  for (const blocker of blockers) {
+    if (!blocker.chapterId) continue;
+    const chapterBlockers = blockersByChapterId.get(blocker.chapterId) || [];
+    chapterBlockers.push(blocker);
+    blockersByChapterId.set(blocker.chapterId, chapterBlockers);
+  }
+  const items = sortedCandidateIds.map(chapterId => {
+    const chapter = chapterById.get(chapterId);
+    const itemBlocker = blockersByChapterId.get(chapterId)?.[0];
+    const skipped = skippedReasons.get(chapterId);
+    const result = skipped ? 'skipped' : itemBlocker ? 'blocked' : 'change';
+    return {
+      chapterId,
+      title: chapter ? getPlanningChapterDisplayTitle(chapter.title) : '',
+      parentId: chapter?.parentId || '',
+      status: chapter?.status || '',
+      fromNodeType: chapter?.nodeType || fromNodeType,
+      toNodeType,
+      fromLabel: getPlanningChapterNodeLabel(chapter?.nodeType || fromNodeType),
+      toLabel,
+      childCount: chapter ? (childrenByParentId.get(chapter.id) || []).length : 0,
+      result,
+      reasonCode: skipped?.code || itemBlocker?.code || '',
+      reason: skipped?.reason || itemBlocker?.reason || '',
+    };
+  });
+  const changeableChapterIds = items
+    .filter(item => item.result === 'change' && intendedTargetIds.has(item.chapterId))
+    .map(item => item.chapterId);
+  const targetChapterIds = items
+    .filter(item => intendedTargetIds.has(item.chapterId))
+    .map(item => item.chapterId);
+  const blockedCount = items.filter(item => item.result === 'blocked').length;
+  const historySkippedCount = items.filter(item => item.result === 'skipped').length;
+  const skippedCount = items.filter(item => item.result !== 'change').length;
+  const canApply = blockers.length === 0
+    && targetChapterIds.length > 0
+    && changeableChapterIds.length === targetChapterIds.length;
+
+  return {
+    scope: 'draft',
+    selectionMode: explicitSelection ? 'selected' : 'all_matching',
+    requestedChapterIds,
+    fromNodeType,
+    toNodeType,
+    fromLabel,
+    toLabel,
+    expectedOutlineRevision: normalized.outlineRevision,
+    expectedChapterOrderRevision: normalized.chapterOrderRevision,
+    targetChapterIds,
+    changeableChapterIds,
+    items,
+    blockers,
+    warnings,
+    targetCount: targetChapterIds.length,
+    changeableCount: changeableChapterIds.length,
+    blockedCount,
+    historySkippedCount,
+    skippedCount,
+    canApply,
+  };
+}
+
+/** Apply a previously previewed node-type change as a single revision. */
+export function applyPlanningChapterNodeTypeBulkChange(data, preview, {
+  expectedOutlineRevision,
+  expectedChapterOrderRevision,
+  now = () => new Date(),
+} = {}) {
+  const normalized = normalizePlanningNotes(data);
+  if (!isPlainObject(preview) || preview.scope !== 'draft') {
+    throw new TypeError('一括変更のプレビューが正しくありません。もう一度プレビューしてください');
+  }
+  if (
+    expectedOutlineRevision !== normalized.outlineRevision
+    || preview.expectedOutlineRevision !== expectedOutlineRevision
+  ) {
+    throw new Error('目次が別の画面で更新されました。最新の仮目次を確認してから一括変更してください');
+  }
+  if (
+    expectedChapterOrderRevision !== normalized.chapterOrderRevision
+    || preview.expectedChapterOrderRevision !== expectedChapterOrderRevision
+  ) {
+    throw new Error('目次の順序が別の画面で更新されました。最新の仮目次を確認してから一括変更してください');
+  }
+  const refreshedPreview = previewPlanningChapterNodeTypeBulkChange(normalized, {
+    fromNodeType: preview.fromNodeType,
+    toNodeType: preview.toNodeType,
+    chapterIds: preview.selectionMode === 'selected'
+      ? preview.requestedChapterIds
+      : undefined,
+  });
+  if (!refreshedPreview.canApply) {
+    const firstBlocker = refreshedPreview.blockers[0];
+    throw new Error(firstBlocker?.reason || '安全に一括変更できない項目があります。プレビューを確認してください');
+  }
+  const targetChapterIds = new Set(refreshedPreview.targetChapterIds);
+  const timestamp = isoNow(now);
+  const chapters = normalized.chapters.map(chapter => (
+    targetChapterIds.has(chapter.id)
+      ? {
+        ...chapter,
+        nodeType: refreshedPreview.toNodeType,
+        revision: chapter.revision + 1,
+        updatedAt: timestamp,
+      }
+      : chapter
+  ));
+  const next = normalizePlanningNotes({
+    ...normalized,
+    chapters,
+    chapterOrderRevision: normalized.chapterOrderRevision + 1,
+    outlineRevision: normalized.outlineRevision + 1,
+    updatedAt: timestamp,
+  });
+  return {
+    data: next,
+    summary: {
+      changed: true,
+      changedChapterCount: refreshedPreview.targetChapterIds.length,
+      chapterIds: [...refreshedPreview.targetChapterIds],
+      fromNodeType: refreshedPreview.fromNodeType,
+      toNodeType: refreshedPreview.toNodeType,
+      fromLabel: refreshedPreview.fromLabel,
+      toLabel: refreshedPreview.toLabel,
+    },
+  };
+}
+
 export function savePlanningConcept(data, draft, {
   expectedUpdatedAt = '',
   allowApprovedOverwrite = false,
