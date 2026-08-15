@@ -48,6 +48,7 @@ import {
   copyPlanningInstructionText,
   getPlanningInstructionCopyText,
 } from '@/lib/planningInstructionCopy';
+import { buildPlanningChapterQuestionIndex } from '@/lib/planningChapterQuestions';
 import { normalizePlanningViewSection } from '@/lib/viewResumeState';
 import {
   PLANNING_NOTE_STATUSES,
@@ -373,7 +374,7 @@ function ReferenceTargetBadge({ value }) {
   return <MetaBadge icon={UserRound}>対象：{REFERENCE_TARGET_LABELS[value] || '未設定'}</MetaBadge>;
 }
 
-function InstructionCopyButton({ record, onCopyInstruction, className = '' }) {
+function InstructionCopyButton({ record, onCopyInstruction, className = '', contextLabel = '' }) {
   const hasText = Boolean(getPlanningInstructionCopyText(record).trim());
   const displayName = record?.name || '無題の指示書';
   return (
@@ -382,7 +383,7 @@ function InstructionCopyButton({ record, onCopyInstruction, className = '' }) {
       size="sm"
       variant="outline"
       onClick={() => onCopyInstruction(record)}
-      aria-label={`「${displayName}」v${record?.versionNumber || 1}の質問文をコピー（指示書本文のみ）`}
+      aria-label={`${contextLabel ? `${contextLabel}の` : ''}「${displayName}」v${record?.versionNumber || 1}の質問文をコピー（指示書本文のみ）`}
       title={hasText ? '指示書本文だけをクリップボードへコピーします' : 'コピーする指示書本文がありません'}
       className={`min-h-11 border-neon-cyan/35 text-neon-cyan ${className}`}
     >
@@ -934,6 +935,99 @@ function ChapterManuscriptControls({ record, manuscript, busy, onToggleComplete,
   );
 }
 
+function ChapterWritingQuestions({
+  record,
+  questions = [],
+  currentConfirmed = false,
+  onCopyInstruction,
+  onOpenDetail,
+  onAddQuestion,
+  addQuestionUnavailableMessage = '',
+}) {
+  const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
+  const title = record.title || '無題';
+  const itemLabel = `${typeLabel}「${title}」`;
+  return (
+    <section aria-label={`${itemLabel}の原稿を作る質問`} className="mt-3 border-t border-white/10 pt-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h4 className="flex items-center gap-2 text-xs font-black text-neon-pink">
+            <MessageSquareText className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            {currentConfirmed ? `現在この${typeLabel}に紐づく質問` : `この${typeLabel}の原稿を作る質問`}
+          </h4>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            質問文だけをコピーして、新しいChatGPTなどへ貼り付けられます。
+          </p>
+        </div>
+        {onAddQuestion && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => onAddQuestion(record)}
+            className="min-h-11 shrink-0 border-neon-pink/35 text-neon-pink"
+            aria-label={`${itemLabel}の原稿を作る質問を追加`}
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />質問を追加
+          </Button>
+        )}
+      </div>
+
+      {!onAddQuestion && addQuestionUnavailableMessage && (
+        <p className="mt-2 rounded-lg border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-xs leading-relaxed text-amber-100">
+          {addQuestionUnavailableMessage}
+        </p>
+      )}
+
+      {questions.length === 0 ? (
+        <p className="mt-2 rounded-lg border border-dashed border-white/15 bg-black/10 px-3 py-2 text-xs text-muted-foreground">
+          この項目に紐づく執筆用の質問はまだありません。
+        </p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {questions.map(question => {
+            const preview = getPlanningInstructionCopyText(question).trim();
+            return (
+              <article key={question.id} className="rounded-lg border border-neon-pink/20 bg-neon-pink/[0.035] p-3">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {question.firstReadFor.length > 0 && <MetaBadge icon={Star} tone="first">最初に見る</MetaBadge>}
+                      {question.canonicalFor.length > 0 && <MetaBadge icon={ShieldCheck} tone="canonical">正本</MetaBadge>}
+                      <span className="text-[10px] font-bold text-neon-cyan">v{question.versionNumber}</span>
+                    </div>
+                    <p className="mt-1 break-words text-sm font-bold text-foreground">{question.name || '無題の質問'}</p>
+                    {preview ? (
+                      <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+                        {preview.slice(0, 180)}{preview.length > 180 ? '…' : ''}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-xs text-amber-200">質問本文はまだありません。</p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap lg:justify-end">
+                    <InstructionCopyButton record={question} onCopyInstruction={onCopyInstruction} className="w-full lg:w-auto" contextLabel={itemLabel} />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onOpenDetail(question)}
+                      className="min-h-11 w-full border-white/15 text-foreground lg:w-auto"
+                      aria-label={`${itemLabel}の「${question.name || '無題の質問'}」v${question.versionNumber}の内容を見る`}
+                    >
+                      <BookOpenText className="h-4 w-4" aria-hidden="true" />内容を見る
+                    </Button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ManuscriptLinkDialog({ value, busy, returnFocusRef, onChange, onSave, onClose }) {
   const inputRef = useRef(null);
   const originalUrl = String(value?.originalDocumentUrl || '');
@@ -1012,8 +1106,13 @@ function OutlineSnapshotTree({
   includeRejected = false,
   busy = false,
   getManuscript,
+  getQuestions,
   onToggleManuscriptComplete,
   onEditManuscriptLink,
+  onCopyQuestion,
+  onOpenQuestion,
+  onAddQuestion,
+  canAddQuestion,
 }) {
   if (!snapshot) return null;
   const rows = flattenPlanningOutlineSnapshot(snapshot, { includeRejected });
@@ -1039,31 +1138,46 @@ function OutlineSnapshotTree({
         <p className="rounded-lg border border-dashed border-white/15 p-4 text-center text-sm text-muted-foreground">表示する構成項目はありません。</p>
       ) : (
         <div className="space-y-2">
-          {visibleRecords.map(({ record, depth }) => (
-            <article
-              key={record.id}
-              className="rounded-lg border border-white/10 bg-white/[0.025] p-3"
-              style={{ marginLeft: `${Math.min(depth, 3) * 8}px` }}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
-                  {getPlanningChapterNodeLabel(record.nodeType)}
-                </span>
-                <span className="font-bold text-foreground">{record.title || '無題'}</span>
-                {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
-              </div>
-              {record.role && <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{record.role}</p>}
-              {current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
-                <ChapterManuscriptControls
-                  record={record}
-                  manuscript={getManuscript(record.id)}
-                  busy={busy}
-                  onToggleComplete={onToggleManuscriptComplete}
-                  onEditLink={onEditManuscriptLink}
-                />
-              )}
-            </article>
-          ))}
+          {visibleRecords.map(({ record, depth }) => {
+            const questions = getQuestions?.(record.id) || [];
+            const hasChildren = visibleRecords.some(({ record: child }) => child.parentId === record.id);
+            return (
+              <article
+                key={record.id}
+                className="rounded-lg border border-white/10 bg-white/[0.025] p-3"
+                style={{ marginLeft: `${Math.min(depth, 3) * 8}px` }}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-0.5 text-xs font-black text-neon-pink">
+                    {getPlanningChapterNodeLabel(record.nodeType)}
+                  </span>
+                  <span className="font-bold text-foreground">{record.title || '無題'}</span>
+                  {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
+                </div>
+                {record.role && <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{record.role}</p>}
+                {current && getQuestions && onCopyQuestion && onOpenQuestion && (questions.length > 0 || !hasChildren) && (
+                  <ChapterWritingQuestions
+                    record={record}
+                    questions={questions}
+                    currentConfirmed
+                    onCopyInstruction={onCopyQuestion}
+                    onOpenDetail={onOpenQuestion}
+                    onAddQuestion={canAddQuestion?.(record.id) ? onAddQuestion : undefined}
+                    addQuestionUnavailableMessage={canAddQuestion?.(record.id) ? '' : 'この項目は以前の確定目次にだけ残っています。仮目次の項目へ質問を紐づけ直してから追加してください。'}
+                  />
+                )}
+                {current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
+                  <ChapterManuscriptControls
+                    record={record}
+                    manuscript={getManuscript(record.id)}
+                    busy={busy}
+                    onToggleComplete={onToggleManuscriptComplete}
+                    onEditLink={onEditManuscriptLink}
+                  />
+                )}
+              </article>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1883,6 +1997,7 @@ function InstructionReferenceSection({
           <h2 id="instruction-reference-title" className="text-lg font-black text-neon-cyan">執筆設計・GPTs指示書</h2>
           <p className="mt-1 text-xs text-muted-foreground">最新と正本は別です。最初に見る資料は、著者が明示して初めて決まります。</p>
           <p className="mt-1 text-xs text-muted-foreground">「質問文をコピー」は指示書本文だけをコピーします。指示書名・版・状態・外部ファイルの所在は含めません。</p>
+          <p className="mt-1 text-xs text-muted-foreground">ここは質問・指示書の追加、編集、版管理をする場所です。目次へ紐づけた執筆用質問は、仮目次と現在の確定目次のカードからも使えます。</p>
         </div>
         <Button type="button" onClick={onAdd} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus className="h-4 w-4" />新しく追加</Button>
       </div>
@@ -2336,6 +2451,14 @@ export default function PlanningNotesTab({
     () => sortPlanningRecordsNewest(data.instructionVersions),
     [data.instructionVersions],
   );
+  const questionsByChapterId = useMemo(
+    () => buildPlanningChapterQuestionIndex(data.instructionVersions),
+    [data.instructionVersions],
+  );
+  const liveChapterIds = useMemo(
+    () => new Set(data.chapters.map(chapter => chapter.id)),
+    [data.chapters],
+  );
   const newestDecisions = useMemo(
     () => sortPlanningRecordsNewest(data.decisions),
     [data.decisions],
@@ -2484,23 +2607,33 @@ export default function PlanningNotesTab({
     });
   };
 
-  const openNewRecord = (section, chapterDefaults = {}) => {
+  const openNewRecord = (section, recordDefaults = {}, options = {}) => {
     const draft = section === 'chapters'
       ? createPlanningChapterRecord(data, {
-        nodeType: chapterDefaults.nodeType || 'chapter',
-        parentId: chapterDefaults.parentId || '',
+        nodeType: recordDefaults.nodeType || 'chapter',
+        parentId: recordDefaults.parentId || '',
       })
-      : createPlanningRecord(section);
+      : createPlanningRecord(section, recordDefaults);
     setEditor({
       projectId: project.id,
       section,
-      title: section === 'interviews' ? '次の1問を記録' : `${SECTION_META[section].label}を追加`,
+      title: options.title || (section === 'interviews' ? '次の1問を記録' : `${SECTION_META[section].label}を追加`),
       draft,
       dirty: false,
       expectedUpdatedAt: null,
       initialStatus: 'draft',
       forkApproved: false,
       externalConflict: false,
+    });
+  };
+
+  const openNewQuestionForChapter = chapter => {
+    const typeLabel = getPlanningChapterNodeLabel(chapter.nodeType);
+    openNewRecord('instructionVersions', {
+      role: 'writing',
+      chapterIds: [chapter.id],
+    }, {
+      title: `${typeLabel}「${chapter.title || '無題'}」の原稿を作る質問を追加`,
     });
   };
 
@@ -3433,8 +3566,13 @@ export default function PlanningNotesTab({
                     current
                     busy={busy}
                     getManuscript={chapterId => manuscriptByChapterId.get(chapterId)}
+                    getQuestions={chapterId => questionsByChapterId.get(chapterId) || []}
                     onToggleManuscriptComplete={toggleChapterManuscriptComplete}
                     onEditManuscriptLink={openManuscriptLinkEditor}
+                    onCopyQuestion={copyInstructionQuestion}
+                    onOpenQuestion={record => openDetail('instructionVersions', record)}
+                    onAddQuestion={openNewQuestionForChapter}
+                    canAddQuestion={chapterId => liveChapterIds.has(chapterId)}
                   />
                 </div>
               )}
@@ -3564,6 +3702,15 @@ export default function PlanningNotesTab({
                     {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => handleDelete(activeSection, record)} className="min-h-11 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" />削除</Button>}
                   </div>
                 </div>
+                {activeSection === 'chapters' && record.status !== 'rejected' && ((questionsByChapterId.get(record.id)?.length || 0) > 0 || !hasChildren) && (
+                  <ChapterWritingQuestions
+                    record={record}
+                    questions={questionsByChapterId.get(record.id) || []}
+                    onCopyInstruction={copyInstructionQuestion}
+                    onOpenDetail={question => openDetail('instructionVersions', question)}
+                    onAddQuestion={openNewQuestionForChapter}
+                  />
+                )}
                 {activeSection === 'chapters' && record.status !== 'rejected' && (
                   <ChapterManuscriptControls
                     record={record}

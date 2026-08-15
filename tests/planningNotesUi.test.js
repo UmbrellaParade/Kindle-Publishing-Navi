@@ -170,6 +170,34 @@ test('指示書カードと詳細画面から本文だけを1クリックでコ�
   assert.doesNotMatch(copyHandler, /persist\(|mutatePublishingProject|serializePlanningNotes|providerToast|toast\./);
 });
 
+test('章へ紐づく執筆用質問を仮目次と現在の確定目次から使える', () => {
+  assert.match(source, /buildPlanningChapterQuestionIndex\(data\.instructionVersions\)/);
+  assert.match(source, /function ChapterWritingQuestions\(/);
+  assert.match(source, /contextLabel=\{itemLabel\}/);
+  assert.match(source, /\$\{itemLabel\}の「\$\{question\.name \|\| '無題の質問'\}」v\$\{question\.versionNumber\}の内容を見る/);
+  assert.match(source, /この\$\{typeLabel\}の原稿を作る質問/);
+  assert.match(source, /現在この\$\{typeLabel\}に紐づく質問/);
+  assert.match(source, /質問文だけをコピーして、新しいChatGPTなどへ貼り付けられます/);
+  assert.match(source, /const preview = getPlanningInstructionCopyText\(question\)\.trim\(\)/);
+  assert.match(source, /preview\.slice\(0, 180\)/);
+  assert.match(source, /質問本文はまだありません/);
+  assert.match(source, /この項目に紐づく執筆用の質問はまだありません/);
+  assert.match(source, /questions=\{questionsByChapterId\.get\(record\.id\) \|\| \[\]\}/);
+  assert.match(source, /getQuestions=\{chapterId => questionsByChapterId\.get\(chapterId\) \|\| \[\]\}/);
+  assert.match(source, /onCopyQuestion=\{copyInstructionQuestion\}/);
+  assert.match(source, /onOpenQuestion=\{record => openDetail\('instructionVersions', record\)\}/);
+  assert.match(source, /onAddQuestion=\{openNewQuestionForChapter\}/);
+  assert.match(source, /canAddQuestion=\{chapterId => liveChapterIds\.has\(chapterId\)\}/);
+  assert.match(source, /以前の確定目次にだけ残っています。仮目次の項目へ質問を紐づけ直してから追加してください。/);
+  assert.match(source, /chapterIds: \[chapter\.id\]/);
+  assert.match(source, /role: 'writing'/);
+  assert.match(source, /min-h-11 shrink-0 border-neon-pink\/35/);
+  assert.match(source, /目次へ紐づけた執筆用質問は、仮目次と現在の確定目次のカードからも使えます/);
+
+  const historyPanel = sourceBlock("outlineView === 'history' ? (", ') : (');
+  assert.doesNotMatch(historyPanel, /ChapterWritingQuestions|onCopyQuestion|質問文をコピー/);
+});
+
 test('意思決定は現在の正本と最新順の履歴を分け、差替え・撤回・相互参照を示す', () => {
   assert.match(source, /現在の判断・正本（まずここを見る）/);
   assert.match(source, /表示順：更新日時の新しい順（最新が上）/);
@@ -261,7 +289,8 @@ test('目次本文の編集は仮目次だけに置き、確定目次は原稿�
   assert.match(source, /outlineView === 'history'[\s\S]*?内容を見る（読み取り専用）[\s\S]*?<OutlineSnapshotTree/);
 
   const snapshotTreeSource = sourceBlock('function OutlineSnapshotTree', 'function EditorDialog');
-  assert.doesNotMatch(snapshotTreeSource, /openNewRecord|openEditRecord|handleMoveChapter|handleDelete|<Button/);
+  assert.doesNotMatch(snapshotTreeSource, /openNewRecord|openEditRecord|handleMoveChapter|handleDelete/);
+  assert.match(snapshotTreeSource, /current && getQuestions && onCopyQuestion && onOpenQuestion/);
 
   assert.match(source, /selectActiveSection\('chapters'\);\s*selectOutlineView\('draft'\);\s*openNewRecord\('chapters', \{ nodeType: 'part' \}\)/);
 });
