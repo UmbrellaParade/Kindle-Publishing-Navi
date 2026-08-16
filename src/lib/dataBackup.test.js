@@ -24,6 +24,7 @@ import {
   assignDecisionCanonical,
   assignInstructionCanonical,
   createEmptyPlanningNotes,
+  createPlanningGptSessionRecord,
   createPlanningOutlineSnapshot,
   createPlanningRecord,
   getConfirmedPlanningOutline,
@@ -35,6 +36,7 @@ import {
   savePlanningMarketSummary,
   serializePlanningNotes,
   upsertPlanningRecord,
+  upsertPlanningGptSession,
   updatePlanningChapterManuscript,
 } from './planningNotes.js';
 import { VIEW_RESUME_STORAGE_KEY } from './viewResumeState.js';
@@ -1513,7 +1515,7 @@ test('企画ノートv6の市場サマリー・正本・意思決定参照をバ
   const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => {} };
   const exported = await createDataBackup({ storage, imageStore, now });
   const restored = readPlanningNotes(exported.data.projects[0].planning_notes).data;
-  assert.equal(restored.version, 6);
+  assert.equal(restored.version, 7);
   assert.equal(restored.chapters.find(record => record.id === 'episode-backup').parentId, 'part-backup');
   assert.equal(restored.marketSummary.versionId, 'MARKET-BACKUP');
   assert.deepEqual(restored.instructionVersions[0].canonicalFor, ['codex', 'author']);
@@ -1568,7 +1570,7 @@ test('企画ノートv6の市場サマリー・正本・意思決定参照をバ
     projects: [{ id: 'legacy-v3', name: '旧v3企画ノート', planning_notes: JSON.stringify(legacyV3) }],
   }));
   const migratedLegacy = readPlanningNotes(normalizedLegacy.data.projects[0].planning_notes).data;
-  assert.equal(migratedLegacy.version, 6);
+  assert.equal(migratedLegacy.version, 7);
   assert.equal(migratedLegacy.confirmedOutlineId, '');
   assert.deepEqual(migratedLegacy.outlineSnapshots, []);
   assert.deepEqual(migratedLegacy.chapterWritingStates, []);
@@ -2078,4 +2080,58 @@ test('壊れた企画ノートがある全置換は復旧用JSON保存を必須�
     JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)),
     [{ id: 'legacy', name: '企画ノート機能より前の本' }],
   );
+});
+
+test('Kindle出版サポートGPT管理は完全バックアップ・結合・全置換でURLと引継ぎメモを保つ', async () => {
+  const createNotesWithSession = ({ id, managementId, name, status = 'on_hold', url, memo }) => {
+    let notes = createEmptyPlanningNotes();
+    const record = createPlanningGptSessionRecord(notes, {
+      managementId,
+      projectTitle: 'GPT引継ぎテスト本',
+      sessionName: name,
+      gptUrl: url,
+      scope: '企画から原稿作成',
+      sessionStatus: status,
+      startedOn: '2026-08-16',
+      handoffMemo: memo,
+      notes: '完全バックアップだけに含める',
+    }, { now, idFactory: () => id });
+    notes = upsertPlanningGptSession(notes, record, { expectedUpdatedAt: null, now });
+    return notes;
+  };
+  const currentNotes = createNotesWithSession({
+    id: 'gpt-backup-current', managementId: 'GPT-001', name: '第1世代', status: 'active',
+    url: 'https://chatgpt.com/c/PRIVATE-BACKUP-CURRENT', memo: '現在地：第3章を執筆中',
+  });
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'gpt-book', name: 'GPT引継ぎテスト本', planning_notes: serializePlanningNotes(currentNotes),
+    }]),
+    [SELECTED_PROJECT_STORAGE_KEY]: 'gpt-book',
+  });
+  const exported = await createDataBackup({ storage, imageStore: { listLocalImages: async () => [] }, now });
+  const exportedNotes = readPlanningNotes(exported.data.projects[0].planning_notes).data;
+  assert.equal(exportedNotes.gptSessions[0].gptUrl, 'https://chatgpt.com/c/PRIVATE-BACKUP-CURRENT');
+  assert.equal(exportedNotes.gptSessions[0].handoffMemo, '現在地：第3章を執筆中');
+
+  const incomingNotes = createNotesWithSession({
+    id: 'gpt-backup-incoming', managementId: 'GPT-002', name: '第2世代',
+    url: 'https://chatgpt.com/c/PRIVATE-BACKUP-INCOMING', memo: '未確定：第4章の構成',
+  });
+  const incoming = backup({
+    projects: [{
+      id: 'gpt-book', name: 'GPT引継ぎテスト本', planning_notes: serializePlanningNotes(incomingNotes),
+    }],
+    selectedProjectId: 'gpt-book',
+  });
+  const merged = buildDataRestorePlan(exported, incoming, 'merge');
+  const mergedSessions = readPlanningNotes(merged.projects[0].planning_notes).data.gptSessions;
+  assert.deepEqual(mergedSessions.map(record => record.managementId).sort(), ['GPT-001', 'GPT-002']);
+  assert.ok(mergedSessions.some(record => record.gptUrl.includes('PRIVATE-BACKUP-CURRENT')));
+  assert.ok(mergedSessions.some(record => record.handoffMemo.includes('第4章')));
+
+  const replaced = buildDataRestorePlan(exported, incoming, 'replace');
+  const replacedSessions = readPlanningNotes(replaced.projects[0].planning_notes).data.gptSessions;
+  assert.deepEqual(replacedSessions.map(record => record.managementId), ['GPT-002']);
+  assert.equal(replacedSessions[0].gptUrl, 'https://chatgpt.com/c/PRIVATE-BACKUP-INCOMING');
 });

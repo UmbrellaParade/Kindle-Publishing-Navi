@@ -35,6 +35,9 @@ test('前回のproject・メインタブ・企画ノート内部タブを検証�
   assert.match(homeSource, /onSectionChange=\{handlePlanningSectionChange\}/);
   assert.match(planningSource, /normalizePlanningViewSection\(initialSection\)/);
   assert.match(planningSource, /onSectionChange\?\.\(safeSection/);
+  assert.match(planningSource, /gptSessions: \{ label: 'サポートGPT管理'/);
+  assert.match(planningSource, /activeSection === 'gptSessions'/);
+  assert.match(planningSource, /setPendingGptSessionFocus\(managementId\)/);
 });
 
 test('projectとview別のスクロールを離脱時に保存し、追従領域を補正して復元する', () => {

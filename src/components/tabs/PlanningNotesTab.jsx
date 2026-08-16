@@ -3,8 +3,10 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowRight,
+  ArrowRightLeft,
   ArrowUp,
   BookOpenText,
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -24,6 +26,7 @@ import {
   Loader2,
   MessageSquareText,
   NotebookPen,
+  PauseCircle,
   Pencil,
   Plus,
   RefreshCw,
@@ -58,6 +61,7 @@ import { normalizePlanningViewSection } from '@/lib/viewResumeState';
 import {
   PLANNING_NOTE_STATUSES,
   PLANNING_CHAPTER_NODE_TYPES,
+  PLANNING_GPT_SESSION_STATUSES,
   PLANNING_OUTLINE_SNAPSHOT_KINDS,
   PLANNING_NOTES_WARNING_BYTES,
   PLANNING_SOURCE_PRIORITIES,
@@ -67,6 +71,8 @@ import {
   buildPlanningChapterOrdinalLabels,
   buildPlanningNotesSharePackage,
   clearInstructionCanonical,
+  createPlanningGptHandoffTarget,
+  createPlanningGptSessionRecord,
   createPlanningRecord,
   createPlanningChapterRecord,
   createPlanningOutlineSnapshot,
@@ -87,6 +93,7 @@ import {
   getNextPlanningChapterOrder,
   getPlanningChapterNodeLabel,
   getPlanningChapterManuscript,
+  getNextPlanningGptManagementId,
   getPlanningChapterParentOptions,
   isPlanningDraftChapter,
   movePlanningChapter,
@@ -104,9 +111,13 @@ import {
   serializePlanningNotes,
   sortPlanningRecordsNewest,
   sortPlanningOutlineSnapshotsNewest,
+  sortPlanningGptSessions,
   upsertPlanningRecord,
   updatePlanningRecordChapterLinks,
   updatePlanningChapterManuscript,
+  upsertPlanningGptSession,
+  activatePlanningGptSession,
+  deletePlanningGptSession,
   validatePlanningManuscriptUrl,
   withdrawPlanningDecision,
 } from '@/lib/planningNotes';
@@ -122,8 +133,29 @@ const SECTION_META = {
   chapters: { label: '目次・章構成', icon: ClipboardList },
   interviews: { label: '取材記録', icon: MessageSquareText },
   instructionVersions: { label: '執筆設計・GPTs指示書', icon: FileText },
+  gptSessions: { label: 'サポートGPT管理', fullLabel: 'Kindle出版サポートGPT 管理', icon: Bot },
   decisions: { label: '意思決定・版履歴', icon: History },
 };
+
+const GPT_HANDOFF_MEMO_TEMPLATE = `現在地：
+確定事項：
+未確定事項：
+原稿一覧：
+執筆ルール：
+次の一手：`;
+
+const GPT_SESSION_SPREADSHEET_FIELDS = Object.freeze([
+  ['managementId', 'GPT管理ID', 'text'],
+  ['projectTitle', '企画・作品名', 'text'],
+  ['sessionName', 'セッション名', 'text'],
+  ['gptUrl', 'Kindle出版サポートGPT URL', 'url'],
+  ['scope', '担当範囲', 'textarea'],
+  ['sessionStatus', '状態', 'select'],
+  ['startedOn', '開始日', 'date'],
+  ['handoffToId', '引継ぎ先ID', 'handoff'],
+  ['handoffMemo', '引継ぎメモ', 'textarea'],
+  ['notes', '備考', 'textarea'],
+]);
 
 const OUTLINE_VIEW_META = Object.freeze({
   draft: { label: '仮目次', description: '編集中', icon: Pencil },
@@ -2500,6 +2532,310 @@ function MarketResearchSection({
   );
 }
 
+const GPT_SESSION_STATUS_META = Object.freeze({
+  active: { label: '使用中', icon: CheckCircle2, tone: 'border-emerald-400/45 bg-emerald-400/10 text-emerald-200' },
+  handed_over: { label: '引継ぎ済み', icon: ArrowRightLeft, tone: 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100' },
+  completed: { label: '完了', icon: ShieldCheck, tone: 'border-slate-400/35 bg-slate-400/10 text-slate-200' },
+  on_hold: { label: '保留', icon: PauseCircle, tone: 'border-amber-400/40 bg-amber-400/10 text-amber-200' },
+});
+
+function GptSessionStatusBadge({ value }) {
+  const meta = GPT_SESSION_STATUS_META[value] || {
+    label: PLANNING_GPT_SESSION_STATUSES[value] || '状態未設定',
+    icon: AlertTriangle,
+    tone: 'border-white/15 bg-white/5 text-muted-foreground',
+  };
+  const Icon = meta.icon;
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-black ${meta.tone}`}>
+      <Icon className="h-3 w-3" aria-hidden="true" />{meta.label}
+    </span>
+  );
+}
+
+function GptSessionEditorDialog({ editor, sessions, busy, onChange, onSave, onClose }) {
+  const draft = editor?.draft;
+  const dirty = Boolean(editor?.dirty);
+  const titleInputRef = useRef(null);
+  const returnFocusNodeRef = useRef(null);
+  const wasOpenRef = useRef(false);
+
+  const restoreReturnFocus = () => {
+    const target = returnFocusNodeRef.current;
+    if (target?.isConnected) target.focus({ preventScroll: true });
+  };
+
+  useEffect(() => {
+    if (editor) {
+      wasOpenRef.current = true;
+      returnFocusNodeRef.current = editor.returnFocusNode?.isConnected ? editor.returnFocusNode : null;
+      return undefined;
+    }
+    if (!wasOpenRef.current) return undefined;
+    wasOpenRef.current = false;
+    const frameId = window.requestAnimationFrame(restoreReturnFocus);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [editor]);
+
+  const requestClose = () => {
+    if (dirty && !globalThis.window.confirm('まだ保存していない入力があります。閉じてもよいですか？')) return;
+    onClose();
+  };
+  const update = (field, value) => onChange({ ...draft, [field]: value });
+
+  return (
+    <Dialog open={Boolean(editor)} onOpenChange={open => { if (!open) requestClose(); }}>
+      <DialogContent
+        className="flex max-h-[92dvh] max-w-3xl flex-col overflow-hidden p-0"
+        style={{ background: '#151527', border: '1px solid #2a2a4a' }}
+        onOpenAutoFocus={event => {
+          event.preventDefault();
+          window.requestAnimationFrame(() => titleInputRef.current?.focus());
+        }}
+        onCloseAutoFocus={event => {
+          event.preventDefault();
+          restoreReturnFocus();
+        }}
+      >
+        <DialogHeader className="border-b border-[#2a2a4a] px-5 pb-4 pt-5">
+          <DialogTitle className="flex items-center gap-2 text-neon-cyan">
+            <Bot className="h-5 w-5" aria-hidden="true" />{editor?.mode === 'edit' ? 'GPTセッションを編集' : 'GPTセッションを登録'}
+          </DialogTitle>
+          <DialogDescription>Googleスプレッドシートの列と同じ順番です。保存するまで既存データは変わりません。</DialogDescription>
+        </DialogHeader>
+
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          {editor?.externalConflict && (
+            <div role="alert" className="flex gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-100">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+              別の画面でこのセッションが更新されました。保存せず、最新表示を確認してください。
+            </div>
+          )}
+          <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-xs leading-relaxed text-amber-100">
+            サポートGPT管理の記録（GPT URL・引継ぎメモ・備考を含む）は、この端末のプロジェクトと完全バックアップだけに保存され、共有用JSON／Markdownからは除外されます。APIキー・パスワード・認証トークンは保存しないでください。
+          </div>
+
+          {GPT_SESSION_SPREADSHEET_FIELDS.map(([field, label, type], index) => {
+            const inputId = `planning-gpt-session-${field}`;
+            const helpId = `${inputId}-help`;
+            const handoffLockedField = editor?.mode === 'handoff' && ['sessionStatus', 'handoffToId'].includes(field);
+            const hasHelp = ['managementId', 'gptUrl', 'handoffMemo'].includes(field) || handoffLockedField;
+            const common = {
+              id: inputId,
+              value: draft?.[field] || '',
+              onChange: event => update(field, event.target.value),
+              className: type === 'textarea' ? TEXTAREA_CLASS : INPUT_CLASS,
+              'aria-describedby': hasHelp ? helpId : undefined,
+            };
+            return (
+              <div key={field} className="block space-y-1.5 text-xs font-bold text-foreground">
+                <label htmlFor={inputId} className="block">{index + 1}. {label}</label>
+                {field === 'managementId' && <span id={helpId} className="block font-normal leading-relaxed text-muted-foreground">次の連番を自動提案しています。既存記録のIDは引継ぎ関係を守るため変更できません。</span>}
+                {field === 'gptUrl' && <span id={helpId} className="block font-normal leading-relaxed text-muted-foreground">この管理画面だけに保存する非公開URLです。https:// で始まるURLを入力します。</span>}
+                {field === 'handoffMemo' && <span id={helpId} className="block font-normal leading-relaxed text-muted-foreground">現在地・確定事項・未確定事項・原稿一覧・執筆ルール・次の一手を短く残します。</span>}
+                {handoffLockedField && <span id={helpId} className="block font-normal leading-relaxed text-muted-foreground">引継ぎを受領するまでは「保留・引継ぎ先なし」で登録します。受領後にカードの「このGPTを使用中にする」を押してください。</span>}
+                {type === 'textarea' ? (
+                  <>
+                    {field === 'handoffMemo' && !draft?.handoffMemo && (
+                      <Button type="button" size="sm" variant="outline" onClick={() => update('handoffMemo', GPT_HANDOFF_MEMO_TEMPLATE)} className="min-h-11 border-neon-cyan/30 text-neon-cyan">
+                        <NotebookPen className="h-4 w-4" aria-hidden="true" />6項目のひな形を入れる
+                      </Button>
+                    )}
+                    <textarea {...common} />
+                  </>
+                ) : type === 'select' ? (
+                  <select {...common} disabled={handoffLockedField}>
+                    {Object.entries(PLANNING_GPT_SESSION_STATUSES).map(([value, optionLabel]) => <option key={value} value={value}>{optionLabel}</option>)}
+                  </select>
+                ) : type === 'handoff' ? (
+                  <select {...common} disabled={handoffLockedField}>
+                    <option value="">引継ぎ先なし</option>
+                    {sessions.filter(session => session.id !== draft?.id).map(session => (
+                      <option key={session.id} value={session.managementId}>{session.managementId}：{session.sessionName || '名称未設定'}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    {...common}
+                    ref={(editor?.mode === 'edit' ? field === 'sessionName' : field === 'managementId') ? titleInputRef : undefined}
+                    type={type}
+                    disabled={field === 'managementId' && editor?.mode === 'edit'}
+                    autoComplete="off"
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <DialogFooter className="border-t border-[#2a2a4a] bg-[#121222] px-5 py-4">
+          <Button type="button" variant="outline" onClick={requestClose} disabled={busy} className="min-h-11">キャンセル</Button>
+          <Button type="button" onClick={onSave} disabled={busy || editor?.externalConflict} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}
+            {busy ? '保存中…' : 'GPTセッションを保存'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function GptSessionManagementSection({
+  records,
+  sortOrder,
+  busy,
+  nextManagementId,
+  onSortOrderChange,
+  onAdd,
+  onAddHandoffTarget,
+  onActivate,
+  onEdit,
+  onDelete,
+  onReveal,
+}) {
+  const sorted = sortPlanningGptSessions(records, { direction: sortOrder });
+  const incomingTargetIds = new Set(records.map(record => record.handoffToId).filter(Boolean));
+  const activeSource = records.find(record => record.sessionStatus === 'active');
+
+  return (
+    <section className="space-y-4" aria-labelledby="gpt-session-management-title">
+      <div className="rounded-xl p-4 sm:p-5" style={CARD_STYLE}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <h2 id="gpt-session-management-title" className="flex items-center gap-2 text-lg font-black text-neon-cyan"><Bot className="h-5 w-5" aria-hidden="true" />Kindle出版サポートGPT 管理</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-relaxed text-muted-foreground">Kindle本の相談や原稿づくりを同じGPTで続けると、会話がたまって動作が重くなることがあります。そのときは新しいKindle出版サポートGPTへ移り、ここで前の会話と引継ぎ先をつないでおくと、どのGPTを使えばよいか迷いません。</p>
+            <p className="mt-2 text-xs font-bold text-foreground">1つのGPT会話を1件として登録し、今使う会話と過去の会話を分けて管理します。</p>
+            <p className="mt-1 text-xs text-muted-foreground">既存のGoogleスプレッドシート「Kindle出版サポートGPT」タブと併用しやすい列名・順番にそろえています。</p>
+          </div>
+          <Button type="button" onClick={onAdd} className="min-h-11 shrink-0 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus className="h-4 w-4" aria-hidden="true" />新しいGPTセッションを登録</Button>
+        </div>
+        <div className="mt-4 flex gap-2 rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-xs leading-relaxed text-amber-100">
+          <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+          <p>通常ノートには非公開会話URLを保存しないでください。このサポートGPT管理の記録（GPT URL・引継ぎメモ・備考を含む）は端末内と完全バックアップだけに保存し、共有用JSON／Markdownから除外します。</p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+        <section className="rounded-xl border border-amber-400/25 bg-amber-400/[0.045] p-4" aria-labelledby="gpt-move-timing-title">
+          <h3 id="gpt-move-timing-title" className="flex items-center gap-2 font-black text-amber-200"><Clock3 className="h-5 w-5" aria-hidden="true" />重くなる前に移る目安</h3>
+          <ul className="mt-3 space-y-2 text-xs leading-relaxed text-muted-foreground">
+            <li>・読み込みや応答が明らかに重くなったとき</li>
+            <li>・企画確定、目次確定、章の取材完了などの節目</li>
+            <li>・現在地と未確定事項を短くまとめられるとき</li>
+          </ul>
+        </section>
+        <section className="rounded-xl border border-neon-cyan/25 bg-neon-cyan/[0.035] p-4" aria-labelledby="gpt-move-steps-title">
+          <h3 id="gpt-move-steps-title" className="flex items-center gap-2 font-black text-neon-cyan"><ArrowRightLeft className="h-5 w-5" aria-hidden="true" />移るときの3ステップ</h3>
+          <ol className="mt-3 grid gap-2 sm:grid-cols-3">
+            {[
+              '節目で現在地と未確定事項を引継ぎメモにまとめる',
+              '新しいGPTを登録して前のGPTの引継ぎ先IDをつなぐ',
+              '新しいGPTが内容を受領したら、そちらを「使用中」にする',
+            ].map((step, index) => (
+              <li key={step} className="flex gap-2 rounded-lg border border-white/10 bg-black/10 p-3 text-xs leading-relaxed text-muted-foreground">
+                <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-neon-cyan/40 font-black text-neon-cyan">{index + 1}</span>
+                <span>{step}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl p-4 sm:flex-row sm:items-end sm:justify-between" style={CARD_STYLE}>
+        <div>
+          <h3
+            id="planning-gptSessions-list-title"
+            tabIndex={-1}
+            className="font-black text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80"
+            style={{ scrollMarginTop: 'calc(var(--kindle-main-nav-height, 60px) + 5.5rem)' }}
+          >GPTセッション一覧</h3>
+          <p className="mt-1 text-xs text-muted-foreground">使用中を先頭に固定し、その他を開始日で並べます。</p>
+        </div>
+        <label className="block min-w-0 space-y-1 text-xs font-bold text-foreground sm:w-72">
+          <span>並び順</span>
+          <select value={sortOrder} onChange={event => onSortOrderChange(event.target.value)} className={INPUT_CLASS}>
+            <option value="newest">使用中を先頭・開始日の新しい順</option>
+            <option value="oldest">使用中を先頭・開始日の古い順</option>
+          </select>
+        </label>
+      </div>
+
+      {sorted.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-white/15 p-8 text-center">
+          <Bot className="mx-auto h-10 w-10 text-neon-cyan/65" aria-hidden="true" />
+          <h3 className="mt-3 font-black text-foreground">まだGPTセッションはありません</h3>
+          <p className="mt-2 text-sm text-muted-foreground">今使っているGPTを1件だけ登録すれば大丈夫です。</p>
+          <p className="mt-2 text-xs font-bold text-neon-cyan">次の管理ID候補：{nextManagementId}</p>
+          <Button type="button" onClick={onAdd} className="mt-4 min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan"><Plus className="h-4 w-4" aria-hidden="true" />最初のGPTを登録</Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {sorted.map(record => {
+            const active = record.sessionStatus === 'active';
+            const canActivate = record.sessionStatus === 'on_hold'
+              && activeSource?.handoffToId === record.managementId;
+            return (
+              <article
+                key={record.id}
+                id={`planning-gptSessions-${record.id}`}
+                tabIndex={-1}
+                className={`rounded-xl border-l-4 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 ${active ? 'border border-emerald-400/45 border-l-emerald-400 bg-emerald-400/[0.055]' : 'border border-[#2a2a4a] border-l-slate-500/50 bg-[#1a1a2e]'}`}
+                style={{ scrollMarginTop: 'calc(var(--kindle-main-nav-height, 60px) + 5.5rem)' }}
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {active && <MetaBadge icon={CheckCircle2} tone="current">現在使うGPT</MetaBadge>}
+                      <GptSessionStatusBadge value={record.sessionStatus} />
+                      <span className="rounded-full border border-neon-cyan/30 bg-neon-cyan/5 px-2 py-0.5 text-[10px] font-black text-neon-cyan">{record.managementId}</span>
+                    </div>
+                    <h3 className="mt-3 break-words font-black text-foreground">{record.sessionName || '名称未設定のGPTセッション'}</h3>
+                    <p className="mt-1 break-words text-xs text-muted-foreground">{record.projectTitle || '企画・作品名未設定'} ／ 開始日：{record.startedOn || '未設定'}</p>
+                    {record.scope && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">担当範囲：{record.scope}</p>}
+                  </div>
+                  <div className="flex flex-wrap gap-2 sm:max-w-md sm:justify-end">
+                    {record.gptUrl ? (
+                      <a href={record.gptUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-neon-cyan/40 bg-neon-cyan/10 px-3 py-2 text-sm font-bold text-neon-cyan transition hover:bg-neon-cyan/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80">
+                        <ExternalLink className="h-4 w-4" aria-hidden="true" />GPTを開く
+                      </a>
+                    ) : <Button type="button" size="sm" variant="outline" disabled className="min-h-11"><ExternalLink className="h-4 w-4" aria-hidden="true" />GPT URL未登録</Button>}
+                    {active && !record.handoffToId && <Button type="button" size="sm" variant="outline" onClick={event => onAddHandoffTarget(record, event.currentTarget)} disabled={busy} className="min-h-11 border-neon-pink/35 text-neon-pink"><ArrowRightLeft className="h-4 w-4" aria-hidden="true" />新しい引継ぎ先を登録</Button>}
+                    {canActivate && <Button type="button" size="sm" variant="outline" onClick={() => onActivate(record)} disabled={busy} className="min-h-11 border-emerald-400/40 text-emerald-200"><CheckCircle2 className="h-4 w-4" aria-hidden="true" />このGPTを使用中にする</Button>}
+                    <Button type="button" size="sm" variant="outline" onClick={event => onEdit(record, event.currentTarget)} disabled={busy} className="min-h-11"><Pencil className="h-4 w-4" aria-hidden="true" />編集</Button>
+                    {!active && !record.handoffToId && !incomingTargetIds.has(record.managementId) && <Button type="button" size="sm" variant="outline" onClick={() => onDelete(record)} disabled={busy} className="min-h-11 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" aria-hidden="true" />削除</Button>}
+                  </div>
+                </div>
+
+                {record.handoffToId && (
+                  <button type="button" onClick={() => onReveal(record.handoffToId)} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-md border border-cyan-400/30 px-3 py-2 text-xs font-bold text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80">
+                    <ArrowRightLeft className="h-4 w-4" aria-hidden="true" />引継ぎ先：{record.handoffToId}を確認
+                  </button>
+                )}
+
+                <details className="mt-3 rounded-lg border border-white/10 bg-black/10 p-3">
+                  <summary className="min-h-11 cursor-pointer py-2 text-xs font-bold text-neon-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80">スプレッドシート列順ですべての管理項目を見る</summary>
+                  <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {GPT_SESSION_SPREADSHEET_FIELDS.map(([field, label]) => {
+                      const rawValue = record[field];
+                      const value = field === 'sessionStatus' ? PLANNING_GPT_SESSION_STATUSES[rawValue] : rawValue;
+                      return (
+                        <div key={field} className={`min-w-0 rounded-lg border border-white/10 bg-white/[0.025] p-3 ${['handoffMemo', 'notes'].includes(field) ? 'sm:col-span-2' : ''}`}>
+                          <dt className="text-[10px] font-bold text-neon-pink">{label}</dt>
+                          <dd className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground">{value || '未設定'}</dd>
+                        </div>
+                      );
+                    })}
+                  </dl>
+                </details>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 const INSTRUCTION_ROLE_LABELS = {
   writing: '執筆',
   critique: '辛口論評',
@@ -2768,6 +3104,8 @@ export default function PlanningNotesTab({
   const [activeSection, setActiveSection] = useState(() => normalizePlanningViewSection(initialSection));
   const [editor, setEditor] = useState(null);
   const [marketEditor, setMarketEditor] = useState(null);
+  const [gptSessionEditor, setGptSessionEditor] = useState(null);
+  const [gptSessionSortOrder, setGptSessionSortOrder] = useState('newest');
   const [marketImport, setMarketImport] = useState(null);
   const [detail, setDetail] = useState(null);
   const [outlineView, setOutlineView] = useState('draft');
@@ -2786,6 +3124,7 @@ export default function PlanningNotesTab({
   const [statusFilter, setStatusFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [pendingRecordFocus, setPendingRecordFocus] = useState(null);
+  const [pendingGptSessionFocus, setPendingGptSessionFocus] = useState('');
   const activeProjectIdRef = useRef(project?.id || '');
   const operationGenerationRef = useRef(0);
   const draftCacheRef = useRef(new Map());
@@ -2842,6 +3181,8 @@ export default function PlanningNotesTab({
     setLoadError(parsed.error);
     setEditor(draftCacheRef.current.get(project?.id || '') || null);
     setMarketEditor(null);
+    setGptSessionEditor(null);
+    setGptSessionSortOrder('newest');
     setMarketImport(null);
     setDetail(null);
     setOutlineView('draft');
@@ -2851,6 +3192,7 @@ export default function PlanningNotesTab({
     setLastOutlineRewriteSummary(null);
     setChapterLinkEditor(null);
     setManuscriptLinkEditor(null);
+    setPendingGptSessionFocus('');
     manuscriptLinkReturnFocusRef.current = null;
     const restoredSection = normalizePlanningViewSection(initialSection);
     activeSectionRef.current = restoredSection;
@@ -2872,6 +3214,13 @@ export default function PlanningNotesTab({
     setMarketEditor(current => {
       if (!current || current.projectId !== project?.id || parsed.error) return current;
       if (current.expectedUpdatedAt === parsed.data.marketSummary.updatedAt) return current;
+      return { ...current, externalConflict: true };
+    });
+    setGptSessionEditor(current => {
+      if (!current || current.projectId !== project?.id || parsed.error || current.mode !== 'edit') return current;
+      const latest = parsed.data.gptSessions?.find(record => record.id === current.draft.id);
+      if (!latest) return { ...current, externalConflict: true };
+      if (current.expectedUpdatedAt === latest.updatedAt) return current;
       return { ...current, externalConflict: true };
     });
     setDetail(current => {
@@ -3026,8 +3375,9 @@ export default function PlanningNotesTab({
     [project?.planning_notes, data],
   );
   const totalRecords = data.competitors.length + data.chapters.length + data.interviews.length
-    + data.instructionVersions.length + data.decisions.length
+    + data.instructionVersions.length + data.decisions.length + (data.gptSessions?.length || 0)
     + (data.concept.revision > 0 ? 1 : 0);
+  const searchableRecordCount = totalRecords - (data.gptSessions?.length || 0);
   const searchResults = useMemo(() => filterPlanningNotes(data, {
     query,
     section: typeFilter,
@@ -3051,6 +3401,11 @@ export default function PlanningNotesTab({
   const newestDecisions = useMemo(
     () => sortPlanningRecordsNewest(data.decisions),
     [data.decisions],
+  );
+  const gptSessions = data.gptSessions || [];
+  const nextGptManagementId = useMemo(
+    () => getNextPlanningGptManagementId(data),
+    [data],
   );
   const filtersActive = Boolean(
     query
@@ -3103,6 +3458,25 @@ export default function PlanningNotesTab({
       window.cancelAnimationFrame(secondFrame);
     };
   }, [activeSection, pendingRecordFocus, data]);
+
+  useEffect(() => {
+    if (!pendingGptSessionFocus || activeSection !== 'gptSessions') return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      const record = pendingGptSessionFocus === '__list__'
+        ? null
+        : data.gptSessions?.find(session => session.managementId === pendingGptSessionFocus);
+      const target = pendingGptSessionFocus === '__list__'
+        ? document.getElementById('planning-gptSessions-list-title')
+        : record ? document.getElementById(`planning-gptSessions-${record.id}`) : null;
+      target?.scrollIntoView({
+        behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'start',
+      });
+      target?.focus({ preventScroll: true });
+      setPendingGptSessionFocus('');
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeSection, data.gptSessions, pendingGptSessionFocus]);
 
   const revealRecord = (section, recordId, { resetFilters = false } = {}) => {
     if (resetFilters) clearFilters();
@@ -3447,6 +3821,111 @@ export default function PlanningNotesTab({
         expectedUpdatedAt: editor.expectedUpdatedAt,
       });
     }, editor.section === 'interviews' ? 'この1問を保存しました' : 'ノートを保存しました');
+  };
+
+  const openNewGptSession = returnFocusNode => {
+    const hasActiveSession = gptSessions.some(record => record.sessionStatus === 'active');
+    const draft = createPlanningGptSessionRecord(data, {
+      managementId: nextGptManagementId,
+      projectTitle: project?.book_title || project?.name || '',
+      sessionStatus: hasActiveSession ? 'on_hold' : 'active',
+    });
+    setGptSessionEditor({
+      projectId: project.id,
+      mode: 'create',
+      draft,
+      dirty: false,
+      expectedUpdatedAt: null,
+      externalConflict: false,
+      returnFocusNode: returnFocusNode || document.activeElement,
+    });
+  };
+
+  const openGptHandoffTarget = (source, returnFocusNode) => {
+    const draft = createPlanningGptSessionRecord(data, {
+      managementId: nextGptManagementId,
+      projectTitle: source.projectTitle || project?.book_title || project?.name || '',
+      sessionStatus: 'on_hold',
+      handoffMemo: GPT_HANDOFF_MEMO_TEMPLATE,
+    });
+    setGptSessionEditor({
+      projectId: project.id,
+      mode: 'handoff',
+      handoffSourceId: source.id,
+      sourceExpectedUpdatedAt: source.updatedAt,
+      draft,
+      dirty: false,
+      expectedUpdatedAt: null,
+      externalConflict: false,
+      returnFocusNode: returnFocusNode || document.activeElement,
+    });
+  };
+
+  const openEditGptSession = (record, returnFocusNode) => {
+    setGptSessionEditor({
+      projectId: project.id,
+      mode: 'edit',
+      draft: { ...record },
+      dirty: false,
+      expectedUpdatedAt: record.updatedAt,
+      externalConflict: false,
+      returnFocusNode: returnFocusNode || document.activeElement,
+    });
+  };
+
+  const saveGptSession = async () => {
+    if (!gptSessionEditor || gptSessionEditor.projectId !== project.id) return;
+    if (!gptSessionEditor.draft.managementId?.trim()) {
+      toast.error('GPT管理IDを入力してください');
+      return;
+    }
+    if (!gptSessionEditor.draft.sessionName?.trim()) {
+      toast.error('セッション名を入力してください');
+      return;
+    }
+    const returnFocusNode = gptSessionEditor.returnFocusNode;
+    const managementId = gptSessionEditor.draft.managementId;
+    const next = await persist(current => (
+      gptSessionEditor.mode === 'handoff'
+        ? createPlanningGptHandoffTarget(current, gptSessionEditor.handoffSourceId, gptSessionEditor.draft, {
+          expectedUpdatedAt: gptSessionEditor.sourceExpectedUpdatedAt,
+        })
+        : upsertPlanningGptSession(current, gptSessionEditor.draft, {
+          expectedUpdatedAt: gptSessionEditor.expectedUpdatedAt,
+        })
+    ), gptSessionEditor.mode === 'handoff' ? '新しい引継ぎ先を保留として登録しました' : 'GPTセッションを保存しました', { closeEditor: false });
+    if (!next) return;
+    setGptSessionEditor(null);
+    setPendingGptSessionFocus(managementId);
+    window.requestAnimationFrame(() => returnFocusNode?.focus?.({ preventScroll: true }));
+  };
+
+  const handleActivateGptSession = async record => {
+    if (!globalThis.window.confirm(`「${record.managementId} ${record.sessionName || ''}」を現在使うGPTにしますか？\n\n前の使用中セッションは「引継ぎ済み」になり、記録は残ります。`)) return;
+    const source = gptSessions.find(session => session.sessionStatus === 'active');
+    const next = await persist(current => activatePlanningGptSession(current, record.id, {
+      expectedTargetUpdatedAt: record.updatedAt,
+      expectedSourceUpdatedAt: source?.updatedAt,
+    }), '新しいGPTを使用中にし、前のGPTを引継ぎ済みにしました', { closeEditor: false });
+    if (next) setPendingGptSessionFocus(record.managementId);
+  };
+
+  const handleDeleteGptSession = async record => {
+    if (!globalThis.window.confirm(`「${record.managementId} ${record.sessionName || ''}」を削除しますか？\n\n使用中や引継ぎ関係にある記録は削除せず停止します。`)) return;
+    const sortedSessions = sortPlanningGptSessions(gptSessions, { direction: gptSessionSortOrder });
+    const recordIndex = sortedSessions.findIndex(session => session.id === record.id);
+    const focusAfterDelete = sortedSessions[recordIndex + 1]
+      || sortedSessions[recordIndex - 1]
+      || null;
+    const next = await persist(current => deletePlanningGptSession(current, record.id, {
+      expectedUpdatedAt: record.updatedAt,
+    }), 'GPTセッションを削除しました', { closeEditor: false });
+    if (next) setPendingGptSessionFocus(focusAfterDelete?.managementId || '__list__');
+  };
+
+  const revealGptSession = managementId => {
+    selectActiveSection('gptSessions');
+    setPendingGptSessionFocus(managementId);
   };
 
   const handleDelete = async (section, record) => {
@@ -3839,7 +4318,7 @@ export default function PlanningNotesTab({
               市場調査、目次、本人への取材、執筆指示書、判断の理由を、この本の中へ分けて保存します。最初から全部埋めなくて大丈夫です。
             </p>
             <p className="mt-2 text-xs text-amber-200/90">
-              指示文は資料として保存するだけです。このアプリが命令として実行することはありません。APIキー・認証情報・非公開会話URLは保存しないでください。
+              指示文は資料として保存するだけです。このアプリが命令として実行することはありません。通常ノートへAPIキー・認証情報・非公開会話URLを保存しないでください。サポートGPT管理の記録は端末内と完全バックアップだけに保存し、共有用書き出しから除外します。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -3880,6 +4359,7 @@ export default function PlanningNotesTab({
                   }}
                   type="button"
                   onClick={() => selectActiveSection(key)}
+                  aria-label={meta.fullLabel || meta.label}
                   aria-current={activeSection === key ? 'page' : undefined}
                   data-planning-section={key}
                   className={`flex min-h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-2 text-center text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#151529] lg:min-w-0 lg:flex-1 ${activeSection === key ? 'border-neon-cyan/50 bg-neon-cyan/10 text-neon-cyan shadow-[inset_0_-2px_0_rgba(0,245,255,0.7)]' : 'border-transparent text-muted-foreground hover:bg-white/5 hover:text-foreground'}`}
@@ -3894,7 +4374,7 @@ export default function PlanningNotesTab({
         </div>
       </nav>
 
-      {totalRecords > 0 && (
+      {activeSection !== 'gptSessions' && searchableRecordCount > 0 && (
         <section className="rounded-xl p-4" style={CARD_STYLE} aria-label="ノートを検索・絞り込み">
           <label className="relative block">
             <span className="sr-only">企画・取材・構成ノート内を検索</span>
@@ -3907,7 +4387,7 @@ export default function PlanningNotesTab({
               <select aria-label="種類で絞り込み" value={typeFilter} onChange={event => setTypeFilter(event.target.value)} className={INPUT_CLASS}>
                 <option value="all">すべての種類</option>
                 <option value="concept">企画メモ</option>
-                {Object.entries(SECTION_META).filter(([key]) => !['overview', 'concept'].includes(key)).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
+                {Object.entries(SECTION_META).filter(([key]) => !['overview', 'concept', 'gptSessions'].includes(key)).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
               </select>
               <select aria-label="構成項目で絞り込み" value={chapterFilter} onChange={event => setChapterFilter(event.target.value)} className={INPUT_CLASS}>
                 <option value="all">すべての部・章・話・節</option><option value="unlinked">構成項目へ未紐づけ</option><option value="archived">旧目次に紐づく記録</option>
@@ -4030,6 +4510,22 @@ export default function PlanningNotesTab({
           onEdit={record => openEditRecord('competitors', record)}
           onDuplicate={record => openDuplicate('competitors', record)}
           onDelete={record => handleDelete('competitors', record)}
+        />
+      )}
+
+      {activeSection === 'gptSessions' && (
+        <GptSessionManagementSection
+          records={gptSessions}
+          sortOrder={gptSessionSortOrder}
+          busy={busy}
+          nextManagementId={nextGptManagementId}
+          onSortOrderChange={setGptSessionSortOrder}
+          onAdd={() => openNewGptSession(document.activeElement)}
+          onAddHandoffTarget={openGptHandoffTarget}
+          onActivate={handleActivateGptSession}
+          onEdit={openEditGptSession}
+          onDelete={handleDeleteGptSession}
+          onReveal={revealGptSession}
         />
       )}
 
@@ -4481,7 +4977,7 @@ export default function PlanningNotesTab({
         </section>
       )}
 
-      {totalRecords > 0 && (query || typeFilter !== 'all' || chapterFilter !== 'all' || statusFilter !== 'all' || priorityFilter !== 'all') && (
+      {activeSection !== 'gptSessions' && searchableRecordCount > 0 && (query || typeFilter !== 'all' || chapterFilter !== 'all' || statusFilter !== 'all' || priorityFilter !== 'all') && (
         <section className="rounded-xl p-4" style={CARD_STYLE}>
           <h2 className="font-bold text-neon-cyan">検索結果</h2>
           <div className="mt-3 space-y-2">
@@ -4562,6 +5058,14 @@ export default function PlanningNotesTab({
         onChange={draft => setEditor(current => ({ ...current, draft, dirty: true }))}
         onSave={saveEditor}
         onClose={() => { draftCacheRef.current.delete(project.id); setEditor(null); }}
+      />
+      <GptSessionEditorDialog
+        editor={gptSessionEditor?.projectId === project.id ? gptSessionEditor : null}
+        sessions={gptSessions}
+        busy={busy}
+        onChange={draft => setGptSessionEditor(current => ({ ...current, draft, dirty: true }))}
+        onSave={saveGptSession}
+        onClose={() => setGptSessionEditor(null)}
       />
       <MarketSummaryDialog
         editor={marketEditor?.projectId === project.id ? marketEditor : null}
