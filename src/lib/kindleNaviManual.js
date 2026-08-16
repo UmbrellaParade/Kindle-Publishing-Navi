@@ -12,7 +12,7 @@ const KINDLE_NAVI_MANUAL_GROUPS_SOURCE = [
     ],
   },
   {
-    label: '10の機能',
+    label: '主な機能',
     sections: [
       'Kindle本制作進捗',
       '企画・取材・構成ノート',

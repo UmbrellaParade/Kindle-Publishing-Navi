@@ -18,6 +18,10 @@ const manualSource = readFileSync(
   new URL('../src/components/tabs/KindleNaviManualTab.jsx', import.meta.url),
   'utf8',
 );
+const brainSkillsSource = readFileSync(
+  new URL('../src/components/tabs/GoliathBrainSkillsTab.jsx', import.meta.url),
+  'utf8',
+);
 const backupSource = readFileSync(
   new URL('../src/lib/dataBackup.js', import.meta.url),
   'utf8',
@@ -83,6 +87,13 @@ test('明示URLを優先し、通常復元時だけ控えめな通知を一度�
   assert.match(homeSource, /data-view-resume-notice="true"/);
   assert.match(homeSource, /role="status"/);
   assert.match(homeSource, /aria-live="polite"/);
+});
+
+test('Brain＆スキル化はメインタブとして復元でき、プロジェクト本文へ保存しない', () => {
+  assert.match(homeSource, /id: 'brainSkills', label: 'ゴリアスさんのBrain＆スキル化'/);
+  assert.match(homeSource, /activeTab === 'brainSkills' && <GoliathBrainSkillsTab \/>/);
+  assert.match(brainSkillsSource, /GOLIATH_SKILL_CREATION_PROMPT/);
+  assert.doesNotMatch(brainSkillsSource, /onProjectUpdate|planning_notes|localStorage|sessionStorage/);
 });
 
 test('storage反映後に閲覧中projectが消えたら日程の変更を代替projectへ持ち込まない', () => {

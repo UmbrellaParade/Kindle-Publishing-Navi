@@ -38,6 +38,7 @@ const EXPLICIT_VIEW_QUERY_KEYS = Object.freeze([
 ]);
 const EXPLICIT_HASH_MAIN_TABS = new Set([
   'manual',
+  'brainSkills',
   'creation',
   'notes',
   'kdp',
@@ -49,6 +50,7 @@ const EXPLICIT_HASH_MAIN_TABS = new Set([
   'formatter',
   'critique',
 ]);
+const PROJECT_OPTIONAL_MAIN_TABS = new Set(['manual', 'brainSkills']);
 const MANUAL_ANCHOR_RE = /^(?:kindle-navi-manual(?:-title|-section-[1-9]\d*)?|first-steps-heading|feature-links-heading)$/;
 
 function isPlainObject(value) {
@@ -500,7 +502,7 @@ export function resolveViewResumeState(value, projects, {
         : DEFAULT_CRITIQUE_SECTION;
     return {
       project,
-      mainTab: project ? mainTab : 'manual',
+      mainTab: project || PROJECT_OPTIONAL_MAIN_TABS.has(mainTab) ? mainTab : 'manual',
       planningSection,
       critiqueSection,
       scrollPosition: null,

@@ -19,7 +19,7 @@ import {
   VIEW_RESUME_STORAGE_KEY,
 } from './viewResumeState.js';
 
-const MAIN_TABS = ['manual', 'creation', 'notes', 'kdp', 'critique'];
+const MAIN_TABS = ['manual', 'brainSkills', 'creation', 'notes', 'kdp', 'critique'];
 
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -211,12 +211,40 @@ test('有効な前回位置を復元し、削除済みproject・不正tabは安�
   assert.equal(noProjects.project, null);
   assert.equal(noProjects.mainTab, 'manual');
   assert.equal(noProjects.scrollPosition, null);
+
+  const publicGuideWithoutProjects = resolveViewResumeState(
+    { ...createDefaultViewResumeState(), mainTab: 'brainSkills' },
+    [],
+    { validMainTabs: MAIN_TABS },
+  );
+  assert.equal(publicGuideWithoutProjects.mainTab, 'brainSkills');
+});
+
+test('Brain＆スキル化をプロジェクトがある通常起動でも前回のメインタブとして復元する', () => {
+  const state = rememberViewResumeState(createDefaultViewResumeState(), {
+    selectedProjectId: 'project-brain',
+    mainTab: 'brainSkills',
+    projectId: 'project-brain',
+  });
+  const restored = resolveViewResumeState(state, [{ id: 'project-brain' }], {
+    validMainTabs: MAIN_TABS,
+  });
+
+  assert.equal(restored.project.id, 'project-brain');
+  assert.equal(restored.mainTab, 'brainSkills');
+  assert.equal(restored.resumed, true);
 });
 
 test('明示URLはローカル復元より優先し、通常起動だけを復元対象にする', () => {
   assert.equal(hasExplicitViewUrl({ search: '?tab=notes', hash: '' }), true);
   assert.equal(hasExplicitViewUrl({ search: '?access_token=secret', hash: '' }), false);
   assert.equal(hasExplicitViewUrl({ search: '', hash: '#notes/competitors' }), true);
+  assert.equal(hasExplicitViewUrl({ search: '', hash: '#brainSkills' }), true);
+  assert.equal(readExplicitViewUrl({ search: '?tab=brainSkills', hash: '' }).mainTab, 'brainSkills');
+  assert.equal(resolveViewResumeState(createDefaultViewResumeState(), [], {
+    validMainTabs: MAIN_TABS,
+    explicitNavigation: readExplicitViewUrl({ search: '?tab=brainSkills', hash: '' }),
+  }).mainTab, 'brainSkills');
   assert.equal(readExplicitViewUrl({ search: '?tab=notes&section=gptSessions', hash: '' }).planningSection, 'gptSessions');
   assert.equal(hasExplicitViewUrl({ search: '', hash: '#market-research' }), false);
   assert.equal(hasExplicitViewUrl({ search: '', hash: '#kindle-navi-manual-section-1' }), false);
