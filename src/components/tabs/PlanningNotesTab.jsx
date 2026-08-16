@@ -42,6 +42,7 @@ import {
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import PlanningGptHandoffPreparationCard from '@/components/gpt/PlanningGptHandoffPreparationCard';
 import {
   Dialog,
   DialogContent,
@@ -115,6 +116,7 @@ import {
   upsertPlanningRecord,
   updatePlanningRecordChapterLinks,
   updatePlanningChapterManuscript,
+  updatePlanningGptHandoffTemplates,
   upsertPlanningGptSession,
   activatePlanningGptSession,
   deletePlanningGptSession,
@@ -2581,7 +2583,7 @@ function GptSessionEditorDialog({ editor, sessions, busy, onChange, onSave, onCl
     if (dirty && !globalThis.window.confirm('まだ保存していない入力があります。閉じてもよいですか？')) return;
     onClose();
   };
-  const update = (field, value) => onChange({ ...draft, [field]: value });
+  const update = (field, value) => onChange(field, value);
 
   return (
     <Dialog open={Boolean(editor)} onOpenChange={open => { if (!open) requestClose(); }}>
@@ -2620,9 +2622,10 @@ function GptSessionEditorDialog({ editor, sessions, busy, onChange, onSave, onCl
             const helpId = `${inputId}-help`;
             const handoffLockedField = editor?.mode === 'handoff' && ['sessionStatus', 'handoffToId'].includes(field);
             const hasHelp = ['managementId', 'gptUrl', 'handoffMemo'].includes(field) || handoffLockedField;
+            const rawValue = draft?.[field];
             const common = {
               id: inputId,
-              value: draft?.[field] || '',
+              value: rawValue ?? '',
               onChange: event => update(field, event.target.value),
               className: type === 'textarea' ? TEXTAREA_CLASS : INPUT_CLASS,
               'aria-describedby': hasHelp ? helpId : undefined,
@@ -2659,6 +2662,9 @@ function GptSessionEditorDialog({ editor, sessions, busy, onChange, onSave, onCl
                     {...common}
                     ref={(editor?.mode === 'edit' ? field === 'sessionName' : field === 'managementId') ? titleInputRef : undefined}
                     type={type}
+                    onInput={type === 'date' ? event => {
+                      if (event.currentTarget.value) update(field, event.currentTarget.value);
+                    } : undefined}
                     disabled={field === 'managementId' && editor?.mode === 'edit'}
                     autoComplete="off"
                   />
@@ -2668,7 +2674,7 @@ function GptSessionEditorDialog({ editor, sessions, busy, onChange, onSave, onCl
           })}
         </div>
 
-        <DialogFooter className="border-t border-[#2a2a4a] bg-[#121222] px-5 py-4">
+        <DialogFooter className="flex-col gap-2 border-t border-[#2a2a4a] bg-[#121222] px-5 py-4 sm:flex-row sm:space-x-0">
           <Button type="button" variant="outline" onClick={requestClose} disabled={busy} className="min-h-11">キャンセル</Button>
           <Button type="button" onClick={onSave} disabled={busy || editor?.externalConflict} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}
@@ -2681,10 +2687,13 @@ function GptSessionEditorDialog({ editor, sessions, busy, onChange, onSave, onCl
 }
 
 function GptSessionManagementSection({
+  data,
   records,
   sortOrder,
   busy,
   nextManagementId,
+  projectId,
+  projectTitle,
   onSortOrderChange,
   onAdd,
   onAddHandoffTarget,
@@ -2692,6 +2701,7 @@ function GptSessionManagementSection({
   onEdit,
   onDelete,
   onReveal,
+  onSaveHandoffTemplate,
 }) {
   const sorted = sortPlanningGptSessions(records, { direction: sortOrder });
   const incomingTargetIds = new Set(records.map(record => record.handoffToId).filter(Boolean));
@@ -2740,6 +2750,17 @@ function GptSessionManagementSection({
           </ol>
         </section>
       </div>
+
+      <PlanningGptHandoffPreparationCard
+        kind="support"
+        projectKey={projectId}
+        data={data}
+        activeSession={activeSource}
+        nextManagementId={nextManagementId}
+        projectTitle={activeSource?.projectTitle || projectTitle}
+        busy={busy}
+        onSave={onSaveHandoffTemplate}
+      />
 
       <div className="flex flex-col gap-3 rounded-xl p-4 sm:flex-row sm:items-end sm:justify-between" style={CARD_STYLE}>
         <div>
@@ -3900,6 +3921,14 @@ export default function PlanningNotesTab({
     window.requestAnimationFrame(() => returnFocusNode?.focus?.({ preventScroll: true }));
   };
 
+  const saveSupportGptHandoffTemplate = async (draft, expectedUpdatedAt) => persist(
+    current => updatePlanningGptHandoffTemplates(current, 'support', draft, {
+      expectedUpdatedAt,
+    }),
+    '引継ぎの準備で使う文章を保存しました',
+    { closeEditor: false },
+  );
+
   const handleActivateGptSession = async record => {
     if (!globalThis.window.confirm(`「${record.managementId} ${record.sessionName || ''}」を現在使うGPTにしますか？\n\n前の使用中セッションは「引継ぎ済み」になり、記録は残ります。`)) return;
     const source = gptSessions.find(session => session.sessionStatus === 'active');
@@ -4515,10 +4544,13 @@ export default function PlanningNotesTab({
 
       {activeSection === 'gptSessions' && (
         <GptSessionManagementSection
+          data={data}
           records={gptSessions}
           sortOrder={gptSessionSortOrder}
           busy={busy}
           nextManagementId={nextGptManagementId}
+          projectId={project?.id || ''}
+          projectTitle={project?.book_title || project?.name || ''}
           onSortOrderChange={setGptSessionSortOrder}
           onAdd={() => openNewGptSession(document.activeElement)}
           onAddHandoffTarget={openGptHandoffTarget}
@@ -4526,6 +4558,7 @@ export default function PlanningNotesTab({
           onEdit={openEditGptSession}
           onDelete={handleDeleteGptSession}
           onReveal={revealGptSession}
+          onSaveHandoffTemplate={saveSupportGptHandoffTemplate}
         />
       )}
 
@@ -5063,7 +5096,11 @@ export default function PlanningNotesTab({
         editor={gptSessionEditor?.projectId === project.id ? gptSessionEditor : null}
         sessions={gptSessions}
         busy={busy}
-        onChange={draft => setGptSessionEditor(current => ({ ...current, draft, dirty: true }))}
+        onChange={(field, value) => setGptSessionEditor(current => ({
+          ...current,
+          draft: { ...current.draft, [field]: value },
+          dirty: true,
+        }))}
         onSave={saveGptSession}
         onClose={() => setGptSessionEditor(null)}
       />

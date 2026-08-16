@@ -4,6 +4,7 @@ export const LEGACY_SELECTED_PROJECT_STORAGE_KEY = 'kindle_publishing_navi_selec
 
 export const DEFAULT_MAIN_TAB = 'creation';
 export const DEFAULT_PLANNING_SECTION = 'overview';
+export const DEFAULT_CRITIQUE_SECTION = 'history';
 export const PLANNING_VIEW_SECTIONS = Object.freeze([
   'overview',
   'concept',
@@ -14,6 +15,7 @@ export const PLANNING_VIEW_SECTIONS = Object.freeze([
   'gptSessions',
   'decisions',
 ]);
+export const CRITIQUE_VIEW_SECTIONS = Object.freeze(['history', 'gptSessions']);
 
 const MAX_PROJECT_VIEWS = 100;
 const MAX_SCROLL_POSITIONS_PER_PROJECT = 32;
@@ -30,6 +32,8 @@ const EXPLICIT_VIEW_QUERY_KEYS = Object.freeze([
   'activeTab',
   'section',
   'planningSection',
+  'critiqueSection',
+  'reviewSection',
   'view',
 ]);
 const EXPLICIT_HASH_MAIN_TABS = new Set([
@@ -106,6 +110,7 @@ function normalizeProjectView(value) {
   return {
     projectId,
     planningSection: safeToken(value.planningSection) || DEFAULT_PLANNING_SECTION,
+    critiqueSection: safeToken(value.critiqueSection) || DEFAULT_CRITIQUE_SECTION,
     scrollPositions: normalizeScrollPositions(value.scrollPositions),
     collapsedOutlineCardKeys: normalizeCollapsedOutlineCardKeys(value.collapsedOutlineCardKeys),
   };
@@ -122,6 +127,10 @@ export function createDefaultViewResumeState() {
 
 export function normalizePlanningViewSection(value) {
   return PLANNING_VIEW_SECTIONS.includes(value) ? value : DEFAULT_PLANNING_SECTION;
+}
+
+export function normalizeCritiqueViewSection(value) {
+  return CRITIQUE_VIEW_SECTIONS.includes(value) ? value : DEFAULT_CRITIQUE_SECTION;
 }
 
 export function normalizeViewResumeState(value) {
@@ -186,11 +195,15 @@ export function persistViewResumeState(value, storage = getBrowserStorage()) {
   }
 }
 
-export function createViewKey(mainTab, planningSection = DEFAULT_PLANNING_SECTION) {
+export function createViewKey(
+  mainTab,
+  planningSection = DEFAULT_PLANNING_SECTION,
+  critiqueSection = DEFAULT_CRITIQUE_SECTION,
+) {
   const safeMainTab = safeToken(mainTab) || DEFAULT_MAIN_TAB;
-  return safeMainTab === 'notes'
-    ? `notes/${normalizePlanningViewSection(planningSection)}`
-    : safeMainTab;
+  if (safeMainTab === 'notes') return `notes/${normalizePlanningViewSection(planningSection)}`;
+  if (safeMainTab === 'critique') return `critique/${normalizeCritiqueViewSection(critiqueSection)}`;
+  return safeMainTab;
 }
 
 export function getProjectView(value, projectId) {
@@ -203,14 +216,26 @@ export function getProjectPlanningSection(value, projectId) {
   return normalizePlanningViewSection(getProjectView(value, projectId)?.planningSection);
 }
 
+export function getProjectCritiqueSection(value, projectId) {
+  return normalizeCritiqueViewSection(getProjectView(value, projectId)?.critiqueSection);
+}
+
 export function getProjectCollapsedOutlineCardKeys(value, projectId) {
   return [...(getProjectView(value, projectId)?.collapsedOutlineCardKeys || [])];
 }
 
-export function getSavedViewScroll(value, projectId, mainTab, planningSection) {
+export function getSavedViewScroll(
+  value,
+  projectId,
+  mainTab,
+  planningSection,
+  critiqueSection,
+) {
   const projectView = getProjectView(value, projectId);
   if (!projectView) return null;
-  return projectView.scrollPositions[createViewKey(mainTab, planningSection)] || null;
+  return projectView.scrollPositions[
+    createViewKey(mainTab, planningSection, critiqueSection)
+  ] || null;
 }
 
 export function rememberViewResumeState(value, update = {}) {
@@ -237,6 +262,7 @@ export function rememberViewResumeState(value, update = {}) {
     projectView = {
       projectId,
       planningSection: DEFAULT_PLANNING_SECTION,
+      critiqueSection: DEFAULT_CRITIQUE_SECTION,
       scrollPositions: {},
       collapsedOutlineCardKeys: [],
     };
@@ -248,6 +274,10 @@ export function rememberViewResumeState(value, update = {}) {
     projectView.planningSection = normalizePlanningViewSection(update.planningSection);
   }
 
+  if (Object.prototype.hasOwnProperty.call(update, 'critiqueSection')) {
+    projectView.critiqueSection = normalizeCritiqueViewSection(update.critiqueSection);
+  }
+
   if (Object.prototype.hasOwnProperty.call(update, 'collapsedOutlineCardKeys')) {
     projectView.collapsedOutlineCardKeys = normalizeCollapsedOutlineCardKeys(
       update.collapsedOutlineCardKeys,
@@ -257,7 +287,11 @@ export function rememberViewResumeState(value, update = {}) {
   if (update.scrollPosition) {
     const position = normalizeScrollPosition(update.scrollPosition);
     if (position) {
-      const key = createViewKey(update.scrollMainTab || next.mainTab, update.scrollPlanningSection);
+      const key = createViewKey(
+        update.scrollMainTab || next.mainTab,
+        update.scrollPlanningSection,
+        update.scrollCritiqueSection,
+      );
       delete projectView.scrollPositions[key];
       projectView.scrollPositions[key] = position;
       const keys = Object.keys(projectView.scrollPositions);
@@ -316,6 +350,7 @@ export function readExplicitViewUrl(locationLike) {
     projectId: '',
     mainTab: '',
     planningSection: '',
+    critiqueSection: '',
     manualAnchor: '',
   };
   if (!locationLike) return none;
@@ -331,20 +366,36 @@ export function readExplicitViewUrl(locationLike) {
     const hasQueryView = EXPLICIT_VIEW_QUERY_KEYS.some(key => searchParams.has(key));
     const projectId = firstParam(searchParams, ['projectId', 'project_id', 'project'])
       || firstParam(hashParams, ['projectId', 'project_id', 'project']);
-    const planningSection = firstParam(searchParams, ['planningSection', 'section'])
-      || firstParam(hashParams, ['planningSection', 'section'])
-      || hashSegments[1]
-      || '';
-    const mainTab = firstParam(searchParams, ['activeTab', 'tab', 'view'])
+    const explicitMainTabHint = firstParam(searchParams, ['activeTab', 'tab', 'view'])
       || firstParam(hashParams, ['activeTab', 'tab', 'view'])
       || hashSegments[0]
-      || (planningSection ? 'notes' : '');
+      || '';
+    const planningSection = firstParam(searchParams, ['planningSection'])
+      || firstParam(hashParams, ['planningSection'])
+      || (hashSegments[0] === 'notes' ? hashSegments[1] : '')
+      || ((firstParam(searchParams, ['section']) || firstParam(hashParams, ['section']))
+        && explicitMainTabHint !== 'critique'
+        ? firstParam(searchParams, ['section']) || firstParam(hashParams, ['section'])
+        : '')
+      || '';
+    const critiqueSection = firstParam(searchParams, ['critiqueSection', 'reviewSection'])
+      || firstParam(hashParams, ['critiqueSection', 'reviewSection'])
+      || (hashSegments[0] === 'critique' ? hashSegments[1] : '')
+      || ((firstParam(searchParams, ['section']) || firstParam(hashParams, ['section']))
+        && explicitMainTabHint === 'critique'
+        ? firstParam(searchParams, ['section']) || firstParam(hashParams, ['section'])
+        : '')
+      || '';
+    const mainTab = explicitMainTabHint
+      || (planningSection ? 'notes' : '')
+      || (critiqueSection ? 'critique' : '');
     const hasHashProject = ['projectId', 'project_id', 'project']
       .some(key => hashParams.has(key) && Boolean(firstParam(hashParams, [key])));
     const hasKnownHashParams = rawHash.includes('=') && (
       hasHashProject
       || EXPLICIT_HASH_MAIN_TABS.has(mainTab)
       || PLANNING_VIEW_SECTIONS.includes(planningSection)
+      || CRITIQUE_VIEW_SECTIONS.includes(critiqueSection)
     );
     const hasKnownHashPath = (
       hashSegments.length === 1
@@ -353,6 +404,10 @@ export function readExplicitViewUrl(locationLike) {
       hashSegments.length === 2
       && hashSegments[0] === 'notes'
       && PLANNING_VIEW_SECTIONS.includes(hashSegments[1])
+    ) || (
+      hashSegments.length === 2
+      && hashSegments[0] === 'critique'
+      && CRITIQUE_VIEW_SECTIONS.includes(hashSegments[1])
     );
     const manualAnchor = MANUAL_ANCHOR_RE.test(rawHash) ? rawHash : '';
     const hasExplicitNavigation = hasQueryView || hasKnownHashParams || hasKnownHashPath;
@@ -361,6 +416,7 @@ export function readExplicitViewUrl(locationLike) {
       projectId: hasExplicitNavigation ? projectId : '',
       mainTab: hasExplicitNavigation ? mainTab : '',
       planningSection: hasExplicitNavigation ? planningSection : '',
+      critiqueSection: hasExplicitNavigation ? critiqueSection : '',
       manualAnchor,
     };
   } catch {
@@ -375,6 +431,7 @@ export function hasExplicitViewUrl(locationLike) {
 export function resolveViewResumeState(value, projects, {
   validMainTabs = [],
   validPlanningSections = PLANNING_VIEW_SECTIONS,
+  validCritiqueSections = CRITIQUE_VIEW_SECTIONS,
   explicitNavigation = false,
 } = {}) {
   const state = normalizeViewResumeState(value);
@@ -395,12 +452,16 @@ export function resolveViewResumeState(value, projects, {
     const savedProject = safeProjects.find(project => project.id === state.selectedProjectId);
     const project = savedProject || fallbackProject;
     const savedPlanningSection = getProjectView(state, project?.id)?.planningSection;
+    const savedCritiqueSection = getProjectView(state, project?.id)?.critiqueSection;
     return {
       project,
       mainTab: 'manual',
       planningSection: validPlanningSections.includes(savedPlanningSection)
         ? savedPlanningSection
         : DEFAULT_PLANNING_SECTION,
+      critiqueSection: validCritiqueSections.includes(savedCritiqueSection)
+        ? savedCritiqueSection
+        : DEFAULT_CRITIQUE_SECTION,
       scrollPosition: null,
       resumed: false,
     };
@@ -414,8 +475,11 @@ export function resolveViewResumeState(value, projects, {
       : savedProject || fallbackProject;
     const allowedMainTabs = new Set(validMainTabs);
     const allowedPlanningSections = new Set(validPlanningSections);
+    const allowedCritiqueSections = new Set(validCritiqueSections);
     const explicitPlanningSection = safeToken(explicitView.planningSection);
     const savedPlanningSection = getProjectView(state, project?.id)?.planningSection;
+    const explicitCritiqueSection = safeToken(explicitView.critiqueSection);
+    const savedCritiqueSection = getProjectView(state, project?.id)?.critiqueSection;
     const planningSection = explicitPlanningSection
       ? allowedPlanningSections.has(explicitPlanningSection)
         ? explicitPlanningSection
@@ -427,10 +491,18 @@ export function resolveViewResumeState(value, projects, {
     const mainTab = explicitMainTab
       ? allowedMainTabs.has(explicitMainTab) ? explicitMainTab : DEFAULT_MAIN_TAB
       : allowedMainTabs.has(state.mainTab) ? state.mainTab : DEFAULT_MAIN_TAB;
+    const critiqueSection = explicitCritiqueSection
+      ? allowedCritiqueSections.has(explicitCritiqueSection)
+        ? explicitCritiqueSection
+        : DEFAULT_CRITIQUE_SECTION
+      : allowedCritiqueSections.has(savedCritiqueSection)
+        ? savedCritiqueSection
+        : DEFAULT_CRITIQUE_SECTION;
     return {
       project,
       mainTab: project ? mainTab : 'manual',
       planningSection,
+      critiqueSection,
       scrollPosition: null,
       resumed: false,
     };
@@ -442,6 +514,7 @@ export function resolveViewResumeState(value, projects, {
       project: fallbackProject,
       mainTab: DEFAULT_MAIN_TAB,
       planningSection: DEFAULT_PLANNING_SECTION,
+      critiqueSection: DEFAULT_CRITIQUE_SECTION,
       scrollPosition: null,
       resumed: false,
     };
@@ -449,21 +522,28 @@ export function resolveViewResumeState(value, projects, {
 
   const allowedMainTabs = new Set(validMainTabs);
   const allowedPlanningSections = new Set(validPlanningSections);
+  const allowedCritiqueSections = new Set(validCritiqueSections);
   const mainTab = allowedMainTabs.has(state.mainTab) ? state.mainTab : DEFAULT_MAIN_TAB;
   const rawPlanningSection = getProjectView(state, savedProject.id)?.planningSection;
   const planningSection = allowedPlanningSections.has(rawPlanningSection)
     ? rawPlanningSection
     : DEFAULT_PLANNING_SECTION;
+  const rawCritiqueSection = getProjectView(state, savedProject.id)?.critiqueSection;
+  const critiqueSection = allowedCritiqueSections.has(rawCritiqueSection)
+    ? rawCritiqueSection
+    : DEFAULT_CRITIQUE_SECTION;
   const scrollPosition = getSavedViewScroll(
     state,
     savedProject.id,
     mainTab,
     planningSection,
+    critiqueSection,
   );
   const resumed = (
     savedProject.id !== fallbackProject.id
     || mainTab !== DEFAULT_MAIN_TAB
     || planningSection !== DEFAULT_PLANNING_SECTION
+    || critiqueSection !== DEFAULT_CRITIQUE_SECTION
     || (scrollPosition?.contentY || 0) > 128
   );
 
@@ -471,6 +551,7 @@ export function resolveViewResumeState(value, projects, {
     project: savedProject,
     mainTab,
     planningSection,
+    critiqueSection,
     scrollPosition,
     resumed,
   };

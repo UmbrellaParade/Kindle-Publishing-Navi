@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import CritiqueContextCard from '@/components/critique/CritiqueContextCard';
 import CritiqueFindingDialog from '@/components/critique/CritiqueFindingDialog';
+import CritiqueGptManagement from '@/components/critique/CritiqueGptManagement';
 import {
   Dialog,
   DialogContent,
@@ -92,6 +93,14 @@ import {
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const INPUT_STYLE = { background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' };
+const CRITIQUE_REVIEW_SECTIONS = Object.freeze([
+  { id: 'history', label: '論評・履歴', description: '論評結果と著者判断', icon: History },
+  { id: 'gptSessions', label: '辛口論評GPT管理', description: 'GPT会話の世代と引継ぎ', icon: Bot },
+]);
+
+function normalizeCritiqueReviewSection(value) {
+  return CRITIQUE_REVIEW_SECTIONS.some(section => section.id === value) ? value : 'history';
+}
 
 const FALLBACK_AXES = [
   { key: 'originality', label: '独自性' },
@@ -755,7 +764,16 @@ function EntryForm({ open, editing, draft, axes, judgments, statuses, saving, on
   );
 }
 
-export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab }) {
+export default function ReviewGuideTab({
+  project,
+  onProjectUpdate,
+  onNavigateTab,
+  initialSection = 'history',
+  onSectionChange,
+}) {
+  const [activeSection, setActiveSection] = useState(
+    () => normalizeCritiqueReviewSection(initialSection),
+  );
   const axes = useMemo(() => normalizeAxes(CRITIQUE_AXES), []);
   const judgments = useMemo(() => normalizeOptions(CRITIQUE_JUDGMENTS, FALLBACK_JUDGMENTS), []);
   const statuses = useMemo(() => normalizeOptions(CRITIQUE_RESPONSE_STATUSES, FALLBACK_RESPONSE_STATUSES), []);
@@ -801,6 +819,7 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
   const contextDraftCacheRef = useRef(new Map());
   const classificationDraftCacheRef = useRef(new Map());
   const loadedContextRef = useRef({ projectId: '', raw: undefined });
+  const sectionTabRefs = useRef(new Map());
   const projectSelectionRef = useRef({ projectId: project?.id || '', generation: 0 });
   const renderedProjectId = project?.id || '';
   if (projectSelectionRef.current.projectId !== renderedProjectId) {
@@ -812,6 +831,40 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
   activeProjectIdRef.current = renderedProjectId;
   onProjectUpdateRef.current = onProjectUpdate;
   formOpenRef.current = formOpen || Boolean(classificationTarget);
+
+  useEffect(() => {
+    setActiveSection(normalizeCritiqueReviewSection(initialSection));
+  }, [initialSection, project?.id]);
+
+  const selectSection = (sectionId, { focus = false } = {}) => {
+    const safeSection = normalizeCritiqueReviewSection(sectionId);
+    setActiveSection(safeSection);
+    onSectionChange?.(safeSection);
+    if (focus) {
+      window.requestAnimationFrame(() => sectionTabRefs.current.get(safeSection)?.focus());
+    }
+  };
+
+  const handleSectionKeyDown = (event, currentSectionId) => {
+    const currentIndex = CRITIQUE_REVIEW_SECTIONS.findIndex(
+      section => section.id === currentSectionId,
+    );
+    let nextIndex = currentIndex;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (currentIndex + 1) % CRITIQUE_REVIEW_SECTIONS.length;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (currentIndex - 1 + CRITIQUE_REVIEW_SECTIONS.length)
+        % CRITIQUE_REVIEW_SECTIONS.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = CRITIQUE_REVIEW_SECTIONS.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    selectSection(CRITIQUE_REVIEW_SECTIONS[nextIndex].id, { focus: true });
+  };
 
   const canApplyMutationResult = (startedProjectId, startedGeneration) => (
     shouldApplyCritiqueMutationResult(
@@ -1614,6 +1667,53 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
 
   return (
     <div className="min-w-0 space-y-5">
+      <nav
+        className="grid min-w-0 grid-cols-2 gap-2 rounded-xl border border-[#2a2a4a] bg-[#151527] p-2"
+        role="tablist"
+        aria-label="辛口論評の表示切り替え"
+      >
+        {CRITIQUE_REVIEW_SECTIONS.map((section) => {
+          const Icon = section.icon;
+          const selected = activeSection === section.id;
+          return (
+            <button
+              key={section.id}
+              ref={node => {
+                if (node) sectionTabRefs.current.set(section.id, node);
+                else sectionTabRefs.current.delete(section.id);
+              }}
+              type="button"
+              role="tab"
+              id={`critique-review-tab-${section.id}`}
+              aria-selected={selected}
+              aria-controls={`critique-review-panel-${section.id}`}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => selectSection(section.id)}
+              onKeyDown={event => handleSectionKeyDown(event, section.id)}
+              className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 ${
+                selected
+                  ? 'border-neon-pink/50 bg-neon-pink/10 text-neon-pink shadow-[inset_0_-2px_0_rgba(255,0,128,0.55)]'
+                  : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-white/5 hover:text-foreground'
+              }`}
+            >
+              <Icon className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block break-words text-xs font-black sm:text-sm">{section.label}</span>
+                <span className="hidden text-[10px] text-muted-foreground sm:block">{section.description}</span>
+              </span>
+              {selected && <span className="sr-only">選択中</span>}
+            </button>
+          );
+        })}
+      </nav>
+
+      {activeSection === 'history' ? (
+        <div
+          id="critique-review-panel-history"
+          role="tabpanel"
+          aria-labelledby="critique-review-tab-history"
+          className="min-w-0 space-y-5"
+        >
       <section className="min-w-0 rounded-xl p-4 sm:p-5" style={CARD_STYLE}>
         <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
@@ -1850,6 +1950,21 @@ export default function ReviewGuideTab({ project, onProjectUpdate, onNavigateTab
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+        </div>
+      ) : (
+        <div
+          id="critique-review-panel-gptSessions"
+          role="tabpanel"
+          aria-labelledby="critique-review-tab-gptSessions"
+          className="min-w-0"
+        >
+          <CritiqueGptManagement
+            project={project}
+            onProjectUpdate={onProjectUpdate}
+            entries={entries}
+          />
+        </div>
+      )}
     </div>
   );
 }

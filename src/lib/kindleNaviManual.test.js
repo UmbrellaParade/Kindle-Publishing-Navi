@@ -49,7 +49,7 @@ test('出版ナビの初心者マニュアルは全20章を安定IDで案内す�
   const sections = KINDLE_NAVI_MANUAL_GROUPS.flatMap(group => group.sections);
   const markdownHeadings = [...manual.matchAll(/^## (\d+)\. (.+)$/gm)];
 
-  assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月16日');
+  assert.equal(KINDLE_NAVI_MANUAL_UPDATED_AT, '2026年8月17日');
   assert.equal(sections.length, 20);
   assert.deepEqual(sections.map(section => section.title), EXPECTED_TITLES);
   assert.deepEqual(
@@ -328,6 +328,64 @@ test('Kindle出版サポートGPTの世代管理と非公開範囲を初心者�
   assert.match(managerFaq, /完全バックアップには入ります/);
   assert.match(managerFaq, /共有用JSON／Markdownからは管理画面全体が除外/);
   assert.match(managerFaq, /Googleスプレッドシートの「Kindle出版サポートGPT」タブとは自動同期しない/);
+});
+
+test('2段階引継ぎと辛口論評GPT管理を承認・非公開範囲まで案内する', () => {
+  for (const phrase of [
+    '2段階の引継ぎ文をコピーする',
+    '前のGPTに引継ぎ書を作ってもらう文をコピー',
+    '新しいGPTへ最初に貼る文をコピー',
+    'コピーだけではGPTへ送信されません',
+    '限定URL・会話URL・署名付きURL',
+    '一般公開URLは必要な場合だけ内容を確認して利用できます',
+    'コピーに失敗した場合は送信済みと考えず',
+    '辛口論評GPTの会話を世代管理する',
+    '`CRITIQUE-001`、`CRITIQUE-002`',
+    '対象原稿版ID',
+    '論評回',
+    '使用中を先頭',
+    '「使用中」は1件だけ',
+    '新しいGPTが引継ぎ書を受領したことを確認してから',
+    '論評結果や著者判断を保存する履歴とは別の台帳',
+    '過去の論評、採否、原稿、目次は上書きされません',
+    '完全バックアップ',
+    '共有用JSON／Markdownから全体を除外',
+    '著者本人が内容を確認し、承認してから',
+  ]) {
+    assert.equal(manual.includes(phrase), true, `不足しているGPT引継ぎ案内: ${phrase}`);
+  }
+
+  const critiqueFields = [
+    '1. 論評GPT管理ID',
+    '2. セッション名',
+    '3. 辛口論評GPT URL',
+    '4. 担当範囲',
+    '5. 状態',
+    '6. 開始日',
+    '7. 対象原稿版ID',
+    '8. 論評回',
+    '9. 引継ぎ先ID',
+    '10. 引継ぎメモ',
+    '11. 備考',
+  ];
+  const critiqueSection = manual.match(/### 辛口論評GPTの会話を世代管理する([\s\S]*?)(?=\n### 1）先に)/)?.[1] || '';
+  let previousIndex = -1;
+  critiqueFields.forEach(field => {
+    const index = critiqueSection.indexOf(field);
+    assert.ok(index > previousIndex, `辛口論評GPT管理項目の順番が違います: ${field}`);
+    previousIndex = index;
+  });
+
+  const critiqueFaq = manual.match(/### 辛口論評GPTの会話が重くなったら、どう引き継ぎますか？([\s\S]*?)(?=\n### |\n---|$)/)?.[1] || '';
+  assert.match(critiqueFaq, /「保留」で登録/);
+  assert.match(critiqueFaq, /論評履歴や著者判断は変わりません/);
+  assert.match(critiqueFaq, /コピーや切替だけで論評内容は承認されません/);
+
+  const privacySection = manual.match(/### 取材回答を非公開のまま守る([\s\S]*?)(?=\n### 保存容量と)/)?.[1] || '';
+  assert.match(privacySection, /「Kindle出版サポートGPT 管理」全体/);
+  assert.match(privacySection, /「辛口論評GPT 管理」全体/);
+  assert.match(privacySection, /編集した引継ぎテンプレートも除外/);
+  assert.match(privacySection, /Kindle出版サポートGPT管理と辛口論評GPT管理/);
 });
 
 test('現行10機能と外部操作・KDP最新確認の注意をすべて案内する', () => {

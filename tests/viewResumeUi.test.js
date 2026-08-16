@@ -10,6 +10,10 @@ const planningSource = readFileSync(
   new URL('../src/components/tabs/PlanningNotesTab.jsx', import.meta.url),
   'utf8',
 );
+const reviewSource = readFileSync(
+  new URL('../src/components/tabs/ReviewGuideTab.jsx', import.meta.url),
+  'utf8',
+);
 const manualSource = readFileSync(
   new URL('../src/components/tabs/KindleNaviManualTab.jsx', import.meta.url),
   'utf8',
@@ -38,6 +42,20 @@ test('前回のproject・メインタブ・企画ノート内部タブを検証�
   assert.match(planningSource, /gptSessions: \{ label: 'サポートGPT管理'/);
   assert.match(planningSource, /activeSection === 'gptSessions'/);
   assert.match(planningSource, /setPendingGptSessionFocus\(managementId\)/);
+});
+
+test('辛口論評GPT管理の内部画面もプロジェクト別に再読み込み後へ復元する', () => {
+  assert.match(homeSource, /DEFAULT_CRITIQUE_SECTION/);
+  assert.match(homeSource, /CRITIQUE_VIEW_SECTIONS/);
+  assert.match(homeSource, /getProjectCritiqueSection/);
+  assert.match(homeSource, /setCritiqueSection\(resolved\.critiqueSection\)/);
+  assert.match(homeSource, /scrollCritiqueSection: context\.critiqueSection/);
+  assert.match(homeSource, /initialSection=\{critiqueSection\}/);
+  assert.match(homeSource, /onSectionChange=\{handleCritiqueSectionChange\}/);
+  assert.match(reviewSource, /normalizeCritiqueReviewSection\(initialSection\)/);
+  assert.match(reviewSource, /onSectionChange\?\.\(safeSection\)/);
+  assert.match(reviewSource, /activeSection === 'history'/);
+  assert.match(reviewSource, /<CritiqueGptManagement/);
 });
 
 test('projectとview別のスクロールを離脱時に保存し、追従領域を補正して復元する', () => {
