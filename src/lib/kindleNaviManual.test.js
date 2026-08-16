@@ -70,6 +70,11 @@ test('教材との内容連携と自動同期ではないことを誤解なく�
     'Googleスプレッドシートとのリアルタイム同期ではありません。',
     'このナビの入力もシートへ書き戻されません。',
     '教材側のリンクから開きます。',
+    '「ゴリアスさんのBrain＆スキル化」',
+    '「Codexへのスキル化指示文をコピー」',
+    '教材・GPTを用意する → 指示文をCodexへ貼る → Codexの確認に答えて保存先とテスト結果を確認する',
+    'GPTのURLだけでは非公開の指示や知識ファイルまでは読み取れない',
+    'コピーしてもCodexへ自動送信されません',
   ];
 
   requiredPhrases.forEach(phrase => {
@@ -388,7 +393,7 @@ test('2段階引継ぎと辛口論評GPT管理を承認・非公開範囲まで�
   assert.match(privacySection, /Kindle出版サポートGPT管理と辛口論評GPT管理/);
 });
 
-test('現行10機能と外部操作・KDP最新確認の注意をすべて案内する', () => {
+test('既存の出版10機能と外部操作・KDP最新確認の注意をすべて案内する', () => {
   const featureNames = [
     'Kindle本制作進捗',
     '企画・取材・構成ノート',
@@ -495,8 +500,8 @@ test('同じブラウザでは前回の閲覧位置へ安全に戻り、共有�
   }
 });
 
-test('マニュアルから現行10機能と初回4ステップへ移動できる', () => {
-  const featureIds = ['creation', 'notes', 'kdp', 'category', 'promo', 'description', 'aplus', 'format', 'formatter', 'critique'];
+test('マニュアルから現行11機能と初回4ステップへ移動できる', () => {
+  const featureIds = ['brainSkills', 'creation', 'notes', 'kdp', 'category', 'promo', 'description', 'aplus', 'format', 'formatter', 'critique'];
   featureIds.forEach(id => {
     assert.match(manualComponentSource, new RegExp(`\\{ id: '${id}',`), `${id} への導線がありません`);
   });
@@ -513,6 +518,6 @@ test('マニュアルから現行10機能と初回4ステップへ移動でき�
   assert.match(manualComponentSource, /この本は準備済み/);
   assert.match(manualComponentSource, /仮タイトルでも大丈夫です/);
   assert.doesNotMatch(manualComponentSource, /最初の10分で行う4ステップ/);
-  assert.match(manual, /スマートフォンでは \*\*「機能一覧（11）」\*\* を押す/);
+  assert.match(manual, /スマートフォンでは \*\*「機能一覧（12）」\*\* を押す/);
   assert.doesNotMatch(manual, /メニューを横へスワイプ/);
 });

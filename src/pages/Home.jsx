@@ -12,6 +12,7 @@ import FormatGuideTab from '../components/tabs/FormatGuideTab';
 import ManuscriptFormatterTab from '../components/tabs/ManuscriptFormatterTab';
 import ReviewGuideTab from '../components/tabs/ReviewGuideTab';
 import KindleNaviManualTab from '../components/tabs/KindleNaviManualTab';
+import GoliathBrainSkillsTab from '../components/tabs/GoliathBrainSkillsTab';
 import ReleaseScheduleCard from '../components/ReleaseScheduleCard';
 import AppUpdateBanner from '../components/AppUpdateBanner';
 import BrowserStorageNotice from '../components/BrowserStorageNotice';
@@ -57,6 +58,7 @@ import {
 
 const TABS = [
   { id: 'manual',    label: '使い方マニュアル' },
+  { id: 'brainSkills', label: 'ゴリアスさんのBrain＆スキル化' },
   { id: 'creation',  label: 'Kindle本制作進捗' },
   { id: 'notes',     label: '企画・取材・構成ノート' },
   { id: 'kdp',       label: 'KDP登録進捗' },
@@ -777,7 +779,7 @@ export default function Home() {
                     disabled={switchingTab}
                     aria-current={activeTab === tab.id ? 'page' : undefined}
                     data-main-tab={tab.id}
-                    className={`min-h-11 w-full rounded-lg border px-2 py-2 text-center text-xs font-bold leading-tight transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 disabled:cursor-wait disabled:opacity-60 ${tab.id === 'notes' ? 'col-span-2' : ''} ${
+                    className={`min-h-11 w-full rounded-lg border px-2 py-2 text-center text-xs font-bold leading-tight transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80 disabled:cursor-wait disabled:opacity-60 ${tab.id === 'creation' || tab.id === 'notes' ? 'col-span-2' : ''} ${
                       activeTab === tab.id
                         ? 'border-neon-pink/50 bg-neon-pink/10 text-neon-pink neon-pink-glow'
                         : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-white/5 hover:text-foreground'
@@ -830,6 +832,7 @@ export default function Home() {
                 onOpenSchedule={handleOpenSchedule}
               />
             )}
+            {activeTab === 'brainSkills' && <GoliathBrainSkillsTab />}
             {activeTab === 'creation'  && <PublishingChecklistTab {...tabProps} />}
             {activeTab === 'notes'     && (
               <PlanningNotesTab

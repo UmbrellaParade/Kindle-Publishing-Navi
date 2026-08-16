@@ -27,6 +27,7 @@ const CARD_STYLE = {
 };
 
 const FEATURE_LINKS = [
+  { id: 'brainSkills', label: 'ゴリアスさんのBrain＆スキル化', description: '教材を開く・Codex用指示文' },
   { id: 'creation', label: 'Kindle本制作進捗', description: '全フェーズと目標日' },
   { id: 'notes', label: '企画・取材・構成ノート', description: '企画・章・取材・指示書' },
   { id: 'kdp', label: 'KDP登録進捗', description: '入稿・価格・提出' },

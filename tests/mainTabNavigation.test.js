@@ -17,6 +17,7 @@ const formatterManualSource = readFileSync(
 
 const expectedTabs = [
   ['manual', '使い方マニュアル'],
+  ['brainSkills', 'ゴリアスさんのBrain＆スキル化'],
   ['creation', 'Kindle本制作進捗'],
   ['notes', '企画・取材・構成ノート'],
   ['kdp', 'KDP登録進捗'],
@@ -29,7 +30,7 @@ const expectedTabs = [
   ['critique', '辛口論評'],
 ];
 
-test('メインナビは全11項目の正式名と順序を保つ', () => {
+test('メインナビは全12項目の正式名と順序を保つ', () => {
   const tabBlock = homeSource.match(/const TABS = \[([\s\S]*?)\];/)?.[1] || '';
   const actualTabs = [...tabBlock.matchAll(/\{ id: '([^']+)',\s+label: '([^']+)' \}/g)]
     .map(match => [match[1], match[2]]);
@@ -49,13 +50,13 @@ test('PCとタブレットは6列2段で全項目を横スクロールなしに�
   assert.doesNotMatch(homeSource, /tabButtonRefs|inline: 'center'/);
 });
 
-test('スマホは現在地と全11項目を開閉でき、企画ノートを2列幅で表示する', () => {
+test('スマホは現在地と全12項目を開閉でき、企画ノートを2列幅で表示する', () => {
   assert.match(homeSource, /aria-controls="mobile-main-tab-list"/);
   assert.match(homeSource, /aria-expanded=\{mobileTabsOpen\}/);
   assert.match(homeSource, /表示中の機能/);
   assert.match(homeSource, /機能一覧（\{TABS\.length\}）/);
   assert.match(homeSource, /id="mobile-main-tab-list" className="mt-2 grid max-h-\[calc\(100dvh-5\.5rem\)\] grid-cols-2 gap-1 overflow-y-auto/);
-  assert.match(homeSource, /tab\.id === 'notes' \? 'col-span-2' : ''/);
+  assert.match(homeSource, /tab\.id === 'creation' \|\| tab\.id === 'notes' \? 'col-span-2' : ''/);
   assert.match(homeSource, /setMobileTabsOpen\(false\)/);
   assert.match(homeSource, /ref=\{mobileTabsToggleRef\}/);
   assert.match(homeSource, /mobileTabsToggleRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
