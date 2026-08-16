@@ -5,6 +5,7 @@ import {
   createDefaultViewResumeState,
   createViewScrollPosition,
   getProjectCollapsedOutlineCardKeys,
+  getProjectCritiqueSection,
   getProjectPlanningSection,
   getSavedViewScroll,
   hasExplicitViewUrl,
@@ -18,7 +19,7 @@ import {
   VIEW_RESUME_STORAGE_KEY,
 } from './viewResumeState.js';
 
-const MAIN_TABS = ['manual', 'creation', 'notes', 'kdp'];
+const MAIN_TABS = ['manual', 'creation', 'notes', 'kdp', 'critique'];
 
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -100,6 +101,30 @@ test('サポートGPT管理を企画ノートの安全な再開位置として�
   const restored = resolveViewResumeState(state, [{ id: 'project-gpt' }], { validMainTabs: MAIN_TABS });
   assert.equal(restored.planningSection, 'gptSessions');
   assert.deepEqual(restored.scrollPosition, { contentY: 880 });
+});
+
+test('辛口論評GPT管理をプロジェクト別の安全な再開位置として保持する', () => {
+  const state = rememberViewResumeState(createDefaultViewResumeState(), {
+    selectedProjectId: 'project-critique',
+    mainTab: 'critique',
+    projectId: 'project-critique',
+    critiqueSection: 'gptSessions',
+    scrollMainTab: 'critique',
+    scrollCritiqueSection: 'gptSessions',
+    scrollPosition: { contentY: 960 },
+  });
+
+  assert.equal(getProjectCritiqueSection(state, 'project-critique'), 'gptSessions');
+  assert.deepEqual(
+    getSavedViewScroll(state, 'project-critique', 'critique', 'overview', 'gptSessions'),
+    { contentY: 960 },
+  );
+  const restored = resolveViewResumeState(state, [{ id: 'project-critique' }], {
+    validMainTabs: MAIN_TABS,
+  });
+  assert.equal(restored.mainTab, 'critique');
+  assert.equal(restored.critiqueSection, 'gptSessions');
+  assert.deepEqual(restored.scrollPosition, { contentY: 960 });
 });
 
 test('目次カードの折りたたみはプロジェクト別に保存し、旧状態は全展開として扱う', () => {
@@ -210,6 +235,7 @@ test('明示URLはローカル復元より優先し、通常起動だけを復�
       projectId: 'project-b',
       mainTab: 'notes',
       planningSection: 'competitors',
+      critiqueSection: '',
       manualAnchor: '',
     },
   );
@@ -223,6 +249,7 @@ test('明示URLはローカル復元より優先し、通常起動だけを復�
     projectId: '',
     mainTab: '',
     planningSection: '',
+    critiqueSection: '',
     manualAnchor: 'kindle-navi-manual-section-1',
   });
 
@@ -267,6 +294,15 @@ test('明示URLはローカル復元より優先し、通常起動だけを復�
   assert.equal(tabOnly.mainTab, 'kdp');
   assert.equal(tabOnly.planningSection, 'competitors');
   assert.equal(tabOnly.scrollPosition, null);
+
+  const critiqueView = readExplicitViewUrl({
+    search: '?projectId=project-b&tab=critique&section=gptSessions',
+    hash: '',
+  });
+  assert.equal(critiqueView.mainTab, 'critique');
+  assert.equal(critiqueView.critiqueSection, 'gptSessions');
+  assert.equal(critiqueView.planningSection, '');
+  assert.equal(hasExplicitViewUrl({ search: '', hash: '#critique/gptSessions' }), true);
 });
 
 test('storage反映後に選択中projectが消えたら代替projectを新規作成の既定画面で開く', () => {

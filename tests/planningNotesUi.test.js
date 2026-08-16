@@ -10,6 +10,10 @@ const backupDialogSource = readFileSync(
   new URL('../src/components/DataBackupDialog.jsx', import.meta.url),
   'utf8',
 );
+const handoffPreparationSource = readFileSync(
+  new URL('../src/components/gpt/PlanningGptHandoffPreparationCard.jsx', import.meta.url),
+  'utf8',
+);
 
 function sourceBlock(startMarker, endMarker) {
   const normalizedSource = source.replace(/\r\n?/g, '\n');
@@ -144,6 +148,32 @@ test('サポートGPT管理は初心者向け案内・世代管理・安全な�
   assert.match(source, /handoffLockedField = editor\?\.mode === 'handoff'/);
   assert.match(source, /引継ぎを受領するまでは「保留・引継ぎ先なし」で登録します/);
   assert.match(source, /projectTitle: project\?\.book_title \|\| project\?\.name \|\| ''/);
+});
+
+test('サポートGPT管理は2段階の引継ぎ文章を安全に確認・編集・コピーできる', () => {
+  assert.match(source, /<PlanningGptHandoffPreparationCard/);
+  assert.match(source, /kind="support"/);
+  assert.match(source, /updatePlanningGptHandoffTemplates\(current, 'support'/);
+  assert.match(source, /const rawValue = draft\?\.\[field\];[\s\S]*value: rawValue \?\? ''/);
+  assert.match(source, /type=\{type\}/);
+  assert.match(source, /function GptSessionEditorDialog[\s\S]*const update = \(field, value\) => onChange\(field, value\)/);
+  assert.match(source, /onInput=\{type === 'date'[\s\S]*event\.currentTarget\.value/);
+  assert.match(source, /setGptSessionEditor\(current => \(\{[\s\S]*draft: \{ \.\.\.current\.draft, \[field\]: value \}/);
+  assert.match(handoffPreparationSource, /①旧GPTで引継ぎ書 → ②新GPTへ貼る → ③受領確認後に使用中切替/);
+  assert.match(handoffPreparationSource, /引継ぎ書の作成指示をコピー/);
+  assert.match(handoffPreparationSource, /新しいGPTへの開始指示をコピー/);
+  assert.match(handoffPreparationSource, /必要な一般公開URLは利用できます/);
+  assert.doesNotMatch(handoffPreparationSource, /replace\(\/https\?:/);
+  assert.match(handoffPreparationSource, /let rendered = '';[\s\S]*navigator\.clipboard\.writeText\(rendered\)/);
+  assert.match(handoffPreparationSource, /setCopyState\(\{ field, message, failed: true, rendered \}\)/);
+  assert.match(handoffPreparationSource, /fallbackTextareaRef\.current\?\.focus[\s\S]*fallbackTextareaRef\.current\?\.select/);
+  assert.match(handoffPreparationSource, /readOnly[\s\S]*value=\{copyState\.rendered\}/);
+  assert.match(handoffPreparationSource, /下に表示した差し込み済み全文を手動でコピーしてください/);
+  assert.match(handoffPreparationSource, /role="status" aria-live="polite"/);
+  assert.match(handoffPreparationSource, /identityRef\.current !== identity/);
+  assert.match(handoffPreparationSource, /setDirty\(false\)/);
+  assert.match(handoffPreparationSource, /既定へ戻す/);
+  assert.match(handoffPreparationSource, /共有用JSON／Markdownには含まれません/);
 });
 
 test('市場調査はサマリー・根拠・PC比較表・スマホカード・0件解除を一画面で確認できる', () => {
@@ -670,7 +700,7 @@ test('長文入力中に全文の再解析・dirty比較・検索再正規化を
 test('バックアップ結合のノート競合は場所と理由を示して実行を止める', () => {
   assert.match(backupDialogSource, /previewDataBackupPlanningNotesConflicts/);
   assert.match(backupDialogSource, /planningMergeConflicts\.length > 0/);
-  assert.match(backupDialogSource, /内容・章順・版・正本指定・原稿進捗の競合/);
+  assert.match(backupDialogSource, /内容・章順・版・正本指定・原稿進捗・GPT管理・引継ぎ文の競合/);
   assert.match(backupDialogSource, /conflict\.projectName/);
   assert.match(backupDialogSource, /conflict\.section/);
   assert.match(backupDialogSource, /conflict\.reason/);
@@ -678,6 +708,13 @@ test('バックアップ結合のノート競合は場所と理由を示して�
   assert.match(backupDialogSource, /編集中の仮目次が異なる（自動では切り替えない）/);
   assert.match(backupDialogSource, /chapterWritingStates: '章ごとの原稿進捗'/);
   assert.match(backupDialogSource, /chapter_writing_state_requires_review: '同じ章の完成状態・リンクが異なる'/);
+  assert.match(backupDialogSource, /critiqueGptSessions: '辛口論評GPT管理'/);
+  assert.match(backupDialogSource, /gptHandoffTemplates: 'GPT引継ぎテンプレート'/);
+  assert.match(backupDialogSource, /critique_gpt_session_requires_review: '同じ論評GPTセッションIDで内容が異なる'/);
+  assert.match(backupDialogSource, /critique_gpt_management_id_conflict: '同じ論評GPT管理IDが別セッションに使われている'/);
+  assert.match(backupDialogSource, /critique_gpt_active_session_conflict: '使用中の論評GPTが複数になる'/);
+  assert.match(backupDialogSource, /critique_gpt_session_limit_exceeded: '結合後の論評GPTが上限1,000件を超える'/);
+  assert.match(backupDialogSource, /gpt_handoff_template_conflict: '同じ種類の編集済み引継ぎテンプレートが異なる'/);
   assert.match(backupDialogSource, /disabled=\{busy \|\| planningMergeConflicts\.length > 0\}/);
   assert.match(backupDialogSource, /非公開取材は通常バックアップに含まれます/);
 });

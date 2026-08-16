@@ -11,14 +11,19 @@ import {
   buildPlanningNotesSharePackage,
   buildPlanningChapterOrdinalLabels,
   clearInstructionCanonical,
+  activatePlanningCritiqueGptSession,
   activatePlanningGptSession,
+  createDefaultPlanningGptHandoffTemplates,
   createEmptyPlanningNotes,
+  createPlanningCritiqueGptHandoffTarget,
+  createPlanningCritiqueGptSessionRecord,
   createPlanningGptHandoffTarget,
   createPlanningGptSessionRecord,
   createPlanningChapterRecord,
   createPlanningOutlineSnapshot,
   createPlanningRecord,
   deletePlanningRecord,
+  deletePlanningCritiqueGptSession,
   deletePlanningGptSession,
   duplicatePlanningRecord,
   estimatePlanningNotesBytes,
@@ -33,6 +38,8 @@ import {
   getPlanningChapterOrdinalLabel,
   getPlanningChapterPresentation,
   getNextPlanningChapterOrder,
+  getDefaultPlanningGptHandoffTemplate,
+  getNextPlanningCritiqueGptManagementId,
   getNextPlanningGptManagementId,
   getPlanningChapterParentOptions,
   getConfirmedPlanningOutline,
@@ -52,19 +59,25 @@ import {
   previewPlanningNotesMerge,
   readPlanningNotes,
   replacePlanningOutlineDraft,
+  resolvePlanningGptHandoffTemplates,
   savePlanningMarketSummary,
   savePlanningConcept,
+  renderPlanningGptHandoffTemplate,
   serializePlanningNotes,
   sortPlanningRecordsNewest,
+  sortPlanningCritiqueGptSessions,
   sortPlanningGptSessions,
   sortPlanningOutlineSnapshotsNewest,
   upsertPlanningRecord,
+  upsertPlanningCritiqueGptSession,
   upsertPlanningGptSession,
   updatePlanningRecordChapterLinks,
+  updatePlanningGptHandoffTemplates,
   updatePlanningChapterManuscript,
   validatePlanningGoogleDocumentUrl,
   validatePlanningManuscriptUrl,
   validatePlanningGptSessionUrl,
+  validatePlanningCritiqueGptSessionUrl,
   withdrawPlanningDecision,
 } from './planningNotes.js';
 
@@ -1358,7 +1371,7 @@ test('v1企画ノートを新フィールド未設定のv6へ安全に移行す�
   }
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 8);
   assert.equal(migrated.outlineRevision, 0);
   assert.equal(migrated.confirmedOutlineId, '');
   assert.deepEqual(migrated.outlineSnapshots, []);
@@ -1404,7 +1417,7 @@ test('v2の平坦な章はID・本文・orderを変えずrootの仮目次とし�
   delete legacy.chapters[0].parentId;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 8);
   assert.equal(migrated.confirmedOutlineId, '');
   assert.deepEqual(migrated.outlineSnapshots, []);
   assert.deepEqual(
@@ -1482,7 +1495,7 @@ test('v3の階層目次はID・本文・親子順・章紐付けを変えずv6�
   delete legacy.outlineSnapshots;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 8);
   assert.deepEqual(
     migrated.chapters.map(record => ({
       id: record.id,
@@ -1518,7 +1531,7 @@ test('v4目次は全既存IDを編集中の仮目次としてv6へ移行する',
   delete legacy.draftOutlineChapterIds;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 8);
   assert.deepEqual(migrated.draftOutlineChapterIds, ['legacy-v4-chapter']);
   assert.deepEqual(migrated.chapters[0], expectedChapter);
   assert.deepEqual(migrated.interviews[0], expectedInterview);
@@ -1546,7 +1559,7 @@ test('v5のactive目次・退避台帳・保存版を変えず原稿進捗未設
   delete legacy.chapterWritingStates;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 8);
   assert.deepEqual(migrated.draftOutlineChapterIds, ['legacy-v5-active']);
   assert.deepEqual(migrated.chapterWritingStates, []);
   assert.equal(migrated.outlineSnapshots[0].chapters[0].id, 'legacy-v5-old');
@@ -2660,7 +2673,7 @@ test('共有JSONとMarkdownは仮目次・現在の確定目次・過去の目�
   const share = buildPlanningNotesSharePackage(data, { bookTitle: '目次テスト本', now: fixedNow });
   const markdown = planningNotesShareToMarkdown(share);
   assert.equal(share.schemaVersion, 1);
-  assert.equal(share.data.version, 7);
+  assert.equal(share.data.version, 8);
   assert.equal(share.data.outlineSnapshots.length, 2);
   assert.match(markdown, /## 目次・章構成/);
   assert.match(markdown, /### 仮目次（編集中）[\s\S]*編集中の仮目次/);
@@ -2910,7 +2923,7 @@ test('MARKET-001 Markdownを5競合・6公開出典へ厳格preview/applyし、�
   );
   const share = buildPlanningNotesSharePackage(applied, { now: fixedNow });
   assert.equal(share.schemaVersion, 1);
-  assert.equal(share.data.version, 7);
+  assert.equal(share.data.version, 8);
   assert.match(planningNotesShareToMarkdown(share), /MARKET-001|市場調査サマリー/);
 });
 
@@ -3161,6 +3174,11 @@ test('GPTセッションは連番を提案し、非公開会話URLを安全に�
 
   assert.equal(data.gptSessions[0].managementId, 'GPT-001');
   assert.equal(data.gptSessions[0].gptUrl, 'https://chatgpt.com/c/private-conversation-id');
+  assert.equal(data.gptSessions[0].startedOn, '2026-08-16');
+  assert.equal(
+    readPlanningNotes(serializePlanningNotes(data)).data.gptSessions[0].startedOn,
+    '2026-08-16',
+  );
   assert.equal(getNextPlanningGptManagementId(data), 'GPT-002');
   assert.equal(validatePlanningGptSessionUrl('https://chat.openai.com/c/private-id'), 'https://chat.openai.com/c/private-id');
   for (const invalid of [
@@ -3302,15 +3320,28 @@ test('GPTセッションは使用中を先頭に保ちつつ開始日順を切�
   );
 });
 
-test('v1かv6はgptSessionsなしかv7へ移行し、v7の欠落は壊れた保存値として停止する', () => {
+test('v1〜v7をv8へ安全に移行し、各版で必須のGPT管理項目の欠落を停止する', () => {
   for (const version of [1, 2, 3, 4, 5, 6]) {
     const legacy = { ...createEmptyPlanningNotes(), version };
     delete legacy.gptSessions;
+    delete legacy.critiqueGptSessions;
+    delete legacy.gptHandoffTemplates;
     if (version <= 4) delete legacy.draftOutlineChapterIds;
     if (version <= 5) delete legacy.chapterWritingStates;
-    assert.deepEqual(normalizePlanningNotes(legacy).gptSessions, []);
+    const migrated = normalizePlanningNotes(legacy);
+    assert.deepEqual(migrated.gptSessions, []);
+    assert.deepEqual(migrated.critiqueGptSessions, []);
+    assert.deepEqual(migrated.gptHandoffTemplates, createDefaultPlanningGptHandoffTemplates());
   }
-  const brokenV7 = { ...createEmptyPlanningNotes() };
+  const legacyV7 = { ...createEmptyPlanningNotes(), version: 7 };
+  delete legacyV7.critiqueGptSessions;
+  delete legacyV7.gptHandoffTemplates;
+  const migratedV7 = normalizePlanningNotes(legacyV7);
+  assert.equal(migratedV7.version, 8);
+  assert.deepEqual(migratedV7.critiqueGptSessions, []);
+  assert.deepEqual(migratedV7.gptHandoffTemplates, createDefaultPlanningGptHandoffTemplates());
+
+  const brokenV7 = { ...legacyV7 };
   delete brokenV7.gptSessions;
   assert.throws(() => normalizePlanningNotes(brokenV7), /GPT管理の一覧/);
   assert.throws(
@@ -3321,6 +3352,15 @@ test('v1かv6はgptSessionsなしかv7へ移行し、v7の欠落は壊れた保�
     () => normalizePlanningNotes({ ...createEmptyPlanningNotes(), version: 6, gptSessions: null }),
     /配列ではありません/,
   );
+  for (const field of ['critiqueGptSessions', 'gptHandoffTemplates']) {
+    const brokenV8 = { ...createEmptyPlanningNotes() };
+    delete brokenV8[field];
+    assert.throws(() => normalizePlanningNotes(brokenV8), /GPT管理|GPT引継ぎテンプレート/);
+    assert.throws(
+      () => normalizePlanningNotes({ ...createEmptyPlanningNotes(), [field]: null }),
+      /GPT管理|GPT引継ぎテンプレート/,
+    );
+  }
 });
 
 test('GPTセッションのURLと引継ぎメモは共有JSONとMarkdownからコレクションごと除外する', () => {
@@ -3341,7 +3381,7 @@ test('GPTセッションのURLと引継ぎメモは共有JSONとMarkdownから�
     assert.doesNotMatch(json, new RegExp(secret));
     assert.doesNotMatch(markdown, new RegExp(secret));
   }
-  assert.match(share.note, /Kindle出版サポートGPT管理の登録内容は除外/);
+  assert.match(share.note, /Kindle出版サポートGPT管理[・の]/);
   assert.doesNotMatch(markdown, /## Kindle出版サポートGPT管理/);
 });
 
@@ -3417,5 +3457,481 @@ test('GPTセッションの結合後が上限1,000件を超える場合は復元
   assert.throws(
     () => mergePlanningNotesValues(currentRaw, incomingRaw),
     PlanningNotesMergeConflictError,
+  );
+});
+
+test('Kindle出版サポートGPTの開始日は画面と同じdraftから保存・再読込後も残る', () => {
+  let data = createEmptyPlanningNotes();
+  const openedDraft = createPlanningGptSessionRecord(data, {
+    sessionName: '開始日の回帰確認',
+  }, { now: fixedNow, idFactory: idFactory('support-started-on') });
+  const inputDraft = { ...openedDraft, startedOn: '2026-08-17' };
+  data = upsertPlanningGptSession(data, inputDraft, {
+    expectedUpdatedAt: null,
+    now: fixedNow,
+  });
+  assert.equal(data.gptSessions[0].startedOn, '2026-08-17');
+  assert.equal(
+    readPlanningNotes(serializePlanningNotes(data)).data.gptSessions[0].startedOn,
+    '2026-08-17',
+  );
+});
+
+test('辛口論評GPTセッションは対象版・論評回・開始日を履歴と分けて安全に保存する', () => {
+  let data = createEmptyPlanningNotes();
+  assert.equal(getNextPlanningCritiqueGptManagementId(data), 'CRITIQUE-001');
+  const draft = createPlanningCritiqueGptSessionRecord(data, {
+    sessionName: '第1回の辛口論評',
+    gptUrl: 'https://chatgpt.com/c/private-critique-conversation',
+    scope: '原稿全体の論理と文体',
+    sessionStatus: 'active',
+    startedOn: '2026-08-17',
+    targetManuscriptVersionId: 'MANUSCRIPT-003',
+    critiqueRound: 1,
+    handoffMemo: '前回指摘なし',
+    notes: '論評結果履歴とは別の管理メモ',
+  }, { now: fixedNow, idFactory: idFactory('critique-session-1') });
+  data = upsertPlanningCritiqueGptSession(data, draft, {
+    expectedUpdatedAt: null,
+    now: fixedNow,
+  });
+  const restored = readPlanningNotes(serializePlanningNotes(data)).data;
+  assert.equal(restored.critiqueGptSessions[0].managementId, 'CRITIQUE-001');
+  assert.equal(restored.critiqueGptSessions[0].startedOn, '2026-08-17');
+  assert.equal(restored.critiqueGptSessions[0].targetManuscriptVersionId, 'MANUSCRIPT-003');
+  assert.equal(restored.critiqueGptSessions[0].critiqueRound, 1);
+  assert.equal(getNextPlanningCritiqueGptManagementId(restored), 'CRITIQUE-002');
+  assert.equal(
+    validatePlanningCritiqueGptSessionUrl('https://chat.openai.com/c/private-critique'),
+    'https://chat.openai.com/c/private-critique',
+  );
+  assert.throws(
+    () => validatePlanningCritiqueGptSessionUrl('https://chatgpt.com/c/private?token=secret'),
+    /URLは保存できません/,
+  );
+});
+
+test('辛口論評GPTの管理ID・使用中・参照・CASの不整合を拒否する', () => {
+  for (const managementId of ['CRITIQUE-001', 'CRITIQUE-999', 'CRITIQUE-1000']) {
+    const record = createPlanningCritiqueGptSessionRecord(createEmptyPlanningNotes(), {
+      managementId,
+      sessionName: '正規表記',
+    }, { now: fixedNow, idFactory: idFactory(`valid-${managementId}`) });
+    assert.equal(record.managementId, managementId);
+  }
+  for (const managementId of ['CRITIQUE-0001', 'CRITIQUE-01', 'critique-001']) {
+    assert.throws(
+      () => createPlanningCritiqueGptSessionRecord(createEmptyPlanningNotes(), {
+        managementId,
+        sessionName: '非正規表記',
+      }, { now: fixedNow, idFactory: idFactory(`invalid-${managementId}`) }),
+      /CRITIQUE-001/,
+    );
+  }
+
+  let data = createEmptyPlanningNotes();
+  const active = createPlanningCritiqueGptSessionRecord(data, {
+    managementId: 'CRITIQUE-001', sessionName: '使用中', sessionStatus: 'active',
+  }, { now: fixedNow, idFactory: idFactory('critique-active') });
+  data = upsertPlanningCritiqueGptSession(data, active, {
+    expectedUpdatedAt: null, now: fixedNow,
+  });
+  const standby = createPlanningCritiqueGptSessionRecord(data, {
+    managementId: 'CRITIQUE-002', sessionName: '保留', sessionStatus: 'on_hold',
+  }, { now: fixedNow, idFactory: idFactory('critique-standby') });
+  data = upsertPlanningCritiqueGptSession(data, standby, {
+    expectedUpdatedAt: null, now: fixedNow,
+  });
+  assert.throws(
+    () => upsertPlanningCritiqueGptSession(data, { ...standby, notes: '古い画面' }, {
+      expectedUpdatedAt: '2026-08-01T00:00:00.000Z', now: fixedNow,
+    }),
+    /別の画面/,
+  );
+  assert.throws(
+    () => upsertPlanningCritiqueGptSession(data, { ...standby, managementId: 'CRITIQUE-003' }, {
+      expectedUpdatedAt: standby.updatedAt, now: fixedNow,
+    }),
+    /作成後に変更できません/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      critiqueGptSessions: data.critiqueGptSessions
+        .map(record => ({ ...record, sessionStatus: 'active' })),
+    }),
+    /1件だけ/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      critiqueGptSessions: data.critiqueGptSessions.map(record => record.id === standby.id
+        ? { ...record, handoffToId: 'CRITIQUE-999' }
+        : record),
+    }),
+    /見つかりません/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      critiqueGptSessions: data.critiqueGptSessions.map(record => ({
+        ...record,
+        sessionStatus: 'on_hold',
+        handoffToId: record.id === active.id ? 'CRITIQUE-002' : 'CRITIQUE-001',
+      })),
+    }),
+    /循環/,
+  );
+  assert.throws(
+    () => deletePlanningCritiqueGptSession(data, active.id, {
+      expectedUpdatedAt: active.updatedAt,
+      now: fixedNow,
+    }),
+    /使用中/,
+  );
+});
+
+test('辛口論評GPTの引継ぎ先作成と使用開始は新旧を原子的に更新する', () => {
+  const firstNow = () => new Date('2026-08-14T00:00:00.000Z');
+  const handoffNow = () => new Date('2026-08-15T00:00:00.000Z');
+  const activateNow = () => new Date('2026-08-16T00:00:00.000Z');
+  let data = createEmptyPlanningNotes();
+  const sourceDraft = createPlanningCritiqueGptSessionRecord(data, {
+    sessionName: '論評第1世代', sessionStatus: 'active', critiqueRound: 1,
+  }, { now: firstNow, idFactory: idFactory('critique-source') });
+  data = upsertPlanningCritiqueGptSession(data, sourceDraft, {
+    expectedUpdatedAt: null, now: firstNow,
+  });
+  const source = data.critiqueGptSessions[0];
+  data = createPlanningCritiqueGptHandoffTarget(data, source.id, {
+    sessionName: '論評第2世代',
+    targetManuscriptVersionId: 'MANUSCRIPT-004',
+    critiqueRound: 2,
+    startedOn: '2026-08-15',
+  }, {
+    expectedUpdatedAt: source.updatedAt,
+    now: handoffNow,
+    idFactory: idFactory('critique-target'),
+  });
+  const linkedSource = data.critiqueGptSessions.find(record => record.id === source.id);
+  const target = data.critiqueGptSessions
+    .find(record => record.managementId === linkedSource.handoffToId);
+  assert.equal(linkedSource.sessionStatus, 'active');
+  assert.equal(linkedSource.handoffToId, 'CRITIQUE-002');
+  assert.equal(target.sessionStatus, 'on_hold');
+  assert.equal(target.startedOn, '2026-08-15');
+  data = activatePlanningCritiqueGptSession(data, target.id, {
+    expectedTargetUpdatedAt: target.updatedAt,
+    expectedSourceUpdatedAt: linkedSource.updatedAt,
+    now: activateNow,
+  });
+  assert.equal(
+    data.critiqueGptSessions.find(record => record.id === source.id).sessionStatus,
+    'handed_over',
+  );
+  assert.equal(
+    data.critiqueGptSessions.find(record => record.id === target.id).sessionStatus,
+    'active',
+  );
+  assert.throws(
+    () => deletePlanningCritiqueGptSession(data, source.id, {
+      expectedUpdatedAt: data.critiqueGptSessions.find(record => record.id === source.id).updatedAt,
+    }),
+    /引継ぎ先ID/,
+  );
+});
+
+test('辛口論評GPT一覧は使用中を先頭にして開始日順を安定して切り替える', () => {
+  const records = [
+    { id: 'old', managementId: 'CRITIQUE-001', sessionStatus: 'completed', startedOn: '2026-08-01', createdAt: '2026-08-01T00:00:00.000Z' },
+    { id: 'active', managementId: 'CRITIQUE-002', sessionStatus: 'active', startedOn: '2026-08-02', createdAt: '2026-08-02T00:00:00.000Z' },
+    { id: 'new', managementId: 'CRITIQUE-003', sessionStatus: 'on_hold', startedOn: '2026-08-03', createdAt: '2026-08-03T00:00:00.000Z' },
+  ];
+  assert.deepEqual(
+    sortPlanningCritiqueGptSessions(records).map(record => record.id),
+    ['active', 'new', 'old'],
+  );
+  assert.deepEqual(
+    sortPlanningCritiqueGptSessions(records, { direction: 'oldest' }).map(record => record.id),
+    ['active', 'old', 'new'],
+  );
+});
+
+test('GPT引継ぎテンプレートは空overrideと組込既定文を分け、安全な値だけを差し込む', () => {
+  const data = createEmptyPlanningNotes();
+  assert.deepEqual(data.gptHandoffTemplates, createDefaultPlanningGptHandoffTemplates());
+  for (const kind of ['support', 'critique']) {
+    const defaults = getDefaultPlanningGptHandoffTemplate(kind);
+    assert.equal((defaults.handoffDocumentInstruction.match(/^\d+\./gm) || []).length, 10);
+    assert.match(defaults.handoffStartMessage, /確定.*勝手に変え/);
+    assert.match(defaults.handoffStartMessage, /未確定.*確定扱いせず/);
+    assert.match(defaults.handoffStartMessage, /無断で上書き/);
+    assert.match(defaults.handoffStartMessage, /不足・矛盾/);
+    assert.match(defaults.handoffStartMessage, /著者.*承認.*再開/);
+  }
+  const supportDefaults = getDefaultPlanningGptHandoffTemplate('support');
+  assert.match(supportDefaults.handoffDocumentInstruction, /本人の言葉とAIの提案を分け/);
+  assert.match(supportDefaults.handoffDocumentInstruction, /確定.*仮.*未確認/);
+  const resolved = resolvePlanningGptHandoffTemplates(data, 'support');
+  assert.equal(
+    resolved.handoffDocumentInstruction,
+    supportDefaults.handoffDocumentInstruction,
+  );
+
+  const rendered = renderPlanningGptHandoffTemplate(
+    'support',
+    '{{作品名}}|{{現ID}}|{{次ID候補}}|{{担当範囲}}|{{URL}}',
+    {
+      projectTitle: '公開資料 https://example.com/book',
+      currentManagementId: 'GPT-001',
+      nextManagementId: 'GPT-002',
+      scope: '企画から目次',
+      gptUrl: 'https://chatgpt.com/c/SHOULD-NOT-BE-USED',
+    },
+  );
+  assert.match(rendered, /https:\/\/example\.com\/book/);
+  assert.match(rendered, /GPT-001\|GPT-002/);
+  assert.match(rendered, /\{\{URL\}\}/);
+  assert.doesNotMatch(rendered, /SHOULD-NOT-BE-USED/);
+  assert.match(
+    renderPlanningGptHandoffTemplate('critique', '{{前回指摘}}', {
+      previousFindings: 'https://chatgpt.com/c/PRIVATE-CONVERSATION',
+    }),
+    /安全のため自動挿入しません/,
+  );
+});
+
+test('GPT引継ぎテンプレートはCASでoverrideだけを保存し、デフォルトへの復帰は空に圧縮する', () => {
+  const base = createEmptyPlanningNotes();
+  const defaults = getDefaultPlanningGptHandoffTemplate('support');
+  const unchanged = updatePlanningGptHandoffTemplates(base, 'support', defaults, {
+    expectedUpdatedAt: '',
+    now: fixedNow,
+  });
+  assert.deepEqual(unchanged.gptHandoffTemplates.support, base.gptHandoffTemplates.support);
+
+  const customized = updatePlanningGptHandoffTemplates(base, 'support', {
+    ...defaults,
+    handoffStartMessage: '著者承認後に再開する独自文',
+  }, { expectedUpdatedAt: '', now: fixedNow });
+  assert.equal(customized.gptHandoffTemplates.support.revision, 1);
+  assert.equal(
+    customized.gptHandoffTemplates.support.handoffDocumentInstruction,
+    '',
+  );
+  assert.equal(
+    resolvePlanningGptHandoffTemplates(customized, 'support').handoffStartMessage,
+    '著者承認後に再開する独自文',
+  );
+  assert.throws(
+    () => updatePlanningGptHandoffTemplates(customized, 'support', defaults, {
+      expectedUpdatedAt: '', now: fixedNow,
+    }),
+    /別の画面/,
+  );
+  const reset = updatePlanningGptHandoffTemplates(customized, 'support', defaults, {
+    expectedUpdatedAt: customized.gptHandoffTemplates.support.updatedAt,
+    now: () => new Date('2026-08-15T00:00:00.000Z'),
+  });
+  assert.equal(reset.gptHandoffTemplates.support.handoffStartMessage, '');
+  assert.equal(
+    resolvePlanningGptHandoffTemplates(reset, 'support').handoffStartMessage,
+    defaults.handoffStartMessage,
+  );
+});
+
+test('GPT引継ぎテンプレートの明示リセットは古いバックアップの独自文を復活させない', () => {
+  const customizedAt = () => new Date('2026-08-16T00:00:00.000Z');
+  const resetAt = () => new Date('2026-08-17T00:00:00.000Z');
+  for (const kind of ['support', 'critique']) {
+    for (const field of ['handoffDocumentInstruction', 'handoffStartMessage']) {
+      const base = createEmptyPlanningNotes();
+      const defaults = getDefaultPlanningGptHandoffTemplate(kind);
+      const oldCustom = updatePlanningGptHandoffTemplates(base, kind, {
+        ...defaults,
+        [field]: `${kind}-${field}-OLD-CUSTOM-TEMPLATE`,
+      }, {
+        expectedUpdatedAt: '',
+        now: customizedAt,
+      });
+      const explicitReset = updatePlanningGptHandoffTemplates(oldCustom, kind, defaults, {
+        expectedUpdatedAt: oldCustom.gptHandoffTemplates[kind].updatedAt,
+        now: resetAt,
+      });
+      assert.equal(explicitReset.gptHandoffTemplates[kind].revision, 2);
+      assert.equal(explicitReset.gptHandoffTemplates[kind][field], '');
+
+      for (const [current, incoming] of [
+        [explicitReset, oldCustom],
+        [oldCustom, explicitReset],
+      ]) {
+        const conflicts = previewPlanningNotesMerge(
+          serializePlanningNotes(current),
+          serializePlanningNotes(incoming),
+        );
+        assert.ok(conflicts.some(conflict => (
+          conflict.section === 'gptHandoffTemplates'
+          && conflict.id === kind
+          && conflict.reason === 'gpt_handoff_template_conflict'
+        )));
+        assert.throws(
+          () => mergePlanningNotesValues(
+            serializePlanningNotes(current),
+            serializePlanningNotes(incoming),
+          ),
+          PlanningNotesMergeConflictError,
+        );
+      }
+
+      const pristineMergedWithReset = readPlanningNotes(mergePlanningNotesValues(
+        serializePlanningNotes(base),
+        serializePlanningNotes(explicitReset),
+      )).data;
+      assert.deepEqual(
+        pristineMergedWithReset.gptHandoffTemplates[kind],
+        explicitReset.gptHandoffTemplates[kind],
+      );
+    }
+  }
+});
+
+test('revision 0の未編集GPT引継ぎテンプレートは本文overrideを持てない', () => {
+  for (const kind of ['support', 'critique']) {
+    for (const field of ['handoffDocumentInstruction', 'handoffStartMessage']) {
+      const broken = createEmptyPlanningNotes();
+      broken.gptHandoffTemplates[kind][field] = '未編集を偽装した独自文';
+      assert.throws(
+        () => normalizePlanningNotes(broken),
+        /未編集テンプレートに本文overrideは保存できません/,
+      );
+    }
+  }
+});
+
+test('辛口論評GPT管理と引継ぎテンプレートは共有JSON・Markdownから全体を除外する', () => {
+  let data = createEmptyPlanningNotes();
+  const record = createPlanningCritiqueGptSessionRecord(data, {
+    sessionName: 'PRIVATE-CRITIQUE-NAME',
+    gptUrl: 'https://chatgpt.com/c/PRIVATE-CRITIQUE-URL',
+    sessionStatus: 'active',
+    handoffMemo: 'PRIVATE-CRITIQUE-HANDOFF',
+    notes: 'PRIVATE-CRITIQUE-NOTES',
+  }, { now: fixedNow, idFactory: idFactory('critique-private') });
+  data = upsertPlanningCritiqueGptSession(data, record, {
+    expectedUpdatedAt: null, now: fixedNow,
+  });
+  data = updatePlanningGptHandoffTemplates(data, 'critique', {
+    handoffDocumentInstruction: 'PRIVATE-TEMPLATE-DOCUMENT',
+    handoffStartMessage: 'PRIVATE-TEMPLATE-START',
+  }, { expectedUpdatedAt: '', now: fixedNow });
+  const share = buildPlanningNotesSharePackage(data, { now: fixedNow });
+  assert.deepEqual(share.data.critiqueGptSessions, []);
+  assert.deepEqual(share.data.gptHandoffTemplates, createDefaultPlanningGptHandoffTemplates());
+  const json = JSON.stringify(share);
+  const markdown = planningNotesShareToMarkdown(share);
+  for (const secret of [
+    'PRIVATE-CRITIQUE-NAME',
+    'PRIVATE-CRITIQUE-URL',
+    'PRIVATE-CRITIQUE-HANDOFF',
+    'PRIVATE-CRITIQUE-NOTES',
+    'PRIVATE-TEMPLATE-DOCUMENT',
+    'PRIVATE-TEMPLATE-START',
+  ]) {
+    assert.doesNotMatch(json, new RegExp(secret));
+    assert.doesNotMatch(markdown, new RegExp(secret));
+  }
+  assert.match(share.note, /辛口論評GPT管理/);
+  assert.match(share.note, /GPT引継ぎテンプレート/);
+});
+
+test('辛口論評GPTの復元結合は和集合を保ち、ID・使用中・上限・テンプレート差をpreviewで停止する', () => {
+  const makeData = (id, managementId, sessionName, sessionStatus = 'on_hold') => {
+    let data = createEmptyPlanningNotes();
+    const record = createPlanningCritiqueGptSessionRecord(data, {
+      managementId, sessionName, sessionStatus,
+    }, { now: fixedNow, idFactory: idFactory(id) });
+    return upsertPlanningCritiqueGptSession(data, record, {
+      expectedUpdatedAt: null, now: fixedNow,
+    });
+  };
+  const current = makeData('critique-a', 'CRITIQUE-001', 'A');
+  const incoming = makeData('critique-b', 'CRITIQUE-002', 'B');
+  const merged = readPlanningNotes(mergePlanningNotesValues(
+    serializePlanningNotes(current),
+    serializePlanningNotes(incoming),
+  )).data;
+  assert.deepEqual(
+    merged.critiqueGptSessions.map(record => record.managementId).sort(),
+    ['CRITIQUE-001', 'CRITIQUE-002'],
+  );
+  const duplicateManagementId = makeData('critique-other', 'CRITIQUE-001', '別のA');
+  assert.ok(previewPlanningNotesMerge(
+    serializePlanningNotes(current),
+    serializePlanningNotes(duplicateManagementId),
+  ).some(conflict => conflict.reason === 'critique_gpt_management_id_conflict'));
+  const activeA = makeData('critique-active-a', 'CRITIQUE-010', '使用中A', 'active');
+  const activeB = makeData('critique-active-b', 'CRITIQUE-011', '使用中B', 'active');
+  assert.ok(previewPlanningNotesMerge(
+    serializePlanningNotes(activeA),
+    serializePlanningNotes(activeB),
+  ).some(conflict => conflict.reason === 'critique_gpt_active_session_conflict'));
+
+  const currentTemplate = updatePlanningGptHandoffTemplates(current, 'critique', {
+    handoffDocumentInstruction: '現在側の独自文',
+    handoffStartMessage: '',
+  }, { expectedUpdatedAt: '', now: fixedNow });
+  const incomingTemplate = updatePlanningGptHandoffTemplates(incoming, 'critique', {
+    handoffDocumentInstruction: '入力側の独自文',
+    handoffStartMessage: '',
+  }, { expectedUpdatedAt: '', now: fixedNow });
+  assert.ok(previewPlanningNotesMerge(
+    serializePlanningNotes(currentTemplate),
+    serializePlanningNotes(incomingTemplate),
+  ).some(conflict => conflict.reason === 'gpt_handoff_template_conflict'));
+
+  const makeMany = (prefix, startSequence) => normalizePlanningNotes({
+    ...createEmptyPlanningNotes(),
+    critiqueGptSessions: Array.from({ length: 600 }, (_, index) => {
+      const sequence = startSequence + index;
+      return {
+        id: `${prefix}-${sequence}`,
+        revision: 1,
+        createdAt: '2026-08-14T00:00:00.000Z',
+        updatedAt: '2026-08-14T00:00:00.000Z',
+        managementId: `CRITIQUE-${String(sequence).padStart(3, '0')}`,
+        sessionName: `${prefix}-${sequence}`,
+        gptUrl: '',
+        scope: '',
+        sessionStatus: 'on_hold',
+        startedOn: '',
+        targetManuscriptVersionId: '',
+        critiqueRound: 0,
+        handoffToId: '',
+        handoffMemo: '',
+        notes: '',
+      };
+    }),
+  });
+  const limitConflicts = previewPlanningNotesMerge(
+    serializePlanningNotes(makeMany('current-critique', 1)),
+    serializePlanningNotes(makeMany('incoming-critique', 601)),
+  );
+  assert.ok(limitConflicts.some(conflict => (
+    conflict.reason === 'critique_gpt_session_limit_exceeded'
+    && conflict.current.count === 600
+    && conflict.incoming.newCount === 600
+  )));
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...createEmptyPlanningNotes(),
+      gptHandoffTemplates: {
+        ...createDefaultPlanningGptHandoffTemplates(),
+        critique: {
+          ...createDefaultPlanningGptHandoffTemplates().critique,
+          handoffDocumentInstruction: 'x'.repeat(100_001),
+        },
+      },
+    }),
+    /文字数が上限/,
   );
 });

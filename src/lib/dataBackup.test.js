@@ -24,6 +24,7 @@ import {
   assignDecisionCanonical,
   assignInstructionCanonical,
   createEmptyPlanningNotes,
+  createPlanningCritiqueGptSessionRecord,
   createPlanningGptSessionRecord,
   createPlanningOutlineSnapshot,
   createPlanningRecord,
@@ -36,7 +37,9 @@ import {
   savePlanningMarketSummary,
   serializePlanningNotes,
   upsertPlanningRecord,
+  upsertPlanningCritiqueGptSession,
   upsertPlanningGptSession,
+  updatePlanningGptHandoffTemplates,
   updatePlanningChapterManuscript,
 } from './planningNotes.js';
 import { VIEW_RESUME_STORAGE_KEY } from './viewResumeState.js';
@@ -1515,7 +1518,7 @@ test('企画ノートv6の市場サマリー・正本・意思決定参照をバ
   const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => {} };
   const exported = await createDataBackup({ storage, imageStore, now });
   const restored = readPlanningNotes(exported.data.projects[0].planning_notes).data;
-  assert.equal(restored.version, 7);
+  assert.equal(restored.version, 8);
   assert.equal(restored.chapters.find(record => record.id === 'episode-backup').parentId, 'part-backup');
   assert.equal(restored.marketSummary.versionId, 'MARKET-BACKUP');
   assert.deepEqual(restored.instructionVersions[0].canonicalFor, ['codex', 'author']);
@@ -1570,7 +1573,7 @@ test('企画ノートv6の市場サマリー・正本・意思決定参照をバ
     projects: [{ id: 'legacy-v3', name: '旧v3企画ノート', planning_notes: JSON.stringify(legacyV3) }],
   }));
   const migratedLegacy = readPlanningNotes(normalizedLegacy.data.projects[0].planning_notes).data;
-  assert.equal(migratedLegacy.version, 7);
+  assert.equal(migratedLegacy.version, 8);
   assert.equal(migratedLegacy.confirmedOutlineId, '');
   assert.deepEqual(migratedLegacy.outlineSnapshots, []);
   assert.deepEqual(migratedLegacy.chapterWritingStates, []);
@@ -2113,6 +2116,7 @@ test('Kindle出版サポートGPT管理は完全バックアップ・結合・�
   const exportedNotes = readPlanningNotes(exported.data.projects[0].planning_notes).data;
   assert.equal(exportedNotes.gptSessions[0].gptUrl, 'https://chatgpt.com/c/PRIVATE-BACKUP-CURRENT');
   assert.equal(exportedNotes.gptSessions[0].handoffMemo, '現在地：第3章を執筆中');
+  assert.equal(exportedNotes.gptSessions[0].startedOn, '2026-08-16');
 
   const incomingNotes = createNotesWithSession({
     id: 'gpt-backup-incoming', managementId: 'GPT-002', name: '第2世代',
@@ -2134,4 +2138,104 @@ test('Kindle出版サポートGPT管理は完全バックアップ・結合・�
   const replacedSessions = readPlanningNotes(replaced.projects[0].planning_notes).data.gptSessions;
   assert.deepEqual(replacedSessions.map(record => record.managementId), ['GPT-002']);
   assert.equal(replacedSessions[0].gptUrl, 'https://chatgpt.com/c/PRIVATE-BACKUP-INCOMING');
+});
+
+test('辛口論評GPT管理と編集済み引継ぎテンプレートは完全バックアップ・結合・全置換で保持する', async () => {
+  const createNotes = ({ id, managementId, sessionName, url, memo, templateText }) => {
+    let notes = createEmptyPlanningNotes();
+    const record = createPlanningCritiqueGptSessionRecord(notes, {
+      managementId,
+      sessionName,
+      gptUrl: url,
+      scope: '原稿全体の辛口論評',
+      sessionStatus: 'on_hold',
+      startedOn: '2026-08-17',
+      targetManuscriptVersionId: 'MANUSCRIPT-005',
+      critiqueRound: 2,
+      handoffMemo: memo,
+      notes: '論評結果履歴とは分離',
+    }, { now, idFactory: () => id });
+    notes = upsertPlanningCritiqueGptSession(notes, record, {
+      expectedUpdatedAt: null,
+      now,
+    });
+    notes = updatePlanningGptHandoffTemplates(notes, 'critique', {
+      handoffDocumentInstruction: templateText,
+      handoffStartMessage: `${templateText}の開始文`,
+    }, { expectedUpdatedAt: '', now });
+    return notes;
+  };
+  const currentNotes = createNotes({
+    id: 'critique-backup-current',
+    managementId: 'CRITIQUE-001',
+    sessionName: '論評第1世代',
+    url: 'https://chatgpt.com/c/PRIVATE-CRITIQUE-BACKUP-CURRENT',
+    memo: '未対応：導入の弱さ',
+    templateText: '現在側の論評引継ぎ指示',
+  });
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{
+      id: 'critique-gpt-book',
+      name: '辛口論評GPTテスト本',
+      planning_notes: serializePlanningNotes(currentNotes),
+    }]),
+    [SELECTED_PROJECT_STORAGE_KEY]: 'critique-gpt-book',
+  });
+  const exported = await createDataBackup({
+    storage,
+    imageStore: { listLocalImages: async () => [] },
+    now,
+  });
+  const exportedNotes = readPlanningNotes(exported.data.projects[0].planning_notes).data;
+  assert.equal(
+    exportedNotes.critiqueGptSessions[0].gptUrl,
+    'https://chatgpt.com/c/PRIVATE-CRITIQUE-BACKUP-CURRENT',
+  );
+  assert.equal(exportedNotes.critiqueGptSessions[0].startedOn, '2026-08-17');
+  assert.equal(exportedNotes.critiqueGptSessions[0].critiqueRound, 2);
+  assert.equal(
+    exportedNotes.gptHandoffTemplates.critique.handoffDocumentInstruction,
+    '現在側の論評引継ぎ指示',
+  );
+
+  let incomingNotes = createEmptyPlanningNotes();
+  const incomingRecord = createPlanningCritiqueGptSessionRecord(incomingNotes, {
+    managementId: 'CRITIQUE-002',
+    sessionName: '論評第2世代',
+    gptUrl: 'https://chatgpt.com/c/PRIVATE-CRITIQUE-BACKUP-INCOMING',
+    handoffMemo: '次の一手：第1章の再論評',
+    targetManuscriptVersionId: 'MANUSCRIPT-006',
+    critiqueRound: 3,
+  }, { now, idFactory: () => 'critique-backup-incoming' });
+  incomingNotes = upsertPlanningCritiqueGptSession(incomingNotes, incomingRecord, {
+    expectedUpdatedAt: null,
+    now,
+  });
+  const incoming = backup({
+    projects: [{
+      id: 'critique-gpt-book',
+      name: '辛口論評GPTテスト本',
+      planning_notes: serializePlanningNotes(incomingNotes),
+    }],
+    selectedProjectId: 'critique-gpt-book',
+  });
+  const merged = buildDataRestorePlan(exported, incoming, 'merge');
+  const mergedNotes = readPlanningNotes(merged.projects[0].planning_notes).data;
+  assert.deepEqual(
+    mergedNotes.critiqueGptSessions.map(record => record.managementId).sort(),
+    ['CRITIQUE-001', 'CRITIQUE-002'],
+  );
+  assert.equal(
+    mergedNotes.gptHandoffTemplates.critique.handoffDocumentInstruction,
+    '現在側の論評引継ぎ指示',
+  );
+
+  const replaced = buildDataRestorePlan(exported, incoming, 'replace');
+  const replacedNotes = readPlanningNotes(replaced.projects[0].planning_notes).data;
+  assert.deepEqual(
+    replacedNotes.critiqueGptSessions.map(record => record.managementId),
+    ['CRITIQUE-002'],
+  );
+  assert.equal(replacedNotes.critiqueGptSessions[0].critiqueRound, 3);
+  assert.equal(replacedNotes.gptHandoffTemplates.critique.handoffDocumentInstruction, '');
 });
