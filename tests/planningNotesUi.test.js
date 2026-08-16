@@ -143,15 +143,15 @@ test('指示書はCodex・著者の正本枠を常設し、正本・最新を別
 });
 
 test('指示書カードと詳細画面から本文だけを1クリックでコピーできる', () => {
-  assert.match(source, /function InstructionCopyButton\(\{ record, onCopyInstruction/);
-  assert.match(source, /質問文をコピー（指示書本文のみ）/);
+  assert.match(source, /function InstructionCopyButton\(\{[\s\S]*?record,[\s\S]*?onCopyInstruction,[\s\S]*?buttonLabel = '質問文をコピー'/);
+  assert.match(source, /\$\{buttonLabel\}（指示書本文のみ）/);
   assert.match(source, /指示書本文だけをクリップボードへコピーします/);
   assert.match(source, /className=\{`min-h-11 border-neon-cyan\/35 text-neon-cyan/);
   assert.match(source, /コピーする指示書本文がありません/);
   assert.match(source, /DialogFooter className="flex-col gap-2[\s\S]*?sm:flex-row sm:space-x-0"/);
-  assert.match(source, /onCopyInstruction=\{onCopyInstruction\} className="w-full sm:w-auto"/);
+  assert.match(source, /onCopyInstruction=\{onCopyInstruction\}[\s\S]*className="w-full sm:w-auto"/);
   assert.match(source, /「質問文をコピー」は指示書本文だけをコピーします。指示書名・版・状態・外部ファイルの所在は含めません/);
-  assert.equal((source.match(/<InstructionCopyButton record=\{record\} onCopyInstruction=\{onCopyInstruction\}/g) || []).length, 3);
+  assert.ok((source.match(/<InstructionCopyButton record=\{record\} onCopyInstruction=\{onCopyInstruction\}/g) || []).length >= 2);
   assert.match(source, /detail\.section === 'instructionVersions'/);
   assert.match(source, /const text = getPlanningInstructionCopyText\(record\)/);
   assert.match(source, /findPlanningNotesSensitiveData\(\{ markdown: text \}\)/);
@@ -170,33 +170,39 @@ test('指示書カードと詳細画面から本文だけを1クリックでコ�
   assert.doesNotMatch(copyHandler, /persist\(|mutatePublishingProject|serializePlanningNotes|providerToast|toast\./);
 });
 
-test('章へ紐づく執筆用質問を仮目次と現在の確定目次から使える', () => {
+test('章へ紐づく既存質問を消さず、タイトルと本文を持つ汎用的な原稿メモとして使える', () => {
   assert.match(source, /buildPlanningChapterQuestionIndex\(data\.instructionVersions\)/);
-  assert.match(source, /function ChapterWritingQuestions\(/);
+  assert.match(source, /function ChapterWritingMemos\(/);
   assert.match(source, /contextLabel=\{itemLabel\}/);
-  assert.match(source, /\$\{itemLabel\}の「\$\{question\.name \|\| '無題の質問'\}」v\$\{question\.versionNumber\}の内容を見る/);
-  assert.match(source, /この\$\{typeLabel\}の原稿を作る質問/);
-  assert.match(source, /現在この\$\{typeLabel\}に紐づく質問/);
-  assert.match(source, /質問文だけをコピーして、新しいChatGPTなどへ貼り付けられます/);
-  assert.match(source, /const preview = getPlanningInstructionCopyText\(question\)\.trim\(\)/);
+  assert.match(source, /\$\{itemLabel\}の「\$\{memo\.name \|\| '無題の原稿メモ'\}」v\$\{memo\.versionNumber\}の内容を見る/);
+  assert.match(source, /この\$\{typeLabel\}の原稿メモ/);
+  assert.match(source, /現在この\$\{typeLabel\}に紐づく原稿メモ/);
+  assert.match(source, /タイトルと本文を自由に保存できます。質問、書き出し方、参考情報など/);
+  assert.match(source, /\['name', 'メモのタイトル'/);
+  assert.match(source, /\['markdown', 'メモ本文'/);
+  assert.match(source, /context: 'outlineMemo'/);
+  assert.match(source, /buttonLabel="メモ本文をコピー"/);
+  assert.match(source, /共有用JSON／Markdownにもタイトルと本文が入るため、非公開情報や認証情報は書かないでください/);
+  assert.match(source, /const preview = getPlanningInstructionCopyText\(memo\)\.trim\(\)/);
   assert.match(source, /preview\.slice\(0, 180\)/);
-  assert.match(source, /質問本文はまだありません/);
-  assert.match(source, /この項目に紐づく執筆用の質問はまだありません/);
+  assert.match(source, /メモ本文はまだありません/);
+  assert.match(source, /この項目に紐づく原稿メモはまだありません/);
   assert.match(source, /const chapterQuestions = activeSection === 'chapters'[\s\S]*questionsByChapterId\.get\(record\.id\) \|\| \[\]/);
-  assert.match(source, /questions=\{chapterQuestions\}/);
+  assert.match(source, /memos=\{chapterQuestions\}/);
   assert.match(source, /getQuestions=\{chapterId => questionsByChapterId\.get\(chapterId\) \|\| \[\]\}/);
   assert.match(source, /onCopyQuestion=\{copyInstructionQuestion\}/);
-  assert.match(source, /onOpenQuestion=\{record => openDetail\('instructionVersions', record\)\}/);
-  assert.match(source, /onAddQuestion=\{openNewQuestionForChapter\}/);
-  assert.match(source, /canAddQuestion=\{chapterId => liveChapterIds\.has\(chapterId\)\}/);
-  assert.match(source, /以前の確定目次にだけ残っています。仮目次の項目へ質問を紐づけ直してから追加してください。/);
+  assert.match(source, /onOpenQuestion=\{record => openDetail\('instructionVersions', record, \{ context: 'outlineMemo' \}\)\}/);
+  assert.match(source, /onAddMemo=\{openNewMemoForChapter\}/);
+  assert.match(source, /onEditMemo=\{openEditOutlineMemo\}/);
+  assert.match(source, /canAddMemo=\{chapterId => liveChapterIds\.has\(chapterId\)\}/);
+  assert.match(source, /以前の確定目次にだけ残っています。仮目次の項目へ原稿メモを紐づけ直してから追加してください。/);
   assert.match(source, /chapterIds: \[chapter\.id\]/);
   assert.match(source, /role: 'writing'/);
   assert.match(source, /min-h-11 shrink-0 border-neon-pink\/35/);
-  assert.match(source, /目次へ紐づけた執筆用質問は、仮目次と現在の確定目次のカードからも使えます/);
+  assert.match(source, /既存の質問も同じ原稿メモとして残ります/);
 
   const historyPanel = sourceBlock("outlineView === 'history' ? (", ') : (');
-  assert.doesNotMatch(historyPanel, /ChapterWritingQuestions|onCopyQuestion|質問文をコピー/);
+  assert.doesNotMatch(historyPanel, /ChapterWritingMemos|onCopyQuestion|メモ本文をコピー/);
 });
 
 test('意思決定は現在の正本と最新順の履歴を分け、差替え・撤回・相互参照を示す', () => {
@@ -448,7 +454,7 @@ test('仮・確定・過去の目次項目を個別に折りたたみ、見出�
   assert.match(source, /function OutlineCardSummaryBadges\(/);
   assert.match(source, /原稿：\{completed \? '完成' : '未完成'\}/);
   assert.match(source, /原稿リンクあり/);
-  assert.match(source, /質問 \{questionCount\}件/);
+  assert.match(source, /原稿メモ \{questionCount\}件/);
   assert.match(source, /const outlineCardKey = activeSection === 'chapters' \? `draft:\$\{record\.id\}`/);
   assert.match(source, /collapseScope=\{`confirmed:\$\{confirmedOutline\.id\}`\}/);
   assert.match(source, /collapseScope=\{`history:\$\{snapshot\.id\}`\}/);
@@ -475,6 +481,20 @@ test('折りたたんだ仮目次と現在の確定目次でも原稿完成チ�
   assert.ok(pastSnapshotTree);
   assert.match(pastSnapshotTree, /includeRejected/);
   assert.doesNotMatch(pastSnapshotTree, /onToggleManuscriptComplete/);
+});
+
+test('折りたたんだ仮目次と現在の確定目次でも原稿リンクを設定・変更・開ける', () => {
+  assert.match(source, /function ManuscriptDocumentActions\(/);
+  assert.match(source, /原稿を開く/);
+  assert.match(source, /リンクを変更/);
+  assert.match(source, /原稿リンクを設定/);
+  assert.match(source, /const showCollapsedManuscriptActions = Boolean\([\s\S]*showManuscript && collapsed && record && onEditManuscriptLink/);
+  assert.match(source, /showCollapsedManuscriptActions && \([\s\S]*<ManuscriptDocumentActions[\s\S]*compact/);
+  assert.match(source, /hasDocumentLink && !showCollapsedManuscriptActions/);
+  assert.match(source, /key="open-manuscript"/);
+  assert.match(source, /key="edit-manuscript-link"/);
+  assert.ok((source.match(/onEditManuscriptLink=\{(?:onEditManuscriptLink|record\.status !== 'rejected' \? openManuscriptLinkEditor : undefined)\}/g) || []).length >= 2);
+  assert.match(source, /target="_blank"[\s\S]*rel="noopener noreferrer"/);
 });
 
 test('仮・確定・過去の表示範囲ごとに全項目をまとめて開閉できる', () => {

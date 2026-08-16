@@ -23,6 +23,7 @@ import {
   Link2,
   Loader2,
   MessageSquareText,
+  NotebookPen,
   Pencil,
   Plus,
   RefreshCw,
@@ -439,7 +440,13 @@ function ReferenceTargetBadge({ value }) {
   return <MetaBadge icon={UserRound}>対象：{REFERENCE_TARGET_LABELS[value] || '未設定'}</MetaBadge>;
 }
 
-function InstructionCopyButton({ record, onCopyInstruction, className = '', contextLabel = '' }) {
+function InstructionCopyButton({
+  record,
+  onCopyInstruction,
+  className = '',
+  contextLabel = '',
+  buttonLabel = '質問文をコピー',
+}) {
   const hasText = Boolean(getPlanningInstructionCopyText(record).trim());
   const displayName = record?.name || '無題の指示書';
   return (
@@ -448,11 +455,11 @@ function InstructionCopyButton({ record, onCopyInstruction, className = '', cont
       size="sm"
       variant="outline"
       onClick={() => onCopyInstruction(record)}
-      aria-label={`${contextLabel ? `${contextLabel}の` : ''}「${displayName}」v${record?.versionNumber || 1}の質問文をコピー（指示書本文のみ）`}
+      aria-label={`${contextLabel ? `${contextLabel}の` : ''}「${displayName}」v${record?.versionNumber || 1}の${buttonLabel}（指示書本文のみ）`}
       title={hasText ? '指示書本文だけをクリップボードへコピーします' : 'コピーする指示書本文がありません'}
       className={`min-h-11 border-neon-cyan/35 text-neon-cyan ${className}`}
     >
-      <Copy className="h-4 w-4" aria-hidden="true" />質問文をコピー
+      <Copy className="h-4 w-4" aria-hidden="true" />{buttonLabel}
     </Button>
   );
 }
@@ -460,7 +467,13 @@ function InstructionCopyButton({ record, onCopyInstruction, className = '', cont
 function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, onCopyInstruction, onEditChapterLinks, onClose }) {
   const record = detail?.record;
   const section = detail?.section === 'conceptHistory' ? 'concept' : detail?.section;
-  const fields = FORM_FIELDS[section] || [];
+  const isOutlineMemo = detail?.context === 'outlineMemo' && section === 'instructionVersions';
+  const fields = isOutlineMemo
+    ? [
+      ['name', 'メモのタイトル', 'text'],
+      ['markdown', 'メモ本文', 'textarea'],
+    ]
+    : FORM_FIELDS[section] || [];
   const chapterDetailPresentation = record && detail?.section === 'chapters'
     ? chapterContextPresentation(record, chapters, activeChapterIds)
     : null;
@@ -481,10 +494,16 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, 
             {record
               ? chapterDetailPresentation
                 ? `${chapterDetailPresentation.ordinalLabel} ${chapterDetailPresentation.displayTitle}`
-                : recordTitle(detail.section, record)
+                : isOutlineMemo
+                  ? record.name || '無題の原稿メモ'
+                  : recordTitle(detail.section, record)
               : '保存内容'}
           </DialogTitle>
-          <DialogDescription>保存済みの内容を読む画面です。ここでは変更しません。</DialogDescription>
+          <DialogDescription>
+            {isOutlineMemo
+              ? '目次の項目に紐づけて保存した原稿メモです。ここでは変更しません。'
+              : '保存済みの内容を読む画面です。ここでは変更しません。'}
+          </DialogDescription>
         </DialogHeader>
         {record && (
           <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
@@ -498,12 +517,12 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, 
               <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground">
                 {PLANNING_SOURCE_PRIORITIES[record.sourcePriority] || '未設定'}
               </span>
-              {detail.section === 'instructionVersions' && (
+              {detail.section === 'instructionVersions' && !isOutlineMemo && (
                 <span className="text-[10px] text-muted-foreground">v{record.versionNumber} ／ 系列ID: {record.documentId}</span>
               )}
               {detail.section === 'competitors' && <MarketEvidenceBadge value={record.assessmentStatus} />}
               {detail.section === 'competitors' && <MarketClaimBadge value={record.claimKind} />}
-              {detail.section === 'instructionVersions' && <>
+              {detail.section === 'instructionVersions' && !isOutlineMemo && <>
                 {record.firstReadFor.length > 0 && <MetaBadge icon={Star} tone="first">最初に見る</MetaBadge>}
                 {record.canonicalFor.length > 0 && <MetaBadge icon={ShieldCheck} tone="canonical">正本</MetaBadge>}
                 <ReferenceTargetBadge value={record.audience} />
@@ -573,7 +592,12 @@ function RecordDetailDialog({ detail, chapters, activeChapterIds, copyFeedback, 
         )}
         <DialogFooter className="flex-col gap-2 border-t border-[#2a2a4a] bg-[#121222] px-5 py-4 sm:flex-row sm:space-x-0">
           {record && detail.section === 'instructionVersions' && (
-            <InstructionCopyButton record={record} onCopyInstruction={onCopyInstruction} className="w-full sm:w-auto" />
+            <InstructionCopyButton
+              record={record}
+              onCopyInstruction={onCopyInstruction}
+              className="w-full sm:w-auto"
+              buttonLabel={isOutlineMemo ? 'メモ本文をコピー' : '質問文をコピー'}
+            />
           )}
           {record && !['chapters', 'concept', 'conceptHistory'].includes(detail.section) && (
             <Button type="button" variant="outline" onClick={() => onEditChapterLinks(detail.section, record)} className="min-h-11 w-full border-neon-cyan/35 text-neon-cyan sm:w-auto"><Link2 className="h-4 w-4" aria-hidden="true" />目次との紐づけだけ変更</Button>
@@ -1160,8 +1184,42 @@ function ManuscriptCompletionToggle({ record, itemLabel: providedItemLabel, manu
   );
 }
 
-function ChapterManuscriptControls({ record, itemLabel: providedItemLabel, manuscript, busy, onToggleComplete, onEditLink }) {
+function ManuscriptDocumentActions({ record, itemLabel: providedItemLabel, manuscript, busy, onEditLink, compact = false }) {
   const documentUrl = String(manuscript?.documentUrl || '');
+  const title = record.title || '無題';
+  const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
+  const itemLabel = providedItemLabel || `${typeLabel}「${title}」`;
+  return (
+    <div className="flex min-w-0 flex-wrap gap-2">
+      {documentUrl && (
+        <Button key="open-manuscript" asChild size="sm" variant="outline" className={`min-h-11 flex-1 border-neon-cyan/35 text-neon-cyan sm:flex-none ${compact ? 'px-2 text-[10px]' : ''}`}>
+          <a
+            href={documentUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${itemLabel}の原稿リンクを開く（新しいタブ）`}
+          >
+            <ExternalLink className="h-4 w-4" aria-hidden="true" />原稿を開く
+          </a>
+        </Button>
+      )}
+      <Button
+        key="edit-manuscript-link"
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={event => onEditLink(record, event)}
+        disabled={busy}
+        className={`min-h-11 flex-1 border-white/15 text-foreground sm:flex-none ${compact ? 'px-2 text-[10px]' : ''}`}
+        aria-label={`${itemLabel}の原稿URLを${documentUrl ? '変更' : '設定'}`}
+      >
+        <Link2 className="h-4 w-4" aria-hidden="true" />{documentUrl ? 'リンクを変更' : '原稿リンクを設定'}
+      </Button>
+    </div>
+  );
+}
+
+function ChapterManuscriptControls({ record, itemLabel: providedItemLabel, manuscript, busy, onToggleComplete, onEditLink }) {
   const title = record.title || '無題';
   const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
   const itemLabel = providedItemLabel || `${typeLabel}「${title}」`;
@@ -1174,32 +1232,13 @@ function ChapterManuscriptControls({ record, itemLabel: providedItemLabel, manus
         busy={busy}
         onToggleComplete={onToggleComplete}
       />
-
-      <div className="flex flex-wrap gap-2">
-        {documentUrl && (
-          <Button asChild size="sm" variant="outline" className="min-h-11 flex-1 border-neon-cyan/35 text-neon-cyan sm:flex-none">
-            <a
-              href={documentUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`${itemLabel}の原稿リンクを開く（新しいタブ）`}
-            >
-              <ExternalLink className="h-4 w-4" aria-hidden="true" />原稿を開く
-            </a>
-          </Button>
-        )}
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={event => onEditLink(record, event)}
-          disabled={busy}
-          className="min-h-11 flex-1 border-white/15 text-foreground sm:flex-none"
-          aria-label={`${itemLabel}の原稿URLを${documentUrl ? '変更' : '設定'}`}
-        >
-          <Link2 className="h-4 w-4" aria-hidden="true" />{documentUrl ? 'リンクを変更' : '原稿リンクを設定'}
-        </Button>
-      </div>
+      <ManuscriptDocumentActions
+        record={record}
+        itemLabel={itemLabel}
+        manuscript={manuscript}
+        busy={busy}
+        onEditLink={onEditLink}
+      />
     </div>
   );
 }
@@ -1294,6 +1333,7 @@ function OutlineCardSummaryBadges({
   collapsed = false,
   manuscriptBusy = false,
   onToggleManuscriptComplete,
+  onEditManuscriptLink,
   questionCount = 0,
   childCount = 0,
 }) {
@@ -1301,6 +1341,9 @@ function OutlineCardSummaryBadges({
   const hasDocumentLink = Boolean(manuscript?.documentUrl);
   const showCollapsedManuscriptToggle = Boolean(
     showManuscript && collapsed && record && onToggleManuscriptComplete,
+  );
+  const showCollapsedManuscriptActions = Boolean(
+    showManuscript && collapsed && record && onEditManuscriptLink,
   );
   return (
     <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold">
@@ -1314,6 +1357,16 @@ function OutlineCardSummaryBadges({
           compact
         />
       )}
+      {showCollapsedManuscriptActions && (
+        <ManuscriptDocumentActions
+          record={record}
+          itemLabel={itemLabel}
+          manuscript={manuscript}
+          busy={manuscriptBusy}
+          onEditLink={onEditManuscriptLink}
+          compact
+        />
+      )}
       {showManuscript && !showCollapsedManuscriptToggle && (
         <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 ${completed ? 'border-emerald-400/35 bg-emerald-400/10 text-emerald-200' : 'border-white/15 bg-black/10 text-muted-foreground'}`}>
           {completed
@@ -1322,14 +1375,14 @@ function OutlineCardSummaryBadges({
           原稿：{completed ? '完成' : '未完成'}
         </span>
       )}
-      {showManuscript && hasDocumentLink && (
+      {showManuscript && hasDocumentLink && !showCollapsedManuscriptActions && (
         <span className="inline-flex items-center gap-1 rounded-full border border-neon-cyan/30 bg-neon-cyan/5 px-2 py-1 text-neon-cyan">
           <Link2 className="h-3.5 w-3.5" aria-hidden="true" />原稿リンクあり
         </span>
       )}
       {questionCount > 0 && (
         <span className="inline-flex items-center gap-1 rounded-full border border-neon-pink/30 bg-neon-pink/5 px-2 py-1 text-neon-pink">
-          <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />質問 {questionCount}件
+          <NotebookPen className="h-3.5 w-3.5" aria-hidden="true" />原稿メモ {questionCount}件
         </span>
       )}
       {childCount > 0 && (
@@ -1341,89 +1394,108 @@ function OutlineCardSummaryBadges({
   );
 }
 
-function ChapterWritingQuestions({
+function ChapterWritingMemos({
   record,
   itemLabel: providedItemLabel,
-  questions = [],
+  memos = [],
   currentConfirmed = false,
   onCopyInstruction,
   onOpenDetail,
-  onAddQuestion,
-  addQuestionUnavailableMessage = '',
+  onAddMemo,
+  onEditMemo,
+  addMemoUnavailableMessage = '',
 }) {
   const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
   const title = record.title || '無題';
   const itemLabel = providedItemLabel || `${typeLabel}「${title}」`;
   return (
-    <section aria-label={`${itemLabel}の原稿を作る質問`} className="mt-3 border-t border-white/10 pt-3">
+    <section aria-label={`${itemLabel}の原稿メモ`} className="mt-3 border-t border-white/10 pt-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h4 className="flex items-center gap-2 text-xs font-black text-neon-pink">
-            <MessageSquareText className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-            {currentConfirmed ? `現在この${typeLabel}に紐づく質問` : `この${typeLabel}の原稿を作る質問`}
+            <NotebookPen className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            {currentConfirmed ? `現在この${typeLabel}に紐づく原稿メモ` : `この${typeLabel}の原稿メモ`}
           </h4>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            質問文だけをコピーして、新しいChatGPTなどへ貼り付けられます。
+            タイトルと本文を自由に保存できます。質問、書き出し方、参考情報など、原稿づくりに必要な内容を残せます。
           </p>
         </div>
-        {onAddQuestion && (
+        {onAddMemo && (
           <Button
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => onAddQuestion(record)}
+            onClick={() => onAddMemo(record)}
             className="min-h-11 shrink-0 border-neon-pink/35 text-neon-pink"
-            aria-label={`${itemLabel}の原稿を作る質問を追加`}
+            aria-label={`${itemLabel}の原稿メモを追加`}
           >
-            <Plus className="h-4 w-4" aria-hidden="true" />質問を追加
+            <Plus className="h-4 w-4" aria-hidden="true" />原稿メモを追加
           </Button>
         )}
       </div>
 
-      {!onAddQuestion && addQuestionUnavailableMessage && (
+      {!onAddMemo && addMemoUnavailableMessage && (
         <p className="mt-2 rounded-lg border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-xs leading-relaxed text-amber-100">
-          {addQuestionUnavailableMessage}
+          {addMemoUnavailableMessage}
         </p>
       )}
 
-      {questions.length === 0 ? (
+      {memos.length === 0 ? (
         <p className="mt-2 rounded-lg border border-dashed border-white/15 bg-black/10 px-3 py-2 text-xs text-muted-foreground">
-          この項目に紐づく執筆用の質問はまだありません。
+          この項目に紐づく原稿メモはまだありません。
         </p>
       ) : (
         <div className="mt-2 space-y-2">
-          {questions.map(question => {
-            const preview = getPlanningInstructionCopyText(question).trim();
+          {memos.map(memo => {
+            const preview = getPlanningInstructionCopyText(memo).trim();
             return (
-              <article key={question.id} className="rounded-lg border border-neon-pink/20 bg-neon-pink/[0.035] p-3">
+              <article key={memo.id} className="rounded-lg border border-neon-pink/20 bg-neon-pink/[0.035] p-3">
                 <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      {question.firstReadFor.length > 0 && <MetaBadge icon={Star} tone="first">最初に見る</MetaBadge>}
-                      {question.canonicalFor.length > 0 && <MetaBadge icon={ShieldCheck} tone="canonical">正本</MetaBadge>}
-                      <span className="text-[10px] font-bold text-neon-cyan">v{question.versionNumber}</span>
+                      {memo.firstReadFor.length > 0 && <MetaBadge icon={Star} tone="first">最初に見る</MetaBadge>}
+                      {memo.canonicalFor.length > 0 && <MetaBadge icon={ShieldCheck} tone="canonical">正本</MetaBadge>}
+                      <span className="text-[10px] font-bold text-neon-cyan">v{memo.versionNumber}</span>
                     </div>
-                    <p className="mt-1 break-words text-sm font-bold text-foreground">{question.name || '無題の質問'}</p>
+                    <p className="mt-1 break-words text-sm font-bold text-foreground">{memo.name || '無題の原稿メモ'}</p>
                     {preview ? (
                       <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
                         {preview.slice(0, 180)}{preview.length > 180 ? '…' : ''}
                       </p>
                     ) : (
-                      <p className="mt-1 text-xs text-amber-200">質問本文はまだありません。</p>
+                      <p className="mt-1 text-xs text-amber-200">メモ本文はまだありません。</p>
                     )}
                   </div>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap lg:justify-end">
-                    <InstructionCopyButton record={question} onCopyInstruction={onCopyInstruction} className="w-full lg:w-auto" contextLabel={itemLabel} />
+                    <InstructionCopyButton
+                      record={memo}
+                      onCopyInstruction={onCopyInstruction}
+                      className="w-full lg:w-auto"
+                      contextLabel={itemLabel}
+                      buttonLabel="メモ本文をコピー"
+                    />
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
-                      onClick={() => onOpenDetail(question)}
+                      onClick={() => onOpenDetail(memo)}
                       className="min-h-11 w-full border-white/15 text-foreground lg:w-auto"
-                      aria-label={`${itemLabel}の「${question.name || '無題の質問'}」v${question.versionNumber}の内容を見る`}
+                      aria-label={`${itemLabel}の「${memo.name || '無題の原稿メモ'}」v${memo.versionNumber}の内容を見る`}
                     >
                       <BookOpenText className="h-4 w-4" aria-hidden="true" />内容を見る
                     </Button>
+                    {onEditMemo && memo.status !== 'approved' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onEditMemo(memo)}
+                        className="min-h-11 w-full border-white/15 text-foreground lg:w-auto"
+                        aria-label={`${itemLabel}の原稿メモ「${memo.name || '無題'}」を編集`}
+                      >
+                        <Pencil className="h-4 w-4" aria-hidden="true" />メモを編集
+                      </Button>
+                    )}
                   </div>
                 </div>
               </article>
@@ -1522,8 +1594,9 @@ function OutlineSnapshotTree({
   onEditManuscriptLink,
   onCopyQuestion,
   onOpenQuestion,
-  onAddQuestion,
-  canAddQuestion,
+  onAddMemo,
+  onEditMemo,
+  canAddMemo,
 }) {
   if (!snapshot) return null;
   const rows = flattenPlanningOutlineSnapshot(snapshot, { includeRejected });
@@ -1595,6 +1668,7 @@ function OutlineSnapshotTree({
                       collapsed={collapsed}
                       manuscriptBusy={busy}
                       onToggleManuscriptComplete={onToggleManuscriptComplete}
+                      onEditManuscriptLink={onEditManuscriptLink}
                       questionCount={current ? questions.length : 0}
                       childCount={childCount}
                     />
@@ -1608,16 +1682,17 @@ function OutlineSnapshotTree({
                 </div>
                 <div id={outlineCardBodyId(cardKey)} hidden={collapsed}>
                   {record.role && <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{record.role}</p>}
-                  {current && getQuestions && onCopyQuestion && onOpenQuestion && (questions.length > 0 || !hasChildren) && (
-                    <ChapterWritingQuestions
+                  {current && getQuestions && onCopyQuestion && onOpenQuestion && (
+                    <ChapterWritingMemos
                       record={record}
                       itemLabel={itemLabel}
-                      questions={questions}
+                      memos={questions}
                       currentConfirmed
                       onCopyInstruction={onCopyQuestion}
                       onOpenDetail={onOpenQuestion}
-                      onAddQuestion={canAddQuestion?.(record.id) ? onAddQuestion : undefined}
-                      addQuestionUnavailableMessage={canAddQuestion?.(record.id) ? '' : 'この項目は以前の確定目次にだけ残っています。仮目次の項目へ質問を紐づけ直してから追加してください。'}
+                      onAddMemo={canAddMemo?.(record.id) ? onAddMemo : undefined}
+                      onEditMemo={onEditMemo}
+                      addMemoUnavailableMessage={canAddMemo?.(record.id) ? '' : 'この項目は以前の確定目次にだけ残っています。仮目次の項目へ原稿メモを紐づけ直してから追加してください。'}
                     />
                   )}
                   {!collapsed && current && getManuscript && onToggleManuscriptComplete && onEditManuscriptLink && (
@@ -1643,7 +1718,13 @@ function OutlineSnapshotTree({
 function EditorDialog({ editor, planningData, chapters, allChapters, activeChapterIds, busy, onChange, onSave, onClose }) {
   const draft = editor?.draft;
   const section = editor?.section;
-  const fields = FORM_FIELDS[section] || [];
+  const isOutlineMemo = editor?.context === 'outlineMemo' && section === 'instructionVersions';
+  const fields = isOutlineMemo
+    ? [
+      ['name', 'メモのタイトル', 'text', '例：この章で答える問い／書き出し案／必ず入れる実体験'],
+      ['markdown', 'メモ本文', 'textarea', '質問文に限らず、構成案、参考情報、書き出し方などを自由に残せます。'],
+    ]
+    : FORM_FIELDS[section] || [];
   const dirty = Boolean(editor?.dirty);
   const chapterParentOptions = section === 'chapters' && planningData && draft
     ? getPlanningChapterParentOptions(planningData, draft.id, draft.nodeType)
@@ -1687,7 +1768,9 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
             {editor?.title}
           </DialogTitle>
           <DialogDescription>
-            必須のものから少しずつで大丈夫です。保存するまで既存データは変わりません。
+            {isOutlineMemo
+              ? 'タイトルと本文を自由に残せます。保存するまで既存のメモは変わりません。'
+              : '必須のものから少しずつで大丈夫です。保存するまで既存データは変わりません。'}
           </DialogDescription>
         </DialogHeader>
 
@@ -1699,9 +1782,14 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
             </div>
           )}
 
-          {section === 'instructionVersions' && (
+          {section === 'instructionVersions' && !isOutlineMemo && (
             <div className="rounded-lg border border-neon-pink/25 bg-neon-pink/5 p-3 text-xs leading-relaxed text-muted-foreground">
               版ID：<span className="text-foreground">{draft?.id}</span> ／ 文書系列：<span className="text-foreground">{draft?.documentId}</span> ／ v{draft?.versionNumber}
+            </div>
+          )}
+          {isOutlineMemo && (
+            <div className="rounded-lg border border-neon-pink/25 bg-neon-pink/5 p-3 text-xs leading-relaxed text-muted-foreground">
+              このメモは目次の項目に紐づけて保存され、「執筆設計・GPTs指示書」からも確認できます。既存の質問も同じ原稿メモとして残ります。共有用JSON／Markdownにもタイトルと本文が入るため、非公開情報や認証情報は書かないでください。
             </div>
           )}
 
@@ -1780,7 +1868,7 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
             </label>
           ))}
 
-          {section !== 'concept' && section !== 'chapters' && (
+          {section !== 'concept' && section !== 'chapters' && !isOutlineMemo && (
             <fieldset className="rounded-lg border border-[#34345a] p-3">
               <legend className="px-1 text-xs font-bold text-foreground">紐づく部・章・話・節</legend>
               {chapters.length === 0 && archivedLinkedChapters.length === 0 ? (
@@ -1833,7 +1921,7 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
             </fieldset>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          {!isOutlineMemo && <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5 text-xs font-bold text-foreground">
               <span>状態</span>
               <select value={draft?.status || 'draft'} onChange={event => update('status', event.target.value)} className={INPUT_CLASS}>
@@ -1846,8 +1934,8 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
                 {Object.entries(PLANNING_SOURCE_PRIORITIES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
-          </div>
-          {draft?.status === 'approved' && (
+          </div>}
+          {!isOutlineMemo && draft?.status === 'approved' && (
             <label className="block space-y-1.5 text-xs font-bold text-foreground">
               <span>承認者</span>
               <input value={draft.approvedBy || ''} onChange={event => update('approvedBy', event.target.value)} className={INPUT_CLASS} placeholder="例：著者本人" />
@@ -1859,7 +1947,7 @@ function EditorDialog({ editor, planningData, chapters, allChapters, activeChapt
           <Button type="button" variant="outline" onClick={requestClose} disabled={busy} className="min-h-11">キャンセル</Button>
           <Button type="button" onClick={onSave} disabled={busy || editor?.externalConflict} className="min-h-11 gap-2 bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {busy ? '保存中…' : section === 'interviews' ? 'この1問を保存' : '保存'}
+            {busy ? '保存中…' : isOutlineMemo ? '原稿メモを保存' : section === 'interviews' ? 'この1問を保存' : '保存'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3119,6 +3207,7 @@ export default function PlanningNotesTab({
       projectId: project.id,
       section,
       title: options.title || (section === 'interviews' ? '次の1問を記録' : `${SECTION_META[section].label}を追加`),
+      context: options.context || '',
       draft,
       dirty: false,
       expectedUpdatedAt: null,
@@ -3128,17 +3217,18 @@ export default function PlanningNotesTab({
     });
   };
 
-  const openNewQuestionForChapter = chapter => {
+  const openNewMemoForChapter = chapter => {
     const itemLabel = chapterPresentationLabel(chapter, draftOrdinalLabels);
     openNewRecord('instructionVersions', {
       role: 'writing',
       chapterIds: [chapter.id],
     }, {
-      title: `${itemLabel}の原稿を作る質問を追加`,
+      title: `${itemLabel}の原稿メモを追加`,
+      context: 'outlineMemo',
     });
   };
 
-  const openEditRecord = (section, record) => {
+  const openEditRecord = (section, record, options = {}) => {
     const isChapter = section === 'chapters';
     const editorRecord = isChapter
       ? { ...record, title: getPlanningChapterDisplayTitle(record.title) }
@@ -3146,13 +3236,21 @@ export default function PlanningNotesTab({
     setEditor({
       projectId: project.id,
       section,
-      title: `${isChapter ? chapterPresentationLabel(record, draftOrdinalLabels) : recordTitle(section, record)}を編集`,
+      title: options.title || `${isChapter ? chapterPresentationLabel(record, draftOrdinalLabels) : recordTitle(section, record)}を編集`,
+      context: options.context || '',
       draft: { ...editorRecord, chapterIds: [...record.chapterIds] },
       dirty: false,
       expectedUpdatedAt: record.updatedAt,
       initialStatus: record.status,
       forkApproved: false,
       externalConflict: false,
+    });
+  };
+
+  const openEditOutlineMemo = record => {
+    openEditRecord('instructionVersions', record, {
+      title: `原稿メモ「${record.name || '無題'}」を編集`,
+      context: 'outlineMemo',
     });
   };
 
@@ -3271,7 +3369,9 @@ export default function PlanningNotesTab({
       if (editor.section === 'competitors' && !editor.draft.bookTitle?.trim() && !editor.draft.competitorName?.trim()) return '競合名または書名を1つ入力してください';
       if (editor.section === 'chapters' && !editor.draft.title?.trim()) return '部・章・話・節のタイトルを入力してください';
       if (editor.section === 'interviews' && !editor.draft.question?.trim()) return '今回の質問を入力してください';
-      if (editor.section === 'instructionVersions' && !editor.draft.name?.trim()) return '指示書名を入力してください';
+      if (editor.section === 'instructionVersions' && !editor.draft.name?.trim()) {
+        return editor.context === 'outlineMemo' ? 'メモのタイトルを入力してください' : '指示書名を入力してください';
+      }
       if (editor.section === 'decisions' && !editor.draft.decision?.trim()) return '何を決めたかを入力してください';
       if (
         editor.section === 'interviews'
@@ -3493,7 +3593,7 @@ export default function PlanningNotesTab({
       const writeText = navigator.clipboard?.writeText?.bind(navigator.clipboard);
       await copyPlanningInstructionText(record, writeText);
       if (activeProjectIdRef.current !== targetProjectId || operationGenerationRef.current !== generation) return;
-      const message = `「${displayName}」の質問文をコピーしました`;
+      const message = `「${displayName}」の本文をコピーしました`;
       setInstructionCopyFeedback(current => ({
         recordId: record.id,
         message,
@@ -3510,7 +3610,7 @@ export default function PlanningNotesTab({
       );
       const message = knownMessage
         ? error.message
-        : '質問文をコピーできませんでした。ブラウザのクリップボード許可を確認するか、「内容を見る」から本文を選択してコピーしてください';
+        : '本文をコピーできませんでした。ブラウザのクリップボード許可を確認するか、「内容を見る」から本文を選択してコピーしてください';
       setInstructionCopyFeedback(current => ({
         recordId: record?.id || '',
         message,
@@ -3593,9 +3693,9 @@ export default function PlanningNotesTab({
     }
   };
 
-  const openDetail = (section, record) => {
+  const openDetail = (section, record, options = {}) => {
     setInstructionCopyFeedback(null);
-    setDetail({ projectId: project.id, section, record });
+    setDetail({ projectId: project.id, section, record, context: options.context || '' });
   };
 
   const openMarketSummary = () => {
@@ -4160,9 +4260,10 @@ export default function PlanningNotesTab({
                     onToggleManuscriptComplete={toggleChapterManuscriptComplete}
                     onEditManuscriptLink={openManuscriptLinkEditor}
                     onCopyQuestion={copyInstructionQuestion}
-                    onOpenQuestion={record => openDetail('instructionVersions', record)}
-                    onAddQuestion={openNewQuestionForChapter}
-                    canAddQuestion={chapterId => liveChapterIds.has(chapterId)}
+                    onOpenQuestion={record => openDetail('instructionVersions', record, { context: 'outlineMemo' })}
+                    onAddMemo={openNewMemoForChapter}
+                    onEditMemo={openEditOutlineMemo}
+                    canAddMemo={chapterId => liveChapterIds.has(chapterId)}
                   />
                 </div>
               )}
@@ -4288,6 +4389,7 @@ export default function PlanningNotesTab({
                         collapsed={outlineCardCollapsed}
                         manuscriptBusy={busy}
                         onToggleManuscriptComplete={record.status !== 'rejected' ? toggleChapterManuscriptComplete : undefined}
+                        onEditManuscriptLink={record.status !== 'rejected' ? openManuscriptLinkEditor : undefined}
                         questionCount={record.status !== 'rejected' ? chapterQuestions.length : 0}
                         childCount={hasChildren ? chapters.filter(chapter => chapter.parentId === record.id).length : 0}
                       />
@@ -4349,14 +4451,15 @@ export default function PlanningNotesTab({
                       {record.status !== 'approved' && <Button type="button" size="sm" variant="outline" onClick={() => handleDelete(activeSection, record)} className="min-h-11 border-red-400/30 text-red-300"><Trash2 className="h-4 w-4" />削除</Button>}
                     </div>
                   </div>
-                  {activeSection === 'chapters' && record.status !== 'rejected' && (chapterQuestions.length > 0 || !hasChildren) && (
-                    <ChapterWritingQuestions
+                  {activeSection === 'chapters' && record.status !== 'rejected' && (
+                    <ChapterWritingMemos
                       record={record}
                       itemLabel={outlineItemLabel}
-                      questions={chapterQuestions}
+                      memos={chapterQuestions}
                       onCopyInstruction={copyInstructionQuestion}
-                      onOpenDetail={question => openDetail('instructionVersions', question)}
-                      onAddQuestion={openNewQuestionForChapter}
+                      onOpenDetail={memo => openDetail('instructionVersions', memo, { context: 'outlineMemo' })}
+                      onAddMemo={openNewMemoForChapter}
+                      onEditMemo={openEditOutlineMemo}
                     />
                   )}
                   {!outlineCardCollapsed && activeSection === 'chapters' && record.status !== 'rejected' && (
