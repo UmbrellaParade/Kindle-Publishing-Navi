@@ -11,6 +11,7 @@ export const PLANNING_VIEW_SECTIONS = Object.freeze([
   'chapters',
   'interviews',
   'instructionVersions',
+  'gptSessions',
   'decisions',
 ]);
 

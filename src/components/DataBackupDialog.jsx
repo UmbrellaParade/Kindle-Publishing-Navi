@@ -53,6 +53,7 @@ const PLANNING_CONFLICT_SECTION_LABELS = Object.freeze({
   interviews: '取材記録',
   instructionVersions: '執筆設計・GPTs指示書',
   decisions: '意思決定・版履歴',
+  gptSessions: 'Kindle出版サポートGPT 管理',
 });
 const PLANNING_CONFLICT_REASON_LABELS = Object.freeze({
   same_id_different_content: '同じIDの内容違い',
@@ -69,6 +70,10 @@ const PLANNING_CONFLICT_REASON_LABELS = Object.freeze({
   instruction_first_read_conflict: '最初に見る指示書の重なり',
   decision_canonical_conflict: '意思決定の正本指定の重なり',
   decision_first_read_conflict: '最初に見る意思決定の重なり',
+  gpt_session_requires_review: '同じGPTセッションの内容違い',
+  gpt_management_id_conflict: '同じGPT管理IDの重なり',
+  gpt_active_session_conflict: '「使用中」GPTの指定違い',
+  gpt_session_limit_exceeded: 'GPTセッションが上限1,000件を超える',
 });
 
 function downloadRecoveryIfNeeded(recovery, prefix = 'kindle-navi-critique-recovery') {

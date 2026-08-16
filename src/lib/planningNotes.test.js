@@ -11,11 +11,15 @@ import {
   buildPlanningNotesSharePackage,
   buildPlanningChapterOrdinalLabels,
   clearInstructionCanonical,
+  activatePlanningGptSession,
   createEmptyPlanningNotes,
+  createPlanningGptHandoffTarget,
+  createPlanningGptSessionRecord,
   createPlanningChapterRecord,
   createPlanningOutlineSnapshot,
   createPlanningRecord,
   deletePlanningRecord,
+  deletePlanningGptSession,
   duplicatePlanningRecord,
   estimatePlanningNotesBytes,
   filterPlanningNotes,
@@ -29,6 +33,7 @@ import {
   getPlanningChapterOrdinalLabel,
   getPlanningChapterPresentation,
   getNextPlanningChapterOrder,
+  getNextPlanningGptManagementId,
   getPlanningChapterParentOptions,
   getConfirmedPlanningOutline,
   getPlanningChapterManuscript,
@@ -51,12 +56,15 @@ import {
   savePlanningConcept,
   serializePlanningNotes,
   sortPlanningRecordsNewest,
+  sortPlanningGptSessions,
   sortPlanningOutlineSnapshotsNewest,
   upsertPlanningRecord,
+  upsertPlanningGptSession,
   updatePlanningRecordChapterLinks,
   updatePlanningChapterManuscript,
   validatePlanningGoogleDocumentUrl,
   validatePlanningManuscriptUrl,
+  validatePlanningGptSessionUrl,
   withdrawPlanningDecision,
 } from './planningNotes.js';
 
@@ -1350,7 +1358,7 @@ test('v1企画ノートを新フィールド未設定のv6へ安全に移行す�
   }
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.equal(migrated.outlineRevision, 0);
   assert.equal(migrated.confirmedOutlineId, '');
   assert.deepEqual(migrated.outlineSnapshots, []);
@@ -1396,7 +1404,7 @@ test('v2の平坦な章はID・本文・orderを変えずrootの仮目次とし�
   delete legacy.chapters[0].parentId;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.equal(migrated.confirmedOutlineId, '');
   assert.deepEqual(migrated.outlineSnapshots, []);
   assert.deepEqual(
@@ -1474,7 +1482,7 @@ test('v3の階層目次はID・本文・親子順・章紐付けを変えずv6�
   delete legacy.outlineSnapshots;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.deepEqual(
     migrated.chapters.map(record => ({
       id: record.id,
@@ -1510,7 +1518,7 @@ test('v4目次は全既存IDを編集中の仮目次としてv6へ移行する',
   delete legacy.draftOutlineChapterIds;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.deepEqual(migrated.draftOutlineChapterIds, ['legacy-v4-chapter']);
   assert.deepEqual(migrated.chapters[0], expectedChapter);
   assert.deepEqual(migrated.interviews[0], expectedInterview);
@@ -1538,7 +1546,7 @@ test('v5のactive目次・退避台帳・保存版を変えず原稿進捗未設
   delete legacy.chapterWritingStates;
 
   const migrated = normalizePlanningNotes(legacy);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.deepEqual(migrated.draftOutlineChapterIds, ['legacy-v5-active']);
   assert.deepEqual(migrated.chapterWritingStates, []);
   assert.equal(migrated.outlineSnapshots[0].chapters[0].id, 'legacy-v5-old');
@@ -2652,7 +2660,7 @@ test('共有JSONとMarkdownは仮目次・現在の確定目次・過去の目�
   const share = buildPlanningNotesSharePackage(data, { bookTitle: '目次テスト本', now: fixedNow });
   const markdown = planningNotesShareToMarkdown(share);
   assert.equal(share.schemaVersion, 1);
-  assert.equal(share.data.version, 6);
+  assert.equal(share.data.version, 7);
   assert.equal(share.data.outlineSnapshots.length, 2);
   assert.match(markdown, /## 目次・章構成/);
   assert.match(markdown, /### 仮目次（編集中）[\s\S]*編集中の仮目次/);
@@ -2902,7 +2910,7 @@ test('MARKET-001 Markdownを5競合・6公開出典へ厳格preview/applyし、�
   );
   const share = buildPlanningNotesSharePackage(applied, { now: fixedNow });
   assert.equal(share.schemaVersion, 1);
-  assert.equal(share.data.version, 6);
+  assert.equal(share.data.version, 7);
   assert.match(planningNotesShareToMarkdown(share), /MARKET-001|市場調査サマリー/);
 });
 
@@ -3133,5 +3141,281 @@ test('shared Markdown excludes rejected history from active ordinals and labels 
   assert.equal(
     share.data.chapters.find(record => record.id === 'rejected-first').title,
     '第1章 採用しなかった旧案',
+  );
+});
+
+test('GPTセッションは連番を提案し、非公開会話URLを安全にローカル保存できる', () => {
+  let data = createEmptyPlanningNotes();
+  assert.equal(getNextPlanningGptManagementId(data), 'GPT-001');
+  const record = createPlanningGptSessionRecord(data, {
+    projectTitle: '一冊目',
+    sessionName: '企画と目次',
+    gptUrl: 'https://chatgpt.com/c/private-conversation-id',
+    scope: '企画から目次確定まで',
+    sessionStatus: 'active',
+    startedOn: '2026-08-16',
+    handoffMemo: '現在地：目次確定待ち',
+    notes: '著者用メモ',
+  }, { now: fixedNow, idFactory: idFactory('gpt-session-1') });
+  data = upsertPlanningGptSession(data, record, { expectedUpdatedAt: null, now: fixedNow });
+
+  assert.equal(data.gptSessions[0].managementId, 'GPT-001');
+  assert.equal(data.gptSessions[0].gptUrl, 'https://chatgpt.com/c/private-conversation-id');
+  assert.equal(getNextPlanningGptManagementId(data), 'GPT-002');
+  assert.equal(validatePlanningGptSessionUrl('https://chat.openai.com/c/private-id'), 'https://chat.openai.com/c/private-id');
+  for (const invalid of [
+    'http://chatgpt.com/c/insecure',
+    'https://user:pass@chatgpt.com/c/private',
+    'https://chatgpt.com/c/private?token=secret',
+    'https://chatgpt.com/c/private#sessionId=secret',
+  ]) {
+    assert.throws(() => validatePlanningGptSessionUrl(invalid), /URL|URLは保存できません/);
+  }
+});
+
+test('GPT引継ぎ先の作成と使用開始は新旧を原子的につなぐ', () => {
+  const firstNow = () => new Date('2026-08-14T00:00:00.000Z');
+  const handoffNow = () => new Date('2026-08-15T00:00:00.000Z');
+  const activateNow = () => new Date('2026-08-16T00:00:00.000Z');
+  let data = createEmptyPlanningNotes();
+  const sourceDraft = createPlanningGptSessionRecord(data, {
+    sessionName: '第1世代', sessionStatus: 'active', startedOn: '2026-08-01',
+  }, { now: firstNow, idFactory: idFactory('gpt-source') });
+  data = upsertPlanningGptSession(data, sourceDraft, { expectedUpdatedAt: null, now: firstNow });
+  const source = data.gptSessions[0];
+  const targetDraft = createPlanningGptSessionRecord(data, {
+    sessionName: '第2世代', handoffMemo: '現在地と未確定事項', startedOn: '2026-08-15',
+  }, { now: handoffNow, idFactory: idFactory('gpt-target') });
+
+  data = createPlanningGptHandoffTarget(data, source.id, targetDraft, {
+    expectedUpdatedAt: source.updatedAt,
+    now: handoffNow,
+    idFactory: idFactory('gpt-target'),
+  });
+  const linkedSource = data.gptSessions.find(record => record.id === source.id);
+  const target = data.gptSessions.find(record => record.managementId === linkedSource.handoffToId);
+  assert.equal(linkedSource.sessionStatus, 'active');
+  assert.equal(target.sessionStatus, 'on_hold');
+  assert.equal(linkedSource.handoffToId, 'GPT-002');
+
+  data = activatePlanningGptSession(data, target.id, {
+    expectedTargetUpdatedAt: target.updatedAt,
+    expectedSourceUpdatedAt: linkedSource.updatedAt,
+    now: activateNow,
+  });
+  assert.equal(data.gptSessions.find(record => record.id === source.id).sessionStatus, 'handed_over');
+  assert.equal(data.gptSessions.find(record => record.id === target.id).sessionStatus, 'active');
+  assert.throws(
+    () => deletePlanningGptSession(data, source.id, {
+      expectedUpdatedAt: data.gptSessions.find(record => record.id === source.id).updatedAt,
+    }),
+    /引継ぎ先ID/,
+  );
+});
+
+test('GPT管理ID・使用中・引継ぎ関係の不整合を拒否する', () => {
+  const base = createEmptyPlanningNotes();
+  const first = createPlanningGptSessionRecord(base, {
+    managementId: 'GPT-001', sessionName: '一件目', sessionStatus: 'active',
+  }, { now: fixedNow, idFactory: idFactory('gpt-first') });
+  const withFirst = upsertPlanningGptSession(base, first, { expectedUpdatedAt: null, now: fixedNow });
+  const second = createPlanningGptSessionRecord(withFirst, {
+    managementId: 'GPT-002', sessionName: '二件目', sessionStatus: 'on_hold',
+  }, { now: fixedNow, idFactory: idFactory('gpt-second') });
+  const data = upsertPlanningGptSession(withFirst, second, { expectedUpdatedAt: null, now: fixedNow });
+
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      gptSessions: data.gptSessions.map(record => ({ ...record, sessionStatus: 'active' })),
+    }),
+    /1件だけ/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      gptSessions: data.gptSessions.map(record => record.id === first.id
+        ? { ...record, sessionStatus: 'handed_over', handoffToId: '' }
+        : record),
+    }),
+    /引継ぎ先IDが必要/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      gptSessions: data.gptSessions.map(record => record.id === first.id
+        ? { ...record, handoffToId: 'GPT-999' }
+        : record),
+    }),
+    /見つかりません/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({
+      ...data,
+      gptSessions: data.gptSessions.map(record => ({
+        ...record,
+        sessionStatus: 'on_hold',
+        handoffToId: record.id === first.id ? 'GPT-002' : 'GPT-001',
+      })),
+    }),
+    /循環/,
+  );
+  assert.throws(
+    () => upsertPlanningGptSession(data, { ...first, managementId: 'GPT-003' }, {
+      expectedUpdatedAt: first.updatedAt,
+      now: fixedNow,
+    }),
+    /作成後に変更できません/,
+  );
+});
+
+test('GPT管理IDは過剰なゼロ埋めを許さず正規表記だけを受け付ける', () => {
+  for (const managementId of ['GPT-001', 'GPT-999', 'GPT-1000']) {
+    const record = createPlanningGptSessionRecord(createEmptyPlanningNotes(), {
+      managementId,
+      sessionName: '正規表記の確認',
+    }, { now: fixedNow, idFactory: idFactory(`gpt-canonical-${managementId}`) });
+    assert.equal(record.managementId, managementId);
+  }
+
+  for (const managementId of ['GPT-0001', 'GPT-01', 'gpt-001']) {
+    assert.throws(
+      () => createPlanningGptSessionRecord(createEmptyPlanningNotes(), {
+        managementId,
+        sessionName: '非正規表記の確認',
+      }, { now: fixedNow, idFactory: idFactory(`gpt-invalid-${managementId}`) }),
+      /GPT-001/,
+    );
+  }
+});
+
+test('GPTセッションは使用中を先頭に保ちつつ開始日順を切り替えられる', () => {
+  const records = [
+    { id: 'old', managementId: 'GPT-001', sessionStatus: 'completed', startedOn: '2026-08-01', createdAt: '2026-08-01T00:00:00.000Z' },
+    { id: 'active', managementId: 'GPT-002', sessionStatus: 'active', startedOn: '2026-08-02', createdAt: '2026-08-02T00:00:00.000Z' },
+    { id: 'new', managementId: 'GPT-003', sessionStatus: 'on_hold', startedOn: '2026-08-03', createdAt: '2026-08-03T00:00:00.000Z' },
+  ];
+  assert.deepEqual(sortPlanningGptSessions(records).map(record => record.id), ['active', 'new', 'old']);
+  assert.deepEqual(
+    sortPlanningGptSessions(records, { direction: 'oldest' }).map(record => record.id),
+    ['active', 'old', 'new'],
+  );
+});
+
+test('v1かv6はgptSessionsなしかv7へ移行し、v7の欠落は壊れた保存値として停止する', () => {
+  for (const version of [1, 2, 3, 4, 5, 6]) {
+    const legacy = { ...createEmptyPlanningNotes(), version };
+    delete legacy.gptSessions;
+    if (version <= 4) delete legacy.draftOutlineChapterIds;
+    if (version <= 5) delete legacy.chapterWritingStates;
+    assert.deepEqual(normalizePlanningNotes(legacy).gptSessions, []);
+  }
+  const brokenV7 = { ...createEmptyPlanningNotes() };
+  delete brokenV7.gptSessions;
+  assert.throws(() => normalizePlanningNotes(brokenV7), /GPT管理の一覧/);
+  assert.throws(
+    () => normalizePlanningNotes({ ...createEmptyPlanningNotes(), gptSessions: null }),
+    /GPT管理の一覧/,
+  );
+  assert.throws(
+    () => normalizePlanningNotes({ ...createEmptyPlanningNotes(), version: 6, gptSessions: null }),
+    /配列ではありません/,
+  );
+});
+
+test('GPTセッションのURLと引継ぎメモは共有JSONとMarkdownからコレクションごと除外する', () => {
+  let data = createEmptyPlanningNotes();
+  const record = createPlanningGptSessionRecord(data, {
+    sessionName: '非公開セッション',
+    gptUrl: 'https://chatgpt.com/c/PRIVATE-CONVERSATION-123',
+    handoffMemo: 'session_id: PRIVATE-SESSION-456\n未公開の原稿一覧',
+    notes: '外部共有しない',
+    sessionStatus: 'active',
+  }, { now: fixedNow, idFactory: idFactory('gpt-private') });
+  data = upsertPlanningGptSession(data, record, { expectedUpdatedAt: null, now: fixedNow });
+  const share = buildPlanningNotesSharePackage(data, { now: fixedNow });
+  assert.deepEqual(share.data.gptSessions, []);
+  const json = JSON.stringify(share);
+  const markdown = planningNotesShareToMarkdown(share);
+  for (const secret of ['PRIVATE-CONVERSATION-123', 'PRIVATE-SESSION-456', '未公開の原稿一覧']) {
+    assert.doesNotMatch(json, new RegExp(secret));
+    assert.doesNotMatch(markdown, new RegExp(secret));
+  }
+  assert.match(share.note, /Kindle出版サポートGPT管理の登録内容は除外/);
+  assert.doesNotMatch(markdown, /## Kindle出版サポートGPT管理/);
+});
+
+test('GPTセッションの復元結合は和集合を保ち、ID・使用中の競合を停止する', () => {
+  const makeData = (id, managementId, sessionName, sessionStatus = 'on_hold') => {
+    let data = createEmptyPlanningNotes();
+    const record = createPlanningGptSessionRecord(data, {
+      managementId, sessionName, sessionStatus,
+    }, { now: fixedNow, idFactory: idFactory(id) });
+    return upsertPlanningGptSession(data, record, { expectedUpdatedAt: null, now: fixedNow });
+  };
+  const current = makeData('gpt-a', 'GPT-001', 'A');
+  const incoming = makeData('gpt-b', 'GPT-002', 'B');
+  const merged = readPlanningNotes(mergePlanningNotesValues(
+    serializePlanningNotes(current),
+    serializePlanningNotes(incoming),
+  )).data;
+  assert.deepEqual(merged.gptSessions.map(record => record.managementId).sort(), ['GPT-001', 'GPT-002']);
+
+  const duplicateManagementId = makeData('gpt-other', 'GPT-001', '別のA');
+  assert.ok(previewPlanningNotesMerge(
+    serializePlanningNotes(current),
+    serializePlanningNotes(duplicateManagementId),
+  ).some(conflict => conflict.reason === 'gpt_management_id_conflict'));
+  assert.throws(
+    () => mergePlanningNotesValues(
+      serializePlanningNotes(current),
+      serializePlanningNotes(duplicateManagementId),
+    ),
+    PlanningNotesMergeConflictError,
+  );
+
+  const activeA = makeData('active-a', 'GPT-010', '使用中A', 'active');
+  const activeB = makeData('active-b', 'GPT-011', '使用中B', 'active');
+  assert.ok(previewPlanningNotesMerge(
+    serializePlanningNotes(activeA),
+    serializePlanningNotes(activeB),
+  ).some(conflict => conflict.reason === 'gpt_active_session_conflict'));
+});
+
+test('GPTセッションの結合後が上限1,000件を超える場合は復元前previewで停止する', () => {
+  const makeMany = (prefix, startSequence) => normalizePlanningNotes({
+    ...createEmptyPlanningNotes(),
+    gptSessions: Array.from({ length: 600 }, (_, index) => {
+      const sequence = startSequence + index;
+      return {
+        id: `${prefix}-${sequence}`,
+        revision: 1,
+        createdAt: '2026-08-14T00:00:00.000Z',
+        updatedAt: '2026-08-14T00:00:00.000Z',
+        managementId: `GPT-${String(sequence).padStart(3, '0')}`,
+        projectTitle: '',
+        sessionName: `${prefix}-${sequence}`,
+        gptUrl: '',
+        scope: '',
+        sessionStatus: 'on_hold',
+        startedOn: '',
+        handoffToId: '',
+        handoffMemo: '',
+        notes: '',
+      };
+    }),
+  });
+  const currentRaw = serializePlanningNotes(makeMany('current', 1));
+  const incomingRaw = serializePlanningNotes(makeMany('incoming', 601));
+  const conflicts = previewPlanningNotesMerge(currentRaw, incomingRaw);
+  assert.ok(conflicts.some(conflict => (
+    conflict.section === 'gptSessions'
+    && conflict.reason === 'gpt_session_limit_exceeded'
+    && conflict.current.count === 600
+    && conflict.incoming.newCount === 600
+  )));
+  assert.throws(
+    () => mergePlanningNotesValues(currentRaw, incomingRaw),
+    PlanningNotesMergeConflictError,
   );
 });

@@ -12,11 +12,14 @@ const backupDialogSource = readFileSync(
 );
 
 function sourceBlock(startMarker, endMarker) {
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start + startMarker.length);
+  const normalizedSource = source.replace(/\r\n?/g, '\n');
+  const normalizedStartMarker = startMarker.replace(/\r\n?/g, '\n');
+  const normalizedEndMarker = endMarker.replace(/\r\n?/g, '\n');
+  const start = normalizedSource.indexOf(normalizedStartMarker);
+  const end = normalizedSource.indexOf(normalizedEndMarker, start + normalizedStartMarker.length);
   assert.notEqual(start, -1, `開始位置が見つかりません: ${startMarker}`);
   assert.notEqual(end, -1, `終了位置が見つかりません: ${endMarker}`);
-  return source.slice(start, end);
+  return normalizedSource.slice(start, end);
 }
 
 test('初心者は空状態から企画・階層目次・取材のどれか1件を始められる', () => {
@@ -32,13 +35,14 @@ test('初心者は空状態から企画・階層目次・取材のどれか1件�
   assert.match(source, /指示書名を入力してください/);
 });
 
-test('6領域と検索・構成項目・状態・資料優先順位の絞り込みを表示する', () => {
+test('7領域と検索・構成項目・状態・資料優先順位の絞り込みを表示する', () => {
   for (const label of [
     '企画メモ',
     '競合・市場調査',
     '目次・章構成',
     '取材記録',
     '執筆設計・GPTs指示書',
+    'サポートGPT管理',
     '意思決定・版履歴',
   ]) {
     assert.match(source, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -70,6 +74,76 @@ test('内側メニューは外側ナビの実測高さを避けて追従し、�
   assert.match(source, /activeSection === key \? CheckCircle2 : meta\.icon/);
   assert.match(source, /aria-current=\{activeSection === key \? 'page' : undefined\}/);
   assert.match(source, /focus-visible:ring-2 focus-visible:ring-neon-cyan\/80/);
+});
+
+test('サポートGPT管理は初心者向け案内・世代管理・安全な引継ぎ導線を専用画面にまとめる', () => {
+  for (const label of [
+    'Kindle出版サポートGPT 管理',
+    'Kindle本の相談や原稿づくりを同じGPTで続けると、会話がたまって動作が重くなることがあります。',
+    '重くなる前に移る目安',
+    '移るときの3ステップ',
+    '現在地と未確定事項を引継ぎメモにまとめる',
+    '新しいGPTが内容を受領したら、そちらを「使用中」にする',
+    '新しいGPTセッションを登録',
+    '現在使うGPT',
+    '使用中を先頭・開始日の新しい順',
+    '使用中を先頭・開始日の古い順',
+    'まだGPTセッションはありません',
+    '次の管理ID候補：',
+    'GPTを開く',
+    '新しい引継ぎ先を登録',
+    'このGPTを使用中にする',
+  ]) assert.match(source, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+  const fieldOrder = [
+    'GPT管理ID',
+    '企画・作品名',
+    'セッション名',
+    'Kindle出版サポートGPT URL',
+    '担当範囲',
+    '状態',
+    '開始日',
+    '引継ぎ先ID',
+    '引継ぎメモ',
+    '備考',
+  ];
+  const fieldsBlock = sourceBlock('const GPT_SESSION_SPREADSHEET_FIELDS', 'const OUTLINE_VIEW_META');
+  let previousIndex = -1;
+  for (const label of fieldOrder) {
+    const currentIndex = fieldsBlock.indexOf(label);
+    assert.ok(currentIndex > previousIndex, `${label}がスプレッドシート列順ではありません`);
+    previousIndex = currentIndex;
+  }
+
+  assert.match(source, /GPT_HANDOFF_MEMO_TEMPLATE = `現在地：[\s\S]*確定事項：[\s\S]*未確定事項：[\s\S]*原稿一覧：[\s\S]*執筆ルール：[\s\S]*次の一手：`/);
+  assert.match(source, /target="_blank" rel="noopener noreferrer"/);
+  assert.match(source, /min-h-11/);
+  assert.match(source, /border-emerald-400\/45[\s\S]*現在使うGPT/);
+  assert.match(source, /<GptSessionStatusBadge value=\{record\.sessionStatus\} \/>/);
+  assert.match(source, /scrollMarginTop: 'calc\(var\(--kindle-main-nav-height, 60px\) \+ 5\.5rem\)'/);
+  assert.match(source, /target\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(source, /const returnFocusNodeRef = useRef\(null\)/);
+  assert.match(source, /returnFocusNodeRef\.current = editor\.returnFocusNode\?\.isConnected \? editor\.returnFocusNode : null/);
+  assert.match(source, /onCloseAutoFocus=\{event => \{[\s\S]*restoreReturnFocus\(\)/);
+  assert.match(source, /if \(!wasOpenRef\.current\) return undefined;[\s\S]*requestAnimationFrame\(restoreReturnFocus\)/);
+  assert.match(source, /<Dialog open=\{Boolean\(editor\)\} onOpenChange=\{open => \{ if \(!open\) requestClose\(\); \}\}>/);
+  assert.match(source, /onClick=\{requestClose\} disabled=\{busy\}[^>]*>キャンセル<\/Button>/);
+  assert.match(source, /共有用JSON／Markdownからは除外されます/);
+  assert.match(source, /通常ノートへAPIキー・認証情報・非公開会話URLを保存しない/);
+  assert.match(source, /Object\.entries\(SECTION_META\)\.filter\(\(\[key\]\) => !\['overview', 'concept', 'gptSessions'\]\.includes\(key\)\)/);
+  assert.equal((source.match(/activeSection !== 'gptSessions' && searchableRecordCount > 0/g) || []).length, 2);
+  assert.match(source, /createPlanningGptHandoffTarget/);
+  assert.match(source, /activatePlanningGptSession/);
+  assert.match(source, /activeSource = records\.find\(record => record\.sessionStatus === 'active'\)/);
+  assert.match(source, /canActivate = record\.sessionStatus === 'on_hold'[\s\S]*activeSource\?\.handoffToId === record\.managementId/);
+  assert.match(source, /source = gptSessions\.find\(session => session\.sessionStatus === 'active'\)/);
+  assert.match(source, /id="planning-gptSessions-list-title"[\s\S]*tabIndex=\{-1\}/);
+  assert.match(source, /pendingGptSessionFocus === '__list__'[\s\S]*planning-gptSessions-list-title/);
+  assert.match(source, /focusAfterDelete = sortedSessions\[recordIndex \+ 1\][\s\S]*sortedSessions\[recordIndex - 1\]/);
+  assert.match(source, /setPendingGptSessionFocus\(focusAfterDelete\?\.managementId \|\| '__list__'\)/);
+  assert.match(source, /handoffLockedField = editor\?\.mode === 'handoff'/);
+  assert.match(source, /引継ぎを受領するまでは「保留・引継ぎ先なし」で登録します/);
+  assert.match(source, /projectTitle: project\?\.book_title \|\| project\?\.name \|\| ''/);
 });
 
 test('市場調査はサマリー・根拠・PC比較表・スマホカード・0件解除を一画面で確認できる', () => {
@@ -236,7 +310,8 @@ test('生の取材回答と匿名化した共有用文章を分離し、共有�
   assert.match(source, /共有用ファイルへ出すのはこちらだけ/);
   assert.match(source, /共有用JSON/);
   assert.match(source, /共有用Markdown/);
-  assert.match(source, /APIキー・認証情報・非公開会話URLは保存しない/);
+  assert.match(source, /通常ノートへAPIキー・認証情報・非公開会話URLを保存しない/);
+  assert.match(source, /サポートGPT管理の記録は端末内と完全バックアップだけに保存し、共有用書き出しから除外/);
 });
 
 test('容量警告・破損停止・明示保存・兄弟単位の並べ替えを備える', () => {

@@ -159,7 +159,7 @@ test('企画・取材・構成ノートを初心者が安全に使えるよう�
     '企画メモを書く',
     '目次の構成を作る',
     '取材を1問記録',
-    '6つの領域を使い分ける',
+    '7つの領域を使い分ける',
     '部・章・話・節を階層で作り',
     '第一部 ＞ 第一話／第二話 ＞ 第一節',
     '構成項目ID',
@@ -274,6 +274,60 @@ test('企画・取材・構成ノートを初心者が安全に使えるよう�
   ]) {
     assert.equal(chapterQuestionFaq.includes(phrase), true, `不足している目次内質問FAQ: ${phrase}`);
   }
+});
+
+test('Kindle出版サポートGPTの世代管理と非公開範囲を初心者向けに案内する', () => {
+  for (const phrase of [
+    'Kindle本の相談や原稿づくりを同じGPTで続けると、会話がたまって動作が重くなることがあります。',
+    '1セッション＝1件',
+    '`GPT-001`、`GPT-002`',
+    '現在使うセッションは **「使用中」**',
+    '「GPTを開く」',
+    '引継ぎ先ID',
+    '「使用中」を先頭',
+    '開始日の新しい順／古い順',
+    'GPT管理ID、企画・作品名、セッション名、Kindle出版サポートGPT URL、担当範囲、状態、開始日、引継ぎ先ID、引継ぎメモ、備考',
+    '当面の母艦として使うGoogleスプレッドシート',
+    '自動同期は行わない',
+    '重くなる前に移る目安',
+    '移るときの3ステップ',
+    '節目で現在地と未確定事項を引継ぎメモにまとめる',
+    '新しいGPTを登録して前のGPTの引継ぎ先IDをつなぐ',
+    '新しいGPTが内容を受領したら、そちらを「使用中」にする',
+    '現在地／確定事項／未確定事項／原稿一覧／執筆ルール／次の一手',
+    '共有用JSON／Markdownからは「Kindle出版サポートGPT 管理」全体を除外',
+    'APIキー、パスワード、生の非公開会話は貼り付けず',
+  ]) {
+    assert.equal(manual.includes(phrase), true, `不足しているGPT管理案内: ${phrase}`);
+  }
+
+  const fieldOrder = [
+    '1. GPT管理ID',
+    '2. 企画・作品名',
+    '3. セッション名',
+    '4. Kindle出版サポートGPT URL',
+    '5. 担当範囲',
+    '6. 状態',
+    '7. 開始日',
+    '8. 引継ぎ先ID',
+    '9. 引継ぎメモ',
+    '10. 備考',
+  ];
+  let previousIndex = -1;
+  fieldOrder.forEach(field => {
+    const index = manual.indexOf(field);
+    assert.ok(index > previousIndex, `GPT管理列の順番が違います: ${field}`);
+    previousIndex = index;
+  });
+
+  const managerSection = manual.match(/### Kindle出版サポートGPTの会話を引き継ぐ([\s\S]*?)(?=\n### 市場調査の正本Markdownを取り込む)/)?.[1] || '';
+  assert.match(managerSection, /競合・市場調査などの一般公開URL欄とは別の例外/);
+  assert.match(managerSection, /同じブラウザ内と \*\*完全バックアップ\*\* にだけ保持/);
+
+  const managerFaq = manual.match(/### Kindle出版サポートGPTの会話が重くなったら、どう引き継ぎますか？([\s\S]*?)(?=\n### |\n---|$)/)?.[1] || '';
+  assert.match(managerFaq, /完全バックアップには入ります/);
+  assert.match(managerFaq, /共有用JSON／Markdownからは管理画面全体が除外/);
+  assert.match(managerFaq, /Googleスプレッドシートの「Kindle出版サポートGPT」タブとは自動同期しない/);
 });
 
 test('現行10機能と外部操作・KDP最新確認の注意をすべて案内する', () => {

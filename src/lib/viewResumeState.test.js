@@ -84,6 +84,24 @@ test('プロジェクト別の内部タブと画面別スクロール位置を�
   assert.equal(getSavedViewScroll(state, 'project-a', 'notes', 'competitors'), null);
 });
 
+test('サポートGPT管理を企画ノートの安全な再開位置として保持する', () => {
+  const state = rememberViewResumeState(createDefaultViewResumeState(), {
+    selectedProjectId: 'project-gpt',
+    mainTab: 'notes',
+    projectId: 'project-gpt',
+    planningSection: 'gptSessions',
+    scrollMainTab: 'notes',
+    scrollPlanningSection: 'gptSessions',
+    scrollPosition: { contentY: 880 },
+  });
+
+  assert.equal(getProjectPlanningSection(state, 'project-gpt'), 'gptSessions');
+  assert.deepEqual(getSavedViewScroll(state, 'project-gpt', 'notes', 'gptSessions'), { contentY: 880 });
+  const restored = resolveViewResumeState(state, [{ id: 'project-gpt' }], { validMainTabs: MAIN_TABS });
+  assert.equal(restored.planningSection, 'gptSessions');
+  assert.deepEqual(restored.scrollPosition, { contentY: 880 });
+});
+
 test('目次カードの折りたたみはプロジェクト別に保存し、旧状態は全展開として扱う', () => {
   let state = rememberViewResumeState(createDefaultViewResumeState(), {
     projectId: 'project-a',
@@ -174,6 +192,7 @@ test('明示URLはローカル復元より優先し、通常起動だけを復�
   assert.equal(hasExplicitViewUrl({ search: '?tab=notes', hash: '' }), true);
   assert.equal(hasExplicitViewUrl({ search: '?access_token=secret', hash: '' }), false);
   assert.equal(hasExplicitViewUrl({ search: '', hash: '#notes/competitors' }), true);
+  assert.equal(readExplicitViewUrl({ search: '?tab=notes&section=gptSessions', hash: '' }).planningSection, 'gptSessions');
   assert.equal(hasExplicitViewUrl({ search: '', hash: '#market-research' }), false);
   assert.equal(hasExplicitViewUrl({ search: '', hash: '#kindle-navi-manual-section-1' }), false);
   assert.equal(
