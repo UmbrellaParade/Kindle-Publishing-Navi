@@ -34,6 +34,8 @@ const EXPLICIT_VIEW_QUERY_KEYS = Object.freeze([
   'planningSection',
   'critiqueSection',
   'reviewSection',
+  'outlineView',
+  'outlineHistoryId',
   'view',
 ]);
 const EXPLICIT_HASH_MAIN_TABS = new Set([
@@ -113,6 +115,7 @@ function normalizeProjectView(value) {
     projectId,
     planningSection: safeToken(value.planningSection) || DEFAULT_PLANNING_SECTION,
     critiqueSection: safeToken(value.critiqueSection) || DEFAULT_CRITIQUE_SECTION,
+    ...normalizeOutlineNavigation(value),
     scrollPositions: normalizeScrollPositions(value.scrollPositions),
     collapsedOutlineCardKeys: normalizeCollapsedOutlineCardKeys(value.collapsedOutlineCardKeys),
   };
@@ -133,6 +136,24 @@ export function normalizePlanningViewSection(value) {
 
 export function normalizeCritiqueViewSection(value) {
   return CRITIQUE_VIEW_SECTIONS.includes(value) ? value : DEFAULT_CRITIQUE_SECTION;
+}
+
+// 閲覧先だけを扱い、本文・入力フォーム・ダイアログは保存しない。
+export function normalizeOutlineNavigation(value = {}, planningNotes) {
+  const outlineView = ['draft', 'confirmed', 'history'].includes(value?.outlineView)
+    ? value.outlineView : 'draft';
+  const outlineHistoryId = safeToken(value?.outlineHistoryId);
+  if (planningNotes === undefined || !outlineHistoryId) return { outlineView, outlineHistoryId };
+  try {
+    const data = typeof planningNotes === 'string' ? JSON.parse(planningNotes || '{}') : planningNotes;
+    const exists = Array.isArray(data?.outlineSnapshots) && data.outlineSnapshots.some(snapshot => (
+      snapshot?.id === outlineHistoryId && snapshot.id !== data.confirmedOutlineId
+    ));
+    if (exists) return { outlineView, outlineHistoryId };
+  } catch {
+    // 別バックアップの読込や壊れた値でも、削除済み履歴を開こうとしない。
+  }
+  return { outlineView: outlineView === 'history' ? 'draft' : outlineView, outlineHistoryId: '' };
 }
 
 export function normalizeViewResumeState(value) {
@@ -201,9 +222,16 @@ export function createViewKey(
   mainTab,
   planningSection = DEFAULT_PLANNING_SECTION,
   critiqueSection = DEFAULT_CRITIQUE_SECTION,
+  outlineView,
+  outlineHistoryId,
 ) {
   const safeMainTab = safeToken(mainTab) || DEFAULT_MAIN_TAB;
-  if (safeMainTab === 'notes') return `notes/${normalizePlanningViewSection(planningSection)}`;
+  if (safeMainTab === 'notes') {
+    const section = normalizePlanningViewSection(planningSection);
+    if (section !== 'chapters') return `notes/${section}`;
+    const outline = normalizeOutlineNavigation({ outlineView, outlineHistoryId });
+    return `notes/chapters/${outline.outlineView}${outline.outlineView === 'history' && outline.outlineHistoryId ? `/${outline.outlineHistoryId}` : ''}`;
+  }
   if (safeMainTab === 'critique') return `critique/${normalizeCritiqueViewSection(critiqueSection)}`;
   return safeMainTab;
 }
@@ -222,6 +250,10 @@ export function getProjectCritiqueSection(value, projectId) {
   return normalizeCritiqueViewSection(getProjectView(value, projectId)?.critiqueSection);
 }
 
+export function getProjectOutlineNavigation(value, projectId, planningNotes) {
+  return normalizeOutlineNavigation(getProjectView(value, projectId), arguments.length >= 3 ? planningNotes ?? null : undefined);
+}
+
 export function getProjectCollapsedOutlineCardKeys(value, projectId) {
   return [...(getProjectView(value, projectId)?.collapsedOutlineCardKeys || [])];
 }
@@ -232,12 +264,16 @@ export function getSavedViewScroll(
   mainTab,
   planningSection,
   critiqueSection,
+  outlineView,
+  outlineHistoryId,
 ) {
   const projectView = getProjectView(value, projectId);
   if (!projectView) return null;
   return projectView.scrollPositions[
-    createViewKey(mainTab, planningSection, critiqueSection)
-  ] || null;
+    createViewKey(mainTab, planningSection, critiqueSection, outlineView, outlineHistoryId)
+  ] || (mainTab === 'notes' && planningSection === 'chapters'
+    && (!outlineView || outlineView === 'draft')
+    ? projectView.scrollPositions['notes/chapters'] : null) || null;
 }
 
 export function rememberViewResumeState(value, update = {}) {
@@ -265,6 +301,8 @@ export function rememberViewResumeState(value, update = {}) {
       projectId,
       planningSection: DEFAULT_PLANNING_SECTION,
       critiqueSection: DEFAULT_CRITIQUE_SECTION,
+      outlineView: 'draft',
+      outlineHistoryId: '',
       scrollPositions: {},
       collapsedOutlineCardKeys: [],
     };
@@ -280,6 +318,14 @@ export function rememberViewResumeState(value, update = {}) {
     projectView.critiqueSection = normalizeCritiqueViewSection(update.critiqueSection);
   }
 
+  if (Object.prototype.hasOwnProperty.call(update, 'outlineView')
+    || Object.prototype.hasOwnProperty.call(update, 'outlineHistoryId')) {
+    Object.assign(projectView, normalizeOutlineNavigation({
+      outlineView: update.outlineView ?? projectView.outlineView,
+      outlineHistoryId: update.outlineHistoryId ?? projectView.outlineHistoryId,
+    }));
+  }
+
   if (Object.prototype.hasOwnProperty.call(update, 'collapsedOutlineCardKeys')) {
     projectView.collapsedOutlineCardKeys = normalizeCollapsedOutlineCardKeys(
       update.collapsedOutlineCardKeys,
@@ -293,6 +339,8 @@ export function rememberViewResumeState(value, update = {}) {
         update.scrollMainTab || next.mainTab,
         update.scrollPlanningSection,
         update.scrollCritiqueSection,
+        update.scrollOutlineView,
+        update.scrollOutlineHistoryId,
       );
       delete projectView.scrollPositions[key];
       projectView.scrollPositions[key] = position;
@@ -353,6 +401,8 @@ export function readExplicitViewUrl(locationLike) {
     mainTab: '',
     planningSection: '',
     critiqueSection: '',
+    outlineView: '',
+    outlineHistoryId: '',
     manualAnchor: '',
   };
   if (!locationLike) return none;
@@ -391,6 +441,14 @@ export function readExplicitViewUrl(locationLike) {
     const mainTab = explicitMainTabHint
       || (planningSection ? 'notes' : '')
       || (critiqueSection ? 'critique' : '');
+    const outlineView = firstParam(searchParams, ['outlineView'])
+      || firstParam(hashParams, ['outlineView'])
+      || (hashSegments[0] === 'notes' && hashSegments[1] === 'chapters' ? hashSegments[2] : '')
+      || '';
+    const outlineHistoryId = firstParam(searchParams, ['outlineHistoryId'])
+      || firstParam(hashParams, ['outlineHistoryId'])
+      || (hashSegments[0] === 'notes' && hashSegments[1] === 'chapters' && hashSegments[2] === 'history' ? hashSegments[3] : '')
+      || '';
     const hasHashProject = ['projectId', 'project_id', 'project']
       .some(key => hashParams.has(key) && Boolean(firstParam(hashParams, [key])));
     const hasKnownHashParams = rawHash.includes('=') && (
@@ -398,6 +456,8 @@ export function readExplicitViewUrl(locationLike) {
       || EXPLICIT_HASH_MAIN_TABS.has(mainTab)
       || PLANNING_VIEW_SECTIONS.includes(planningSection)
       || CRITIQUE_VIEW_SECTIONS.includes(critiqueSection)
+      || ['draft', 'confirmed', 'history'].includes(outlineView)
+      || Boolean(outlineHistoryId)
     );
     const hasKnownHashPath = (
       hashSegments.length === 1
@@ -410,15 +470,22 @@ export function readExplicitViewUrl(locationLike) {
       hashSegments.length === 2
       && hashSegments[0] === 'critique'
       && CRITIQUE_VIEW_SECTIONS.includes(hashSegments[1])
+    ) || (
+      (hashSegments.length === 3 || hashSegments.length === 4)
+      && hashSegments[0] === 'notes' && hashSegments[1] === 'chapters'
+      && ['draft', 'confirmed', 'history'].includes(hashSegments[2])
+      && (hashSegments.length === 3 || hashSegments[2] === 'history')
     );
     const manualAnchor = MANUAL_ANCHOR_RE.test(rawHash) ? rawHash : '';
     const hasExplicitNavigation = hasQueryView || hasKnownHashParams || hasKnownHashPath;
     return {
       hasExplicitNavigation,
       projectId: hasExplicitNavigation ? projectId : '',
-      mainTab: hasExplicitNavigation ? mainTab : '',
-      planningSection: hasExplicitNavigation ? planningSection : '',
+      mainTab: hasExplicitNavigation ? mainTab || (outlineView || outlineHistoryId ? 'notes' : '') : '',
+      planningSection: hasExplicitNavigation ? planningSection || (outlineView || outlineHistoryId ? 'chapters' : '') : '',
       critiqueSection: hasExplicitNavigation ? critiqueSection : '',
+      outlineView: hasExplicitNavigation ? outlineView || (outlineHistoryId ? 'history' : '') : '',
+      outlineHistoryId: hasExplicitNavigation ? outlineHistoryId : '',
       manualAnchor,
     };
   } catch {
@@ -464,6 +531,7 @@ export function resolveViewResumeState(value, projects, {
       critiqueSection: validCritiqueSections.includes(savedCritiqueSection)
         ? savedCritiqueSection
         : DEFAULT_CRITIQUE_SECTION,
+      ...normalizeOutlineNavigation(),
       scrollPosition: null,
       resumed: false,
     };
@@ -505,6 +573,7 @@ export function resolveViewResumeState(value, projects, {
       mainTab: project || PROJECT_OPTIONAL_MAIN_TABS.has(mainTab) ? mainTab : 'manual',
       planningSection,
       critiqueSection,
+      ...normalizeOutlineNavigation(explicitView, project?.planning_notes ?? null),
       scrollPosition: null,
       resumed: false,
     };
@@ -517,6 +586,7 @@ export function resolveViewResumeState(value, projects, {
       mainTab: DEFAULT_MAIN_TAB,
       planningSection: DEFAULT_PLANNING_SECTION,
       critiqueSection: DEFAULT_CRITIQUE_SECTION,
+      ...normalizeOutlineNavigation(),
       scrollPosition: null,
       resumed: false,
     };
@@ -534,12 +604,15 @@ export function resolveViewResumeState(value, projects, {
   const critiqueSection = allowedCritiqueSections.has(rawCritiqueSection)
     ? rawCritiqueSection
     : DEFAULT_CRITIQUE_SECTION;
+  const outlineNavigation = getProjectOutlineNavigation(state, savedProject.id, savedProject.planning_notes);
   const scrollPosition = getSavedViewScroll(
     state,
     savedProject.id,
     mainTab,
     planningSection,
     critiqueSection,
+    outlineNavigation.outlineView,
+    outlineNavigation.outlineHistoryId,
   );
   const resumed = (
     savedProject.id !== fallbackProject.id
@@ -554,6 +627,7 @@ export function resolveViewResumeState(value, projects, {
     mainTab,
     planningSection,
     critiqueSection,
+    ...outlineNavigation,
     scrollPosition,
     resumed,
   };

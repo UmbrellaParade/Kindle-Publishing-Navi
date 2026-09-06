@@ -6,6 +6,7 @@ import {
   createViewScrollPosition,
   getProjectCollapsedOutlineCardKeys,
   getProjectCritiqueSection,
+  getProjectOutlineNavigation,
   getProjectPlanningSection,
   getSavedViewScroll,
   hasExplicitViewUrl,
@@ -264,6 +265,8 @@ test('明示URLはローカル復元より優先し、通常起動だけを復�
       mainTab: 'notes',
       planningSection: 'competitors',
       critiqueSection: '',
+      outlineView: '',
+      outlineHistoryId: '',
       manualAnchor: '',
     },
   );
@@ -278,6 +281,8 @@ test('明示URLはローカル復元より優先し、通常起動だけを復�
     mainTab: '',
     planningSection: '',
     critiqueSection: '',
+    outlineView: '',
+    outlineHistoryId: '',
     manualAnchor: 'kindle-navi-manual-section-1',
   });
 
@@ -401,5 +406,82 @@ test('削除済みprojectの閲覧状態を整理し、draftやmodal等の未許
   const serialized = JSON.stringify(reconciled);
   assert.equal(reconciled.selectedProjectId, null);
   assert.deepEqual(reconciled.projectViews.map(view => view.projectId), ['kept']);
-  assert.doesNotMatch(serialized, /未保存本文|editor|draft|modal|delete-confirmation/);
+  assert.doesNotMatch(serialized, /未保存本文|"editor"|"draft":|modal|delete-confirmation/);
+});
+
+test('仮・確定・履歴の選択と座標はプロジェクト別・履歴別に復元する', () => {
+  let state = createDefaultViewResumeState();
+  for (const [projectId, outlineView, outlineHistoryId, contentY] of [
+    ['a', 'draft', '', 400], ['a', 'confirmed', '', 900],
+    ['a', 'history', 'snapshot-1', 1500], ['a', 'history', 'snapshot-2', 2200],
+    ['b', 'confirmed', '', 700],
+  ]) {
+    state = rememberViewResumeState(state, {
+      selectedProjectId: projectId, projectId, mainTab: 'notes', planningSection: 'chapters',
+      outlineView, outlineHistoryId, scrollMainTab: 'notes', scrollPlanningSection: 'chapters',
+      scrollOutlineView: outlineView, scrollOutlineHistoryId: outlineHistoryId, scrollPosition: { contentY },
+    });
+  }
+  const storage = createStorage();
+  persistViewResumeState(state, storage);
+  const reloaded = readViewResumeState(storage);
+  assert.deepEqual(getProjectOutlineNavigation(reloaded, 'a'), { outlineView: 'history', outlineHistoryId: 'snapshot-2' });
+  assert.deepEqual(getProjectOutlineNavigation(reloaded, 'b'), { outlineView: 'confirmed', outlineHistoryId: '' });
+  assert.deepEqual(getSavedViewScroll(reloaded, 'a', 'notes', 'chapters', 'history', 'draft'), { contentY: 400 });
+  assert.deepEqual(getSavedViewScroll(reloaded, 'a', 'notes', 'chapters', 'history', 'confirmed'), { contentY: 900 });
+  assert.deepEqual(getSavedViewScroll(reloaded, 'a', 'notes', 'chapters', 'history', 'history', 'snapshot-1'), { contentY: 1500 });
+  assert.deepEqual(getSavedViewScroll(reloaded, 'a', 'notes', 'chapters', 'history', 'history', 'snapshot-2'), { contentY: 2200 });
+  assert.deepEqual(resolveViewResumeState(reloaded, [{ id: 'a' }, { id: 'b' }], { validMainTabs: MAIN_TABS }).scrollPosition, { contentY: 700 });
+});
+
+test('削除済み履歴・別構成バックアップ・壊れた保存値は仮目次へ戻し、存在する履歴だけ開く', () => {
+  const state = rememberViewResumeState(createDefaultViewResumeState(), {
+    selectedProjectId: 'a', projectId: 'a', mainTab: 'notes', planningSection: 'chapters',
+    outlineView: 'history', outlineHistoryId: 'snapshot-1',
+  });
+  const validNotes = JSON.stringify({ confirmedOutlineId: '', outlineSnapshots: [{ id: 'snapshot-1' }] });
+  const valid = resolveViewResumeState(state, [{ id: 'a', planning_notes: validNotes }], { validMainTabs: MAIN_TABS });
+  assert.equal(valid.outlineHistoryId, 'snapshot-1');
+  assert.equal(valid.outlineView, 'history');
+  for (const planning_notes of ['', undefined, '{broken', JSON.stringify({ outlineSnapshots: [{ id: 'snapshot-other' }] })]) {
+    const result = resolveViewResumeState(state, [{ id: 'a', planning_notes }], { validMainTabs: MAIN_TABS });
+    assert.equal(result.outlineView, 'draft');
+    assert.equal(result.outlineHistoryId, '');
+  }
+  assert.deepEqual(getProjectOutlineNavigation(state, 'a', JSON.stringify({
+    confirmedOutlineId: 'snapshot-1', outlineSnapshots: [{ id: 'snapshot-1' }],
+  })), { outlineView: 'draft', outlineHistoryId: '' });
+  const broken = rememberViewResumeState(state, { projectId: 'a', outlineView: 'delete-confirmation', outlineHistoryId: '__proto__' });
+  assert.deepEqual(getProjectOutlineNavigation(broken, 'a'), { outlineView: 'draft', outlineHistoryId: '' });
+});
+
+test('明示URLの目次指定を優先し、指定なし明示URLで前回の確定目次を勝手に復元しない', () => {
+  const state = rememberViewResumeState(createDefaultViewResumeState(), {
+    selectedProjectId: 'a', projectId: 'a', mainTab: 'notes', planningSection: 'chapters', outlineView: 'confirmed',
+  });
+  const projects = [{ id: 'a', planning_notes: JSON.stringify({ outlineSnapshots: [{ id: 'snapshot-1' }] }) }];
+  for (const location of [
+    { search: '?tab=notes&section=chapters&outlineView=history&outlineHistoryId=snapshot-1' },
+    { hash: '#notes/chapters/history/snapshot-1' },
+    { search: '?outlineView=history&outlineHistoryId=snapshot-1' },
+    { hash: '#outlineView=history&outlineHistoryId=snapshot-1' },
+    { hash: '#outlineHistoryId=snapshot-1' },
+  ]) {
+    const explicitNavigation = readExplicitViewUrl(location);
+    const result = resolveViewResumeState(state, projects, { validMainTabs: MAIN_TABS, explicitNavigation });
+    assert.equal(result.planningSection, 'chapters');
+    assert.equal(result.outlineView, 'history');
+    assert.equal(result.outlineHistoryId, 'snapshot-1');
+    assert.equal(result.scrollPosition, null);
+  }
+  const result = resolveViewResumeState(state, projects, {
+    validMainTabs: MAIN_TABS, explicitNavigation: readExplicitViewUrl({ hash: '#notes/chapters' }),
+  });
+  assert.equal(result.outlineView, 'draft');
+});
+
+test('旧版の共通目次スクロールは仮目次だけへ引き継ぐ', () => {
+  const state = { version: 1, projectViews: [{ projectId: 'a', scrollPositions: { 'notes/chapters': { contentY: 555 } } }] };
+  assert.deepEqual(getSavedViewScroll(state, 'a', 'notes', 'chapters', 'history', 'draft'), { contentY: 555 });
+  assert.equal(getSavedViewScroll(state, 'a', 'notes', 'chapters', 'history', 'confirmed'), null);
 });

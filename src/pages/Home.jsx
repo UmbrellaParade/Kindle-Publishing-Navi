@@ -28,6 +28,7 @@ import {
 } from '@/lib/saveCoordinator';
 import { toast } from 'sonner';
 import { CURRENT_APP_VERSION } from '@/hooks/useAppUpdate';
+import { getTaskNavigation } from '@/lib/workNavigation';
 import {
   createBackupFileName,
   createCritiqueRecoveryFileName,
@@ -44,9 +45,11 @@ import {
   getProjectCollapsedOutlineCardKeys,
   getProjectCritiqueSection,
   getProjectPlanningSection,
+  getProjectOutlineNavigation,
   getSavedViewScroll,
   normalizeCritiqueViewSection,
   normalizePlanningViewSection,
+  normalizeOutlineNavigation,
   persistViewResumeState,
   PLANNING_VIEW_SECTIONS,
   readExplicitViewUrl,
@@ -86,6 +89,9 @@ export default function Home() {
   const [mainNavigationHeight, setMainNavigationHeight] = useState(60);
   const [planningSection, setPlanningSection] = useState(DEFAULT_PLANNING_SECTION);
   const [critiqueSection, setCritiqueSection] = useState(DEFAULT_CRITIQUE_SECTION);
+  const [outlineNavigation, setOutlineNavigation] = useState({ outlineView: 'draft', outlineHistoryId: '' });
+  const [workRequest, setWorkRequest] = useState(null);
+  const [scheduleOpenRequest, setScheduleOpenRequest] = useState(0);
   const [collapsedOutlineCardKeys, setCollapsedOutlineCardKeys] = useState([]);
   const [viewResumeReady, setViewResumeReady] = useState(false);
   const [resumeNoticeVisible, setResumeNoticeVisible] = useState(false);
@@ -99,6 +105,8 @@ export default function Home() {
     mainTab: 'creation',
     planningSection: DEFAULT_PLANNING_SECTION,
     critiqueSection: DEFAULT_CRITIQUE_SECTION,
+    outlineView: 'draft',
+    outlineHistoryId: '',
   });
   const explicitViewUrlRef = useRef(readExplicitViewUrl(
     typeof window === 'undefined' ? null : window.location,
@@ -121,6 +129,7 @@ export default function Home() {
   }, []);
 
   const rememberViewContext = useCallback(context => {
+    context = { ...viewContextRef.current, ...context };
     viewContextRef.current = context;
     const nextState = rememberViewResumeState(viewResumeStateRef.current, {
       selectedProjectId: context.projectId || null,
@@ -128,6 +137,8 @@ export default function Home() {
       projectId: context.projectId,
       planningSection: context.planningSection,
       critiqueSection: context.critiqueSection,
+      outlineView: context.outlineView,
+      outlineHistoryId: context.outlineHistoryId,
     });
     storeViewResumeState(nextState);
   }, [storeViewResumeState]);
@@ -143,6 +154,8 @@ export default function Home() {
       scrollMainTab: context.mainTab,
       scrollPlanningSection: context.planningSection,
       scrollCritiqueSection: context.critiqueSection,
+      scrollOutlineView: context.outlineView,
+      scrollOutlineHistoryId: context.outlineHistoryId,
       scrollPosition: createViewScrollPosition(window.scrollY, getStickyViewOffset()),
     });
     storeViewResumeState(nextState);
@@ -164,15 +177,19 @@ export default function Home() {
       ? getProjectCritiqueSection(viewResumeStateRef.current, projectId)
       : DEFAULT_CRITIQUE_SECTION;
     const nextMainTab = projectId ? activeTab : 'manual';
+    const nextOutlineNavigation = getProjectOutlineNavigation(viewResumeStateRef.current, projectId, project?.planning_notes);
     rememberViewContext({
       projectId,
       mainTab: nextMainTab,
       planningSection: nextPlanningSection,
       critiqueSection: nextCritiqueSection,
+      ...nextOutlineNavigation,
     });
     setCurrentProject(project);
     setPlanningSection(nextPlanningSection);
     setCritiqueSection(nextCritiqueSection);
+    setOutlineNavigation(nextOutlineNavigation);
+    setWorkRequest(null);
     setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(
       viewResumeStateRef.current,
       projectId,
@@ -200,6 +217,8 @@ export default function Home() {
         projectId: resolved.project?.id || '',
         planningSection: resolved.planningSection,
         critiqueSection: resolved.critiqueSection,
+        outlineView: resolved.outlineView,
+        outlineHistoryId: resolved.outlineHistoryId,
       });
       storeViewResumeState(nextState);
       viewContextRef.current = {
@@ -207,11 +226,14 @@ export default function Home() {
         mainTab: resolved.mainTab,
         planningSection: resolved.planningSection,
         critiqueSection: resolved.critiqueSection,
+        outlineView: resolved.outlineView,
+        outlineHistoryId: resolved.outlineHistoryId,
       };
       setCurrentProject(resolved.project);
       setActiveTab(resolved.mainTab);
       setPlanningSection(resolved.planningSection);
       setCritiqueSection(resolved.critiqueSection);
+      setOutlineNavigation({ outlineView: resolved.outlineView, outlineHistoryId: resolved.outlineHistoryId });
       setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(
         nextState,
         resolved.project?.id,
@@ -255,8 +277,10 @@ export default function Home() {
       mainTab: activeTab,
       planningSection,
       critiqueSection,
+      ...outlineNavigation,
     };
     rememberViewContext(context);
+    if (workRequest?.tabId === activeTab) return undefined;
     if (skipNextViewRestoreRef.current) {
       skipNextViewRestoreRef.current = false;
       window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -273,6 +297,8 @@ export default function Home() {
       context.mainTab,
       context.planningSection,
       context.critiqueSection,
+      context.outlineView,
+      context.outlineHistoryId,
     );
     const restorePosition = () => {
       if (
@@ -280,6 +306,8 @@ export default function Home() {
         || viewContextRef.current.mainTab !== context.mainTab
         || viewContextRef.current.planningSection !== context.planningSection
         || viewContextRef.current.critiqueSection !== context.critiqueSection
+        || viewContextRef.current.outlineView !== context.outlineView
+        || viewContextRef.current.outlineHistoryId !== context.outlineHistoryId
       ) return;
       const scrollHeight = Math.max(
         document.documentElement?.scrollHeight || 0,
@@ -314,6 +342,9 @@ export default function Home() {
     getStickyViewOffset,
     planningSection,
     critiqueSection,
+    outlineNavigation.outlineView,
+    outlineNavigation.outlineHistoryId,
+    workRequest,
     rememberViewContext,
     viewResumeReady,
   ]);
@@ -384,7 +415,7 @@ export default function Home() {
           'kindle-navi-before-legacy-import-critique-recovery',
         ),
       });
-      toast.warning('旧版データ取込前のバックアップに加え、読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの原文を復旧用JSONとして保存しました。両方を保管してください');
+      toast.warning('旧版データ取込前バックアップと復旧用JSONのダウンロードを開始しました。保存先で両方のファイルを確認して保管してください');
     }
   }, []);
 
@@ -428,6 +459,8 @@ export default function Home() {
         setProjects(list);
         if (retainedProject) {
           setCurrentProject(retainedProject);
+          const retainedOutline = getProjectOutlineNavigation(viewResumeStateRef.current, retainedProject.id, retainedProject.planning_notes);
+          setOutlineNavigation(retainedOutline);
           let reconciledState = reconcileViewResumeProjects(
             viewResumeStateRef.current,
             list.map(project => project.id),
@@ -438,6 +471,7 @@ export default function Home() {
             projectId: retainedProject.id,
             planningSection: viewContextRef.current.planningSection,
             critiqueSection: viewContextRef.current.critiqueSection,
+            ...retainedOutline,
           });
           storeViewResumeState(reconciledState);
           setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(
@@ -457,6 +491,8 @@ export default function Home() {
             projectId: fallbackProject?.id || '',
             planningSection: DEFAULT_PLANNING_SECTION,
             critiqueSection: DEFAULT_CRITIQUE_SECTION,
+            outlineView: 'draft',
+            outlineHistoryId: '',
           });
           storeViewResumeState(nextState);
           skipNextViewRestoreRef.current = (
@@ -470,11 +506,15 @@ export default function Home() {
             mainTab: fallbackMainTab,
             planningSection: DEFAULT_PLANNING_SECTION,
             critiqueSection: DEFAULT_CRITIQUE_SECTION,
+            outlineView: 'draft',
+            outlineHistoryId: '',
           };
           setCurrentProject(fallbackProject);
           setActiveTab(fallbackMainTab);
           setPlanningSection(DEFAULT_PLANNING_SECTION);
           setCritiqueSection(DEFAULT_CRITIQUE_SECTION);
+          setOutlineNavigation({ outlineView: 'draft', outlineHistoryId: '' });
+          setWorkRequest(null);
           setCollapsedOutlineCardKeys(getProjectCollapsedOutlineCardKeys(
             nextState,
             fallbackProject?.id,
@@ -572,18 +612,26 @@ export default function Home() {
     }, 0);
   };
 
-  const handleTabChange = async (tabId, { restoreMobileFocus = false } = {}) => {
+  const handleTabChange = async (tabId, { restoreMobileFocus = false, phaseId = '', taskId = '', focusWork = false } = {}) => {
     if (!MAIN_TAB_IDS.includes(tabId)) return;
+    const requestFocus = () => {
+      if (phaseId || taskId || focusWork) setWorkRequest(current => ({ tabId, phaseId, taskId, token: (current?.token || 0) + 1 }));
+      else setWorkRequest(null);
+    };
     if (tabId === activeTab) {
+      requestFocus();
       setMobileTabsOpen(false);
       if (restoreMobileFocus) restoreMobileTabsToggleFocus();
       return;
     }
     if (switchingTab) return;
+    const sourceProjectId = currentProject?.id || '';
     captureCurrentViewScroll();
     setSwitchingTab(true);
     try {
       await flushPendingSaves();
+      // 保存待ちの間に別の本へ移った場合、古い本の閲覧状態を持ち込まない。
+      if (viewContextRef.current.projectId !== sourceProjectId) return;
       rememberViewContext({
         projectId: currentProject?.id || '',
         mainTab: tabId,
@@ -591,6 +639,7 @@ export default function Home() {
         critiqueSection,
       });
       setActiveTab(tabId);
+      requestFocus();
       setMobileTabsOpen(false);
       if (restoreMobileFocus) restoreMobileTabsToggleFocus();
     } catch (error) {
@@ -612,6 +661,28 @@ export default function Home() {
     });
     setPlanningSection(safeSection);
   }, [captureCurrentViewScroll, rememberViewContext]);
+
+  const handleOutlineViewChange = useCallback(nextNavigation => {
+    const safeNavigation = normalizeOutlineNavigation(nextNavigation, currentProject?.planning_notes);
+    if (safeNavigation.outlineView === viewContextRef.current.outlineView
+      && safeNavigation.outlineHistoryId === viewContextRef.current.outlineHistoryId) return;
+    captureCurrentViewScroll();
+    const context = viewContextRef.current;
+    if (!getSavedViewScroll(viewResumeStateRef.current, context.projectId, context.mainTab,
+      context.planningSection, context.critiqueSection, safeNavigation.outlineView, safeNavigation.outlineHistoryId)) {
+      storeViewResumeState(rememberViewResumeState(viewResumeStateRef.current, {
+        projectId: context.projectId,
+        scrollMainTab: context.mainTab,
+        scrollPlanningSection: context.planningSection,
+        scrollCritiqueSection: context.critiqueSection,
+        scrollOutlineView: safeNavigation.outlineView,
+        scrollOutlineHistoryId: safeNavigation.outlineHistoryId,
+        scrollPosition: createViewScrollPosition(window.scrollY, getStickyViewOffset()),
+      }));
+    }
+    rememberViewContext({ ...viewContextRef.current, ...safeNavigation });
+    setOutlineNavigation(safeNavigation);
+  }, [captureCurrentViewScroll, rememberViewContext, currentProject?.planning_notes, getStickyViewOffset, storeViewResumeState]);
 
   const handleCritiqueSectionChange = useCallback(nextSection => {
     const safeSection = normalizeCritiqueViewSection(nextSection);
@@ -648,12 +719,29 @@ export default function Home() {
 
   const handleOpenSchedule = async () => {
     await handleTabChange('creation');
+    setScheduleOpenRequest(value => value + 1);
     window.setTimeout(() => {
       const schedule = document.getElementById('release-schedule-card');
       schedule?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       schedule?.focus({ preventScroll: true });
-    }, 50);
+    }, 260);
   };
+
+  const handleOpenTask = taskId => {
+    const target = getTaskNavigation(taskId);
+    if (target) handleTabChange(target.tabId, { ...target, focusWork: true });
+  };
+
+  useEffect(() => {
+    if (!workRequest || activeTab !== workRequest.tabId) return undefined;
+    const timer = window.setTimeout(() => {
+      const target = document.getElementById(`checklist-task-${workRequest.taskId}`)
+        || document.getElementById('kindle-work-content');
+      target?.scrollIntoView({ block: 'start', behavior: 'auto' });
+      target?.focus?.({ preventScroll: true });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [workRequest, activeTab, currentProject?.id]);
 
   const handleScrollToTop = () => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -708,6 +796,8 @@ export default function Home() {
       <ReleaseScheduleCard
         project={currentProject}
         onProjectUpdate={handleProjectUpdate}
+        onOpenTask={handleOpenTask}
+        openRequest={scheduleOpenRequest}
       />
 
       <BrowserStorageNotice />
@@ -815,7 +905,7 @@ export default function Home() {
       </nav>
 
       {/* コンテンツ */}
-      <main className="relative z-10 max-w-7xl mx-auto px-2 py-6 pb-24">
+      <main id="kindle-work-content" tabIndex={-1} className="relative z-10 max-w-7xl mx-auto px-2 py-6 pb-24 outline-none" style={{ scrollMarginTop: 'calc(var(--kindle-main-nav-height, 60px) + 1rem)' }}>
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
@@ -833,12 +923,16 @@ export default function Home() {
               />
             )}
             {activeTab === 'brainSkills' && <GoliathBrainSkillsTab />}
-            {activeTab === 'creation'  && <PublishingChecklistTab {...tabProps} />}
+            {activeTab === 'creation'  && <PublishingChecklistTab {...tabProps} navigationRequest={workRequest} />}
             {activeTab === 'notes'     && (
               <PlanningNotesTab
+                key={currentProject?.id || 'no-project'}
                 {...tabProps}
                 initialSection={planningSection}
                 onSectionChange={handlePlanningSectionChange}
+                initialOutlineView={outlineNavigation.outlineView}
+                initialOutlineHistoryId={outlineNavigation.outlineHistoryId}
+                onOutlineViewChange={handleOutlineViewChange}
                 collapsedOutlineCardKeys={collapsedOutlineCardKeys}
                 onCollapsedOutlineCardKeysChange={handleCollapsedOutlineCardKeysChange}
               />

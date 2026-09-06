@@ -715,6 +715,50 @@ export async function createDataBackup(options) {
   return backup;
 }
 
+// 保存開始と実ファイルの保存確認を分離します。チェックポイントはダイアログ内だけで
+// 保持し、バックアップや共有データへは書き込みません。日時だけが変わった再収集は同一です。
+export function createDataBackupSafetyCheckpoint({ backup, critiqueRecovery = null }) {
+  const validatedBackup = validateCurrentDataBackup(backup);
+  const validatedRecovery = critiqueRecovery ? validateCritiqueRecovery(critiqueRecovery) : null;
+  const stableJson = (value) => JSON.stringify(value, (_key, item) => {
+    if (!isPlainObject(item)) return item;
+    return Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]]));
+  });
+  return stableJson({
+    schemaVersion: validatedBackup.schemaVersion,
+    data: validatedBackup.data,
+    recovery: validatedRecovery ? {
+      kind: validatedRecovery.kind,
+      schemaVersion: validatedRecovery.schemaVersion,
+      entries: validatedRecovery.entries,
+    } : null,
+  });
+}
+
+/** 書き込みロック内の最新データと、利用者がファイルを確認した内容が同じ場合だけ許可。 */
+export function verifyDataBackupSafetyCheckpoint({
+  checkpoint,
+  confirmed,
+  beforeSnapshot,
+  beforeCritiqueRecovery = null,
+}) {
+  if (!checkpoint || confirmed !== true) {
+    throw Object.assign(new Error('復元前バックアップの実ファイルを確認してから、復元を実行してください'), {
+      code: 'BACKUP_SAFETY_UNCONFIRMED',
+    });
+  }
+  const currentCheckpoint = createDataBackupSafetyCheckpoint({
+    backup: beforeSnapshot,
+    critiqueRecovery: beforeCritiqueRecovery,
+  });
+  if (checkpoint !== currentCheckpoint) {
+    throw Object.assign(new Error('バックアップ後に現在のデータが変わりました。復元前バックアップをもう一度ダウンロードし、最新ファイルを確認してください'), {
+      code: 'BACKUP_SAFETY_STALE',
+    });
+  }
+  return { snapshotSaved: true, critiqueRecoverySaved: true };
+}
+
 function mergeById(currentItems, incomingItems, mergeValue) {
   const merged = new Map(currentItems.map(item => [item.id, item]));
   for (const item of incomingItems) {
@@ -1236,9 +1280,14 @@ export function downloadDataBackup(backup, { filename = '' } = { filename: '' })
   anchor.download = filename || createBackupFileName();
   anchor.style.display = 'none';
   document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  // ブラウザの保存画面でキャンセルされたかどうかは取得できません。
+  return { status: 'download_started', filename: anchor.download, saved: false };
 }
 
 export function downloadCritiqueRecovery(recovery, { filename = '' } = { filename: '' }) {
@@ -1253,9 +1302,13 @@ export function downloadCritiqueRecovery(recovery, { filename = '' } = { filenam
   anchor.download = filename || createCritiqueRecoveryFileName();
   anchor.style.display = 'none';
   document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  return { status: 'download_started', filename: anchor.download, saved: false };
 }
 
 export async function readDataBackupFile(file) {

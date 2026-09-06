@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/dialog';
 import { mutatePublishingProject } from '@/lib/projectMutation';
 import { flushPendingSaves } from '@/lib/saveCoordinator';
+import { resolveCritiqueHandoffContext } from '@/lib/planningGptHandoffContext';
 import {
   PLANNING_CRITIQUE_GPT_SESSION_STATUSES,
   activatePlanningCritiqueGptSession,
@@ -236,29 +237,6 @@ function CritiqueGptEditorDialog({ editor, sessions, busy, onChange, onSave, onC
   );
 }
 
-function formatFindingBlocks(entry, { unresolvedOnly = false } = {}) {
-  if (!entry) return '未設定';
-  if (unresolvedOnly && ['completed', 'deferred'].includes(entry.responseStatus)) return 'なし';
-  const categoryLabels = {
-    mustFix: '必ず直す',
-    readerCheck: '読者確認',
-    authorJudgment: '著者判断',
-    deferred: '見送る',
-  };
-  const categoryKeys = unresolvedOnly
-    ? ['mustFix', 'readerCheck', 'authorJudgment']
-    : ['mustFix', 'readerCheck', 'authorJudgment', 'deferred'];
-  const categorized = categoryKeys
-    .map(key => {
-      const text = String(entry.findingCategories?.[key] || '').trim();
-      return text ? `【${categoryLabels[key]}】\n${text}` : '';
-    })
-    .filter(Boolean);
-  if (categorized.length > 0) return categorized.join('\n\n');
-  const fixes = (entry.priorityFixes || []).map(value => String(value || '').trim()).filter(Boolean);
-  return fixes.length > 0 ? fixes.map((value, index) => `${index + 1}. ${value}`).join('\n') : '未設定';
-}
-
 export default function CritiqueGptManagement({ project, onProjectUpdate, entries = [] }) {
   const initialParsed = useMemo(() => readPlanningNotes(project?.planning_notes), [project?.id]);
   const [data, setData] = useState(initialParsed.data);
@@ -268,6 +246,7 @@ export default function CritiqueGptManagement({ project, onProjectUpdate, entrie
   const [editor, setEditor] = useState(null);
   const [pendingFocus, setPendingFocus] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
+  const [handoffEntrySelection, setHandoffEntrySelection] = useState(null);
   const activeProjectIdRef = useRef(project?.id || '');
   const operationGenerationRef = useRef(0);
 
@@ -296,12 +275,15 @@ export default function CritiqueGptManagement({ project, onProjectUpdate, entrie
     [data],
   );
   const latestEntry = entries[0] || null;
-  const extraTemplateValues = useMemo(() => ({
-    targetManuscriptVersionId: activeSession?.targetManuscriptVersionId || latestEntry?.manuscriptLabel || '未設定',
-    critiqueRound: activeSession?.critiqueRound || entries.length || '未設定',
-    previousFindings: formatFindingBlocks(latestEntry),
-    unresolvedFindings: formatFindingBlocks(latestEntry, { unresolvedOnly: true }),
-  }), [activeSession?.critiqueRound, activeSession?.targetManuscriptVersionId, entries.length, latestEntry]);
+  const handoffContextKey = JSON.stringify([
+    project.id, activeSession?.id, activeSession?.targetManuscriptVersionId, activeSession?.critiqueRound,
+  ]);
+  const handoffContext = useMemo(() => resolveCritiqueHandoffContext(
+    activeSession,
+    entries,
+    handoffEntrySelection?.contextKey === handoffContextKey ? handoffEntrySelection : null,
+  ), [activeSession, entries, handoffEntrySelection, handoffContextKey]);
+  const extraTemplateValues = handoffContext.templateValues;
 
   useEffect(() => {
     if (!pendingFocus) return undefined;
@@ -371,7 +353,7 @@ export default function CritiqueGptManagement({ project, onProjectUpdate, entrie
       managementId: nextManagementId,
       sessionStatus: activeSession ? 'on_hold' : 'active',
       targetManuscriptVersionId: latestEntry?.manuscriptLabel || '',
-      critiqueRound: entries.length > 0 ? entries.length : 0,
+      critiqueRound: 0,
     });
     setEditor({
       projectId: project.id,
@@ -535,6 +517,30 @@ export default function CritiqueGptManagement({ project, onProjectUpdate, entrie
           </ol>
         </section>
       </div>
+
+      <section className="rounded-xl border border-neon-pink/25 bg-neon-pink/[0.035] p-4" aria-labelledby="critique-handoff-source-title">
+        <h3 id="critique-handoff-source-title" className="font-black text-neon-pink">引継ぎに使う論評履歴</h3>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">現在のGPTの対象版：{activeSession?.targetManuscriptVersionId || '未設定'} ／ 論評回：{activeSession?.critiqueRound || '未設定'}。別の原稿版の指摘は自動挿入しません。</p>
+        <label className="mt-3 block space-y-1.5 text-xs font-bold text-foreground">
+          <span>コピー文へ差し込む履歴（同じ原稿版のみ）</span>
+          <select
+            className={INPUT_CLASS}
+            value={handoffContext.entry?.id || ''}
+            disabled={handoffContext.candidates.length === 0}
+            aria-describedby="critique-handoff-source-help"
+            onChange={event => {
+              const entry = handoffContext.candidates.find(candidate => candidate.id === event.target.value);
+              setHandoffEntrySelection({ contextKey: handoffContextKey, id: entry?.id || '', updatedAt: entry?.updatedAt || '' });
+            }}
+          >
+            <option value="">指摘を差し込まない（未選択）</option>
+            {handoffContext.candidates.map(entry => <option key={entry.id} value={entry.id}>{entry.manuscriptLabel} ／ {entry.reviewedAt?.slice(0, 10) || '日付未設定'} ／ {entry.summary?.slice(0, 40) || entry.id}</option>)}
+          </select>
+        </label>
+        <p id="critique-handoff-source-help" className="mt-2 text-xs leading-relaxed text-muted-foreground">履歴には論評回が記録されていない場合があります。対象版・日付・内容を確認して選んでください。未選択なら「前回指摘」「未対応指摘」は未設定になり、別の履歴で補いません。この選択は保存・共有されません。</p>
+        {handoffContext.roundNeedsConfirmation && <p role="status" className="mt-2 text-xs font-bold text-amber-200">選択した履歴に論評回の記録がないため、コピー文にも「論評回は要確認」と明記します。</p>}
+        {handoffContext.candidates.length === 0 && <p className="mt-2 text-xs text-amber-200">対応する履歴がありません。GPT管理の対象原稿版IDと「論評・履歴」の原稿版ラベルを確認してください。</p>}
+      </section>
 
       <PlanningGptHandoffPreparationCard
         kind="critique"

@@ -58,7 +58,8 @@ import {
   getPlanningInstructionCopyText,
 } from '@/lib/planningInstructionCopy';
 import { buildPlanningChapterQuestionIndex } from '@/lib/planningChapterQuestions';
-import { normalizePlanningViewSection } from '@/lib/viewResumeState';
+import { normalizeOutlineNavigation, normalizePlanningViewSection } from '@/lib/viewResumeState';
+import { filterPlanningOutlineRows } from '@/lib/planningOutlineSearch';
 import {
   PLANNING_NOTE_STATUSES,
   PLANNING_CHAPTER_NODE_TYPES,
@@ -1218,7 +1219,7 @@ function ManuscriptCompletionToggle({ record, itemLabel: providedItemLabel, manu
   );
 }
 
-function ManuscriptDocumentActions({ record, itemLabel: providedItemLabel, manuscript, busy, onEditLink, compact = false }) {
+function ManuscriptDocumentActions({ record, itemLabel: providedItemLabel, manuscript, busy = false, onEditLink = undefined, compact = false, readOnly = false }) {
   const documentUrl = String(manuscript?.documentUrl || '');
   const title = record.title || '無題';
   const typeLabel = getPlanningChapterNodeLabel(record.nodeType);
@@ -1237,7 +1238,7 @@ function ManuscriptDocumentActions({ record, itemLabel: providedItemLabel, manus
           </a>
         </Button>
       )}
-      <Button
+      {!readOnly && <Button
         key="edit-manuscript-link"
         type="button"
         size="sm"
@@ -1248,7 +1249,7 @@ function ManuscriptDocumentActions({ record, itemLabel: providedItemLabel, manus
         aria-label={`${itemLabel}の原稿URLを${documentUrl ? '変更' : '設定'}`}
       >
         <Link2 className="h-4 w-4" aria-hidden="true" />{documentUrl ? 'リンクを変更' : '原稿リンクを設定'}
-      </Button>
+      </Button>}
     </div>
   );
 }
@@ -1489,6 +1490,7 @@ function ChapterWritingMemos({
                     <div className="flex flex-wrap items-center gap-1.5">
                       {memo.firstReadFor.length > 0 && <MetaBadge icon={Star} tone="first">最初に見る</MetaBadge>}
                       {memo.canonicalFor.length > 0 && <MetaBadge icon={ShieldCheck} tone="canonical">正本</MetaBadge>}
+                      <StatusBadge status={memo.status} />
                       <span className="text-[10px] font-bold text-neon-cyan">v{memo.versionNumber}</span>
                     </div>
                     <p className="mt-1 break-words text-sm font-bold text-foreground">{memo.name || '無題の原稿メモ'}</p>
@@ -1631,12 +1633,19 @@ function OutlineSnapshotTree({
   onAddMemo,
   onEditMemo,
   canAddMemo,
+  searchFilters,
+  unfinishedOnly = false,
+  manuscriptByChapterId = new Map(),
 }) {
   if (!snapshot) return null;
   const rows = flattenPlanningOutlineSnapshot(snapshot, { includeRejected });
-  const visibleRecords = rows.filter(({ record }) => includeRejected || record.status !== 'rejected');
+  const allVisibleRecords = rows.filter(({ record }) => includeRejected || record.status !== 'rejected');
+  const filtered = searchFilters
+    ? filterPlanningOutlineRows(allVisibleRecords, searchFilters, { unfinishedOnly, manuscriptByChapterId })
+    : { rows: allVisibleRecords, matchCount: allVisibleRecords.length };
+  const visibleRecords = filtered.rows;
   const visibleOrdinalLabels = buildPlanningChapterOrdinalLabels(
-    visibleRecords.filter(({ record }) => record.status !== 'rejected'),
+    allVisibleRecords.filter(({ record }) => record.status !== 'rejected'),
   );
   const snapshotCardKeys = visibleRecords.map(({ record }) => (
     `${collapseScope || `history:${snapshot.id}`}:${record.id}`
@@ -1657,6 +1666,7 @@ function OutlineSnapshotTree({
       <p className="text-xs text-muted-foreground">
         部 {counts.part || 0}・章 {counts.chapter || 0}・話 {counts.episode || 0}・節 {counts.section || 0}
       </p>
+      {searchFilters && <p className="text-xs text-muted-foreground" role="status">一致 {filtered.matchCount}件（階層を示す親項目も表示）</p>}
       <OutlineBulkCollapseControls
         viewLabel={current ? '確定目次' : `過去の目次「${snapshot.label}」`}
         cardKeys={snapshotCardKeys}
@@ -1668,11 +1678,11 @@ function OutlineSnapshotTree({
         <p className="rounded-lg border border-dashed border-white/15 p-4 text-center text-sm text-muted-foreground">表示する構成項目はありません。</p>
       ) : (
         <div className="space-y-2">
-          {visibleRecords.map(({ record, depth }) => {
+          {visibleRecords.map(({ record, depth, filterContext }) => {
             const questions = getQuestions?.(record.id) || [];
             const hasChildren = visibleRecords.some(({ record: child }) => child.parentId === record.id);
             const childCount = visibleRecords.filter(({ record: child }) => child.parentId === record.id).length;
-            const manuscript = current && getManuscript ? getManuscript(record.id) : undefined;
+            const manuscript = getManuscript ? getManuscript(record.id) : undefined;
             const { ordinalLabel, displayTitle } = chapterPresentation(record, visibleOrdinalLabels);
             const itemLabel = `${ordinalLabel}「${displayTitle}」`;
             const cardKey = `${collapseScope || `history:${snapshot.id}`}:${record.id}`;
@@ -1693,6 +1703,7 @@ function OutlineSnapshotTree({
                         <span className="break-words font-bold text-foreground">{displayTitle}</span>
                       </h3>
                       {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
+                      {filterContext && <span className="text-xs text-muted-foreground">階層の親項目</span>}
                     </div>
                     <OutlineCardSummaryBadges
                       record={record}
@@ -1714,6 +1725,12 @@ function OutlineSnapshotTree({
                     onToggle={onToggleCard}
                   />
                 </div>
+                {!current && manuscript?.documentUrl && (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-[11px] text-muted-foreground">この項目に紐づく現在の原稿リンク（履歴保存時点の原稿ではありません）</p>
+                    <ManuscriptDocumentActions record={record} itemLabel={itemLabel} manuscript={manuscript} readOnly />
+                  </div>
+                )}
                 <div id={outlineCardBodyId(cardKey)} hidden={collapsed}>
                   {record.role && <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{record.role}</p>}
                   {current && getQuestions && onCopyQuestion && onOpenQuestion && (
@@ -3116,6 +3133,9 @@ export default function PlanningNotesTab({
   onNavigateTab,
   initialSection = 'overview',
   onSectionChange,
+  initialOutlineView = 'draft',
+  initialOutlineHistoryId = '',
+  onOutlineViewChange,
   collapsedOutlineCardKeys = [],
   onCollapsedOutlineCardKeysChange,
 }) {
@@ -3129,7 +3149,10 @@ export default function PlanningNotesTab({
   const [gptSessionSortOrder, setGptSessionSortOrder] = useState('newest');
   const [marketImport, setMarketImport] = useState(null);
   const [detail, setDetail] = useState(null);
-  const [outlineView, setOutlineView] = useState('draft');
+  const [outlineNavigation, setOutlineNavigation] = useState(() => normalizeOutlineNavigation({
+    outlineView: initialOutlineView, outlineHistoryId: initialOutlineHistoryId,
+  }, project?.planning_notes ?? null));
+  const { outlineView, outlineHistoryId } = outlineNavigation;
   const [outlineDialog, setOutlineDialog] = useState(null);
   const [outlineRewrite, setOutlineRewrite] = useState(null);
   const [outlineBulkNodeType, setOutlineBulkNodeType] = useState(null);
@@ -3144,6 +3167,7 @@ export default function PlanningNotesTab({
   const [chapterFilter, setChapterFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
+  const [unfinishedOnly, setUnfinishedOnly] = useState(false);
   const [pendingRecordFocus, setPendingRecordFocus] = useState(null);
   const [pendingGptSessionFocus, setPendingGptSessionFocus] = useState('');
   const activeProjectIdRef = useRef(project?.id || '');
@@ -3206,7 +3230,10 @@ export default function PlanningNotesTab({
     setGptSessionSortOrder('newest');
     setMarketImport(null);
     setDetail(null);
-    setOutlineView('draft');
+    setOutlineNavigation(normalizeOutlineNavigation({
+      outlineView: initialOutlineView, outlineHistoryId: initialOutlineHistoryId,
+    }, project?.planning_notes ?? null));
+    setUnfinishedOnly(false);
     setOutlineDialog(null);
     setOutlineRewrite(null);
     setOutlineBulkNodeType(null);
@@ -3254,6 +3281,14 @@ export default function PlanningNotesTab({
       return latest ? { ...current, record: latest } : null;
     });
   }, [project?.planning_notes]);
+
+  useEffect(() => {
+    const next = normalizeOutlineNavigation(outlineNavigation, project?.planning_notes ?? null);
+    if (next.outlineView !== outlineView || next.outlineHistoryId !== outlineHistoryId) {
+      onOutlineViewChange?.(next);
+      setOutlineNavigation(next);
+    }
+  }, [project?.planning_notes, outlineView, outlineHistoryId]);
 
   useEffect(() => {
     if (editor?.projectId) draftCacheRef.current.set(editor.projectId, editor);
@@ -3435,6 +3470,13 @@ export default function PlanningNotesTab({
     || statusFilter !== 'all'
     || priorityFilter !== 'all',
   );
+  const outlineSearchFilters = useMemo(() => ({
+    query, chapterId: chapterFilter, status: statusFilter, sourcePriority: priorityFilter,
+  }), [query, chapterFilter, statusFilter, priorityFilter]);
+  const outlineFiltersActive = Boolean(query || chapterFilter !== 'all' || statusFilter !== 'all' || priorityFilter !== 'all' || unfinishedOnly);
+  const filteredDraftOutline = useMemo(() => filterPlanningOutlineRows(chapterRows, outlineSearchFilters, {
+    unfinishedOnly, manuscriptByChapterId,
+  }), [chapterRows, outlineSearchFilters, unfinishedOnly, manuscriptByChapterId]);
 
   const clearFilters = () => {
     setQuery('');
@@ -3442,6 +3484,7 @@ export default function PlanningNotesTab({
     setChapterFilter('all');
     setStatusFilter('all');
     setPriorityFilter('all');
+    setUnfinishedOnly(false);
   };
   const newestCompetitors = useMemo(
     () => sortPlanningRecordsNewest(data.competitors),
@@ -3511,9 +3554,17 @@ export default function PlanningNotesTab({
 
   const selectOutlineView = (view, { focus = false } = {}) => {
     if (!OUTLINE_VIEW_META[view]) return;
-    setOutlineView(view);
+    const next = { outlineView: view, outlineHistoryId };
+    if (view !== outlineView) onOutlineViewChange?.(next);
+    setOutlineNavigation(next);
     setStatusMessage(`${OUTLINE_VIEW_META[view].label}を表示しました`);
     if (focus) window.requestAnimationFrame(() => outlineTabRefs.current.get(view)?.focus());
+  };
+
+  const selectOutlineHistory = snapshotId => {
+    const next = { outlineView: 'history', outlineHistoryId: outlineHistoryId === snapshotId ? '' : snapshotId };
+    onOutlineViewChange?.(next);
+    setOutlineNavigation(next);
   };
 
   const handleOutlineTabKeyDown = (event, currentView) => {
@@ -4328,8 +4379,8 @@ export default function PlanningNotesTab({
     ? []
     : activeSection === 'chapters'
       ? [
-        ...chapterRows.filter(({ record }) => record.status !== 'rejected'),
-        ...chapterRows.filter(({ record }) => record.status === 'rejected'),
+        ...filteredDraftOutline.rows.filter(({ record }) => record.status !== 'rejected'),
+        ...filteredDraftOutline.rows.filter(({ record }) => record.status === 'rejected'),
       ]
       : [...(data[activeSection] || [])]
         .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
@@ -4408,12 +4459,12 @@ export default function PlanningNotesTab({
           <label className="relative block">
             <span className="sr-only">企画・取材・構成ノート内を検索</span>
             <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="ノート内を検索" className={`${INPUT_CLASS} pl-10`} />
+            <input value={query} onChange={event => setQuery(event.target.value)} placeholder={activeSection === 'chapters' ? '表示中の目次を検索' : 'ノート内を検索'} className={`${INPUT_CLASS} pl-10`} />
           </label>
           <details className="mt-3">
             <summary className="min-h-11 cursor-pointer py-2 text-xs font-bold text-neon-cyan">絞り込み条件</summary>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <select aria-label="種類で絞り込み" value={typeFilter} onChange={event => setTypeFilter(event.target.value)} className={INPUT_CLASS}>
+              <select aria-label="種類で絞り込み" disabled={activeSection === 'chapters'} value={activeSection === 'chapters' ? 'chapters' : typeFilter} onChange={event => setTypeFilter(event.target.value)} className={INPUT_CLASS}>
                 <option value="all">すべての種類</option>
                 <option value="concept">企画メモ</option>
                 {Object.entries(SECTION_META).filter(([key]) => !['overview', 'concept', 'gptSessions'].includes(key)).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
@@ -4439,7 +4490,15 @@ export default function PlanningNotesTab({
               <X className="h-4 w-4" />絞り込みを解除
             </Button>
           </details>
-          <p className="mt-2 text-xs text-muted-foreground" aria-live="polite">検索結果 {searchResults.length}件</p>
+          {activeSection === 'chapters' ? (
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-xs text-foreground">
+                <input type="checkbox" checked={unfinishedOnly} onChange={event => setUnfinishedOnly(event.target.checked)} className="h-4 w-4 accent-emerald-400" />原稿が未完成の項目だけ
+              </label>
+              <p className="text-xs text-muted-foreground" aria-live="polite">{outlineView === 'draft' ? `一致 ${filteredDraftOutline.matchCount}件（階層を示す親項目も表示）` : '表示中の目次本文を絞り込みます（階層を示す親項目も表示）'}</p>
+              {outlineFiltersActive && <Button type="button" variant="ghost" className="min-h-11 text-xs" onClick={clearFilters}>絞り込みを解除</Button>}
+            </div>
+          ) : <p className="mt-2 text-xs text-muted-foreground" aria-live="polite">検索結果 {searchResults.length}件</p>}
         </section>
       )}
 
@@ -4778,6 +4837,9 @@ export default function PlanningNotesTab({
                   <p className="text-xs leading-relaxed text-muted-foreground">目次本文は読み取り専用です。本文を変えるときは仮目次を編集します。原稿の完成チェックと原稿URLだけは、確定目次の各カードから更新できます。</p>
                   <OutlineSnapshotTree
                     snapshot={confirmedOutline}
+                    searchFilters={outlineSearchFilters}
+                    unfinishedOnly={unfinishedOnly}
+                    manuscriptByChapterId={manuscriptByChapterId}
                     collapseScope={`confirmed:${confirmedOutline.id}`}
                     collapsedCardKeys={collapsedOutlineCardKeySet}
                     onToggleCard={toggleOutlineCard}
@@ -4809,8 +4871,8 @@ export default function PlanningNotesTab({
                   過去の目次はまだありません。「今の仮目次を履歴に保存」したときや、確定目次を新しい版へ更新したときに、以前の目次が読み取り専用で残ります。
                 </div>
               ) : pastOutlineSnapshots.map(snapshot => (
-                <details key={snapshot.id} className="rounded-xl p-4" style={CARD_STYLE}>
-                  <summary className="min-h-11 cursor-pointer list-none py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80">
+                <details key={snapshot.id} open={outlineHistoryId === snapshot.id} className="rounded-xl p-4" style={CARD_STYLE}>
+                  <summary onClick={event => { event.preventDefault(); selectOutlineHistory(snapshot.id); }} className="min-h-11 cursor-pointer list-none py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/80">
                     <span className="flex flex-wrap items-center gap-2">
                       <MetaBadge icon={snapshot.kind === 'confirmed' ? ShieldCheck : History} tone={snapshot.kind === 'confirmed' ? 'canonical' : 'latest'}>{PLANNING_OUTLINE_SNAPSHOT_KINDS[snapshot.kind]}</MetaBadge>
                       <span className="font-black text-foreground">{snapshot.label}</span>
@@ -4821,6 +4883,10 @@ export default function PlanningNotesTab({
                   <div className="mt-3 border-t border-white/10 pt-3">
                     <OutlineSnapshotTree
                       snapshot={snapshot}
+                      searchFilters={outlineSearchFilters}
+                      unfinishedOnly={unfinishedOnly}
+                      manuscriptByChapterId={manuscriptByChapterId}
+                      getManuscript={chapterId => manuscriptByChapterId.get(chapterId)}
                       collapseScope={`history:${snapshot.id}`}
                       collapsedCardKeys={collapsedOutlineCardKeySet}
                       onToggleCard={toggleOutlineCard}
@@ -4840,9 +4906,9 @@ export default function PlanningNotesTab({
             >
               {sectionRows.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-white/15 p-8 text-center text-sm text-muted-foreground">
-                  {activeSection === 'chapters' ? 'まだ仮目次はありません。まずは「部」または「章」から、決まっているところだけ作れば大丈夫です。' : 'まだ記録はありません。1件から始めてください。'}
+                  {activeSection === 'chapters' ? outlineFiltersActive ? '条件に一致する目次はありません。検索語や絞り込み条件を変えてください。' : 'まだ仮目次はありません。まずは「部」または「章」から、決まっているところだけ作れば大丈夫です。' : 'まだ記録はありません。1件から始めてください。'}
                 </div>
-              ) : sectionRows.map(({ record, depth }) => {
+              ) : sectionRows.map(({ record, depth, filterContext }) => {
             const siblings = activeSection === 'chapters'
               ? chapters
                 .filter(chapter => chapter.status !== 'rejected' && chapter.parentId === record.parentId)
@@ -4909,6 +4975,7 @@ export default function PlanningNotesTab({
                         </h3>
                         {record.status === 'rejected' && <span className="text-xs font-black text-rose-200">採用しない（履歴）</span>}
                         <StatusBadge status={record.status} />
+                        {filterContext && <span className="text-xs text-muted-foreground">階層の親項目</span>}
                       </div>
                       <OutlineCardSummaryBadges
                         record={record}
@@ -5010,7 +5077,7 @@ export default function PlanningNotesTab({
         </section>
       )}
 
-      {activeSection !== 'gptSessions' && searchableRecordCount > 0 && (query || typeFilter !== 'all' || chapterFilter !== 'all' || statusFilter !== 'all' || priorityFilter !== 'all') && (
+      {!['gptSessions', 'chapters'].includes(activeSection) && searchableRecordCount > 0 && filtersActive && (
         <section className="rounded-xl p-4" style={CARD_STYLE}>
           <h2 className="font-bold text-neon-cyan">検索結果</h2>
           <div className="mt-3 space-y-2">

@@ -11,10 +11,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
-  RELEASE_TASK_OFFSETS,
   SCHEDULE_DATE_SOURCE_PROVISIONAL,
   SCHEDULE_DATE_SOURCE_RELEASE_TARGET,
-  addCalendarMonths,
   buildReleaseDateClearUpdate,
   buildReleaseScheduleUpdate,
   buildReleaseTaskDatesResetUpdate,
@@ -27,16 +25,12 @@ import {
 } from '@/lib/releaseSchedule';
 import { flushPendingSaves } from '@/lib/saveCoordinator';
 import { toast } from 'sonner';
-import { CREATION_PHASES, KDP_PHASES, PROMO_PHASES } from '@/lib/checklistTasks';
+import { getNextWorkTasks, getStandardProvisionalDate, hasPastScheduleTargets } from '@/lib/workNavigation';
 import { getReleaseMethod, RELEASE_METHOD_OPTIONS } from '@/lib/releaseMethods';
 import { mutatePublishingProject } from '@/lib/projectMutation';
 
 const CARD_STYLE = { background: '#1a1a2e', border: '1px solid #2a2a4a' };
 const INPUT_STYLE = { background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a' };
-const TASK_TITLES = Object.fromEntries(
-  [...CREATION_PHASES, ...KDP_PHASES, ...PROMO_PHASES]
-    .flatMap(phase => phase.tasks.map(task => [task.id, task.title])),
-);
 
 function todayLocal() {
   const now = new Date();
@@ -69,7 +63,7 @@ function getSavedScheduleInputs(project) {
   };
 }
 
-export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
+export default function ReleaseScheduleCard({ project, onProjectUpdate, onOpenTask, openRequest = 0 }) {
   const initialSavedInputs = getSavedScheduleInputs(project);
   const [releaseDate, setReleaseDate] = useState(initialSavedInputs.releaseDate);
   const [provisionalDate, setProvisionalDate] = useState(initialSavedInputs.provisionalDate);
@@ -79,6 +73,10 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
   const activeProjectIdRef = useRef(project?.id || '');
   const operationGenerationRef = useRef(0);
   const savedInputsRef = useRef(initialSavedInputs);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => { setSettingsOpen(false); }, [project?.id]);
+  useEffect(() => { if (openRequest) setSettingsOpen(true); }, [openRequest]);
 
   useEffect(() => {
     activeProjectIdRef.current = project?.id || '';
@@ -126,11 +124,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
     () => countOverdueTasks(checklistData, todayLocal()),
     [checklistData],
   );
-  const nextTasks = useMemo(() => Object.keys(RELEASE_TASK_OFFSETS)
-    .map(taskId => ({ taskId, title: TASK_TITLES[taskId] || taskId, ...checklistData[taskId] }))
-    .filter(task => task.due_date && !task.is_done)
-    .sort((left, right) => left.due_date.localeCompare(right.due_date))
-    .slice(0, 3), [checklistData]);
+  const nextTasks = useMemo(() => getNextWorkTasks(checklistData), [checklistData]);
   const releaseMethodInfo = releaseMethod ? getReleaseMethod(releaseMethod) : null;
   const isWorking = Boolean(workingAction);
   const officialDraftChanged = releaseDate !== (project?.release_target_date || '')
@@ -184,9 +178,9 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
     && operationGenerationRef.current === generation
   );
 
-  const applySchedule = async (source, overwriteManual = false) => {
+  const applySchedule = async (source, overwriteManual = false, dateOverride = '') => {
     const targetProjectId = project?.id;
-    const targetDate = source === SCHEDULE_DATE_SOURCE_PROVISIONAL ? provisionalDate : releaseDate;
+    const targetDate = dateOverride || (source === SCHEDULE_DATE_SOURCE_PROVISIONAL ? provisionalDate : releaseDate);
     if (!targetProjectId || !parseDateOnly(targetDate)) {
       toast.error(source === SCHEDULE_DATE_SOURCE_PROVISIONAL
         ? '仮リリース日を正しく入力してください'
@@ -245,6 +239,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
         ? `仮日を基準に ${result.updatedCount} 件を逆算しました。正式な発売目標日・KDP設定・配信方法は変更していません${preserved}`
         : `正式な発売目標日を基準に ${result.updatedCount} 件を逆算しました${preserved}`;
       if (canApplyOperationResult(targetProjectId, operationGeneration)) {
+        if (dateOverride && source === SCHEDULE_DATE_SOURCE_PROVISIONAL) setProvisionalDate(targetDate);
         toast.success(message);
         setStatusMessage(message);
       }
@@ -281,14 +276,9 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
     }
   };
 
-  const setOneMonthProvisionalDate = () => {
-    const dateValue = addCalendarMonths(todayLocal(), 1);
-    saveProvisionalDate(
-      dateValue,
-      'save-one-month',
-      `1か月後の ${dateValue} を仮リリース日に設定しました`,
-    );
-  };
+  const startStandardSchedule = () => applySchedule(
+    SCHEDULE_DATE_SOURCE_PROVISIONAL, false, getStandardProvisionalDate(todayLocal()),
+  );
 
   const copyProvisionalToOfficialDraft = () => {
     if (!parseDateOnly(provisionalDate)) {
@@ -399,12 +389,35 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
       style={{ background: 'rgba(13,13,26,0.96)' }}
     >
       <div className="mx-auto max-w-7xl rounded-xl p-4" style={CARD_STYLE}>
+        {project && (
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between" data-current-work-summary>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-neon-cyan">次に進める作業</h2>
+              <p className="mt-1 break-words text-sm text-foreground">
+                {checklistError ? '保存データを確認してください' : nextTasks[0]?.title || '標準の作業はすべて完了しています'}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {project.release_target_date ? `発売目標日（正式）：${project.release_target_date}` : project.provisional_release_date ? `仮リリース日：${project.provisional_release_date}` : '目標日は未設定。日程を決める前でも作業を始められます。'}
+                {nextTasks[0]?.due_date && ` ／ 次の作業の目標日：${nextTasks[0].due_date}`}
+              </p>
+            </div>
+            {nextTasks[0] && !checklistError && onOpenTask && (
+              <Button type="button" onClick={() => onOpenTask(nextTasks[0].taskId)} className="min-h-11 shrink-0 bg-neon-cyan/20 text-neon-cyan hover:bg-neon-cyan/30">
+                この作業を開く
+              </Button>
+            )}
+          </div>
+        )}
+        <details open={settingsOpen} onToggle={event => setSettingsOpen(event.currentTarget.open)} className="mt-2">
+          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-bold text-neon-pink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-pink">
+            日程設定を{settingsOpen ? '閉じる' : '開く'}{(officialDraftChanged || provisionalDraftChanged) ? '（入力中・未保存）' : ''}
+          </summary>
         <div className="flex items-start gap-2.5">
           <CalendarDays className="mt-0.5 h-5 w-5 flex-shrink-0 text-neon-pink" aria-hidden="true" />
           <div>
             <h2 className="text-sm font-bold text-neon-pink neon-pink-glow">発売目標日から逆算</h2>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              正式な発売目標日がまだ決まらなくても、1か月後の仮日から標準8週間の日程を作れます。
+              今日から標準8週間で始めるか、決めた発売日から逆算できます。手動変更・完了済みの日程は維持します。
             </p>
           </div>
         </div>
@@ -480,6 +493,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                 <p id="release-method-help" className="sr-only">
                   {releaseMethodInfo?.guidance || '配信方法は仮リリース日とは別です。正式な発売計画を決めるときに選んでください。'}
                 </p>
+                {hasPastScheduleTargets(releaseDate, todayLocal()) && <p className="mt-2 text-xs leading-5 text-neon-amber">この正式日で標準8週間を逆算すると、一部の予定が過去の日付になります。制作が進んでいる方向けです。</p>}
               </div>
 
               <div
@@ -494,7 +508,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                         仮リリース日（計画用）
                       </label>
                       <p id="provisional-release-date-help" className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
-                        迷ったら1か月後でOK。あとで変更でき、KDPには反映しません。
+                        初めてなら「今日から8週間」で始められます。あとで変更でき、KDPには反映しません。
                         <span className="sr-only">仮日を設定しても、KDPの発売日・予約注文・配信方法は決まりません。</span>
                       </p>
                     </div>
@@ -513,11 +527,11 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                     <Button
                       type="button"
                       size="sm"
-                      onClick={setOneMonthProvisionalDate}
-                      disabled={isWorking}
-                      className="min-h-11 gap-1.5 border border-neon-cyan/40 bg-neon-cyan/15 text-xs text-neon-cyan hover:bg-neon-cyan/25 sm:h-9 sm:min-h-9"
+                      onClick={startStandardSchedule}
+                      disabled={isWorking || Boolean(checklistError)}
+                      className="col-span-2 min-h-11 h-auto whitespace-normal gap-1.5 border border-neon-cyan/40 bg-neon-cyan/15 text-xs text-neon-cyan hover:bg-neon-cyan/25 sm:col-span-1"
                     >
-                      <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />1か月後を仮設定
+                      <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />今日から8週間で日程を作る
                     </Button>
                     <Button
                       type="button"
@@ -544,6 +558,7 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                     </Button>
                   </div>
                 </div>
+                {hasPastScheduleTargets(provisionalDate, todayLocal()) && <p className="mt-2 text-xs leading-5 text-neon-amber">この仮日で標準8週間を逆算すると、一部の予定が過去の日付になります。初めてなら「今日から8週間」を選べます。</p>}
               </div>
 
               {(officialDraftChanged || provisionalDraftChanged || currentScheduleDraftChanged) && (
@@ -573,15 +588,16 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
                 </div>
               )}
 
-              {project.schedule_calculated_for && nextTasks.length > 0 && (
+              {!checklistError && nextTasks.length > 0 && (
                 <div data-release-next-tasks className="border-t border-border/60 pt-2">
                   <p className="mb-1.5 text-[10px] font-bold text-neon-cyan">次にやること</p>
                   <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
                     {nextTasks.map(task => (
-                      <div key={task.taskId} className="flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-[11px] sm:block" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid #2a2a4a' }}>
-                        <p className={task.due_date < todayLocal() ? 'font-bold text-neon-amber' : 'font-bold text-neon-pink'}>{task.due_date}</p>
-                        <p className="min-w-0 line-clamp-1 text-muted-foreground sm:mt-0.5 sm:line-clamp-2">{task.title}</p>
-                      </div>
+                      <button type="button" key={task.taskId} onClick={() => onOpenTask?.(task.taskId)} className="min-h-11 rounded-lg px-2.5 py-2 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid #2a2a4a' }}>
+                        <p className={task.due_date && task.due_date < todayLocal() ? 'font-bold text-neon-amber' : 'font-bold text-neon-pink'}>{task.due_date || '日付未設定'}</p>
+                        <p className="mt-1 text-foreground">{task.title}</p>
+                        <span className="mt-1 block text-neon-cyan">この作業を開く</span>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -698,6 +714,8 @@ export default function ReleaseScheduleCard({ project, onProjectUpdate }) {
         ) : (
           <p className="mt-4 text-xs text-muted-foreground">先に出版プロジェクトを作成してください。</p>
         )}
+        </details>
+        {!settingsOpen && statusMessage && <p role="status" className="mt-2 text-xs leading-5 text-neon-cyan">{statusMessage}</p>}
 
       </div>
     </section>
