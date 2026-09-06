@@ -20,7 +20,7 @@ test('仮リリース日は正式日とKDP設定から明確に分離して案�
   [
     '発売目標日（正式）',
     '仮リリース日（計画用）',
-    '1か月後を仮設定',
+    '今日から8週間で日程を作る',
     '仮日だけ保存',
     'この仮日で逆算',
     '仮日を正式欄へコピー',
@@ -38,8 +38,8 @@ test('日付入力だけでは保存せず、明示ボタンからだけ保存�
     scheduleCardSource,
     /id="provisional-release-date"[\s\S]*?onChange=\{event => setProvisionalDate\(event\.target\.value\)\}/,
   );
-  assert.match(scheduleCardSource, /onClick=\{setOneMonthProvisionalDate\}/);
-  assert.match(scheduleCardSource, /saveProvisionalDate\([\s\S]*?'save-one-month'/);
+  assert.match(scheduleCardSource, /onClick=\{startStandardSchedule\}/);
+  assert.match(scheduleCardSource, /SCHEDULE_DATE_SOURCE_PROVISIONAL, false, getStandardProvisionalDate\(todayLocal\(\)\)/);
   assert.match(scheduleCardSource, /onClick=\{\(\) => applySchedule\(SCHEDULE_DATE_SOURCE_PROVISIONAL, false\)\}/);
   assert.match(scheduleCardSource, /syncReleaseScheduleDrafts\([\s\S]*?previousSaved, nextSaved\)/);
   assert.match(scheduleCardSource, /project\?\.id,[\s\S]*?project\?\.release_target_date/);

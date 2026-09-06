@@ -8,6 +8,9 @@ import {
   buildDataRestorePlan,
   createDataBackup,
   createDataBackupBundle,
+  createDataBackupSafetyCheckpoint,
+  downloadDataBackup,
+  downloadCritiqueRecovery,
   importDataBackup,
   parseDataBackup,
   previewDataBackupPlanningNotesConflicts,
@@ -18,6 +21,7 @@ import {
   serializeDataBackup,
   serializeCritiqueRecovery,
   validateDataBackup,
+  verifyDataBackupSafetyCheckpoint,
 } from './dataBackup.js';
 import { readCritiqueHistory, serializeCritiqueHistory } from './critiqueHistory.js';
 import {
@@ -156,6 +160,166 @@ function backup({
     },
   };
 }
+
+test('復元前バックアップは出力日時とキー順のみの差なら同じ確認済みファイルを使える', () => {
+  const first = backup({ projects: [{ id: 'p1', name: '本', manuscript: '本文' }] });
+  const second = backup({ projects: [{ manuscript: '本文', name: '本', id: 'p1' }] });
+  second.exportedAt = '2026-09-06T00:00:00.000Z';
+  second.appVersion = 'next';
+  const checkpoint = createDataBackupSafetyCheckpoint({ backup: first });
+  assert.deepEqual(verifyDataBackupSafetyCheckpoint({
+    checkpoint, confirmed: true, beforeSnapshot: second,
+  }), { snapshotSaved: true, critiqueRecoverySaved: true });
+});
+
+test('バックアップの開始や保存キャンセルだけでは復元を許可しない', () => {
+  const original = backup();
+  const checkpoint = createDataBackupSafetyCheckpoint({ backup: original });
+  for (const confirmed of [false, undefined]) {
+    assert.throws(() => verifyDataBackupSafetyCheckpoint({
+      checkpoint, confirmed, beforeSnapshot: original,
+    }), error => error.code === 'BACKUP_SAFETY_UNCONFIRMED');
+  }
+  assert.throws(() => verifyDataBackupSafetyCheckpoint({
+    checkpoint: null, confirmed: true, beforeSnapshot: original,
+  }), error => error.code === 'BACKUP_SAFETY_UNCONFIRMED');
+});
+
+test('原稿・画像・辞書・選択プロジェクトなど復元対象の変更は再バックアップが必要', () => {
+  const original = backup({ projects: [{ id: 'p1', name: '本' }, { id: 'p2', name: '別の本' }] });
+  const checkpoint = createDataBackupSafetyCheckpoint({ backup: original });
+  const mutations = [
+    value => { value.data.projects[0].manuscript = '新しい原稿'; },
+    value => { value.data.projects[0].updated_date = '2026-09-06T00:00:00.000Z'; },
+    value => { value.data.selectedProjectId = 'p2'; },
+    value => { value.data.formatGuideStates = [{ projectId: 'p1', value: { sharedText: '整形原稿' } }]; },
+    value => { value.data.images = [image('img1')]; },
+    value => { value.data.rubyCustomDict = { 出版: 'しゅっぱん' }; },
+    value => { value.data.projectRubyDictionaries = [{ projectId: 'p1', value: { 出版: 'しゅっぱん' } }]; },
+  ];
+  for (const mutate of mutations) {
+    const changed = clone(original);
+    mutate(changed);
+    assert.throws(() => verifyDataBackupSafetyCheckpoint({
+      checkpoint, confirmed: true, beforeSnapshot: changed,
+    }), error => error.code === 'BACKUP_SAFETY_STALE');
+  }
+});
+
+test('読み込めない原文の変化・追加・消失も安全バックアップの再確認を要求する', async () => {
+  const storage = new MemoryStorage({
+    [PROJECTS_STORAGE_KEY]: JSON.stringify([{ id: 'p1', name: '本', planning_notes: '{broken' }]),
+  });
+  const bundle = await createDataBackupBundle({ storage, imageStore: { listLocalImages: async () => [] }, now });
+  const checkpoint = createDataBackupSafetyCheckpoint(bundle);
+  const recovery = clone(bundle.critiqueRecovery);
+  recovery.exportedAt = '2026-09-06T00:00:00.000Z';
+  assert.equal(verifyDataBackupSafetyCheckpoint({
+    checkpoint, confirmed: true, beforeSnapshot: bundle.backup, beforeCritiqueRecovery: recovery,
+  }).critiqueRecoverySaved, true);
+  recovery.entries[0].raw = '{changed';
+  for (const beforeCritiqueRecovery of [recovery, null]) {
+    assert.throws(() => verifyDataBackupSafetyCheckpoint({
+      checkpoint, confirmed: true, beforeSnapshot: bundle.backup, beforeCritiqueRecovery,
+    }), error => error.code === 'BACKUP_SAFETY_STALE');
+  }
+  const withoutRecovery = createDataBackupSafetyCheckpoint({ backup: bundle.backup });
+  assert.throws(() => verifyDataBackupSafetyCheckpoint({
+    checkpoint: withoutRecovery, confirmed: true, beforeSnapshot: bundle.backup,
+    beforeCritiqueRecovery: bundle.critiqueRecovery,
+  }), error => error.code === 'BACKUP_SAFETY_STALE');
+});
+
+for (const mode of ['merge', 'replace']) {
+  test(`${mode}: 書き込み直前の内容照合に成功すると追加ダウンロードなしで復元できる`, async () => {
+    const storage = new MemoryStorage({
+      [PROJECTS_STORAGE_KEY]: JSON.stringify([{ id: 'p1', name: '現在の本' }]),
+    });
+    let imageWrites = 0;
+    const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => { imageWrites += 1; } };
+    const bundle = await createDataBackupBundle({ storage, imageStore, now });
+    const checkpoint = createDataBackupSafetyCheckpoint(bundle);
+    let preflights = 0;
+    const result = await importDataBackup(backup({ projects: [{ id: 'p2', name: '復元する本' }] }), {
+      storage, imageStore, mode, now: () => new Date('2026-09-06T00:00:00.000Z'),
+      beforeApply: context => {
+        preflights += 1;
+        // DOMやダウンロード処理なしで、確認済みファイルに対応するチェックポイントを再利用。
+        return verifyDataBackupSafetyCheckpoint({ ...context, checkpoint, confirmed: true });
+      },
+    });
+    assert.equal(preflights, 1);
+    assert.equal(imageWrites, 1);
+    assert.equal(result.counts.projects, mode === 'merge' ? 2 : 1);
+  });
+
+  test(`${mode}: 保存後に内容が変わった場合は無変更で停止し、新しい確認後にだけ復元する`, async () => {
+    const storage = new MemoryStorage({
+      [PROJECTS_STORAGE_KEY]: JSON.stringify([{ id: 'p1', name: '現在の本' }]),
+    });
+    let imageWrites = 0;
+    const imageStore = { listLocalImages: async () => [], replaceLocalImages: async () => { imageWrites += 1; } };
+    let checkpoint = createDataBackupSafetyCheckpoint(await createDataBackupBundle({ storage, imageStore, now }));
+    storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify([{ id: 'p1', name: '後から編集した本' }]));
+    const before = new Map(storage.values);
+    const incoming = backup({ projects: [{ id: 'p2', name: '復元する本' }] });
+    const options = {
+      storage, imageStore, mode, now,
+      beforeApply: context => verifyDataBackupSafetyCheckpoint({ ...context, checkpoint, confirmed: true }),
+    };
+    await assert.rejects(importDataBackup(incoming, options), error => error instanceof BackupImportError
+      && error.preflightFailed && !error.writeStarted && error.cause.code === 'BACKUP_SAFETY_STALE');
+    assert.deepEqual(storage.values, before);
+    assert.equal(imageWrites, 0);
+    checkpoint = createDataBackupSafetyCheckpoint(await createDataBackupBundle({ storage, imageStore, now }));
+    await importDataBackup(incoming, options);
+    assert.equal(imageWrites, 1);
+  });
+}
+
+test('ブラウザのダウンロード開始は保存完了として報告せず、失敗時も一時リンクを片付ける', async () => {
+  const previousDocument = globalThis.document;
+  const previousCreate = URL.createObjectURL;
+  const previousRevoke = URL.revokeObjectURL;
+  const anchors = [];
+  let failClick = false;
+  let revoked = 0;
+  globalThis.document = {
+    body: { appendChild: () => {} },
+    createElement: () => {
+      const anchor = {
+        style: {}, removed: false,
+        click: () => { if (failClick) throw new Error('blocked'); },
+        remove() { this.removed = true; },
+      };
+      anchors.push(anchor);
+      return anchor;
+    },
+  };
+  URL.createObjectURL = () => 'blob:test';
+  URL.revokeObjectURL = () => { revoked += 1; };
+  try {
+    const result = downloadDataBackup(backup(), { filename: 'safe.json' });
+    assert.deepEqual(result, { status: 'download_started', filename: 'safe.json', saved: false });
+    const recovery = {
+      kind: 'kindle-navi-critique-recovery', schemaVersion: 1, appVersion: 'test', exportedAt: FIXED_DATE,
+      entries: [{ projectId: 'p1', projectName: '本', field: 'planning_notes', raw: '{broken', error: 'invalid' }],
+    };
+    assert.deepEqual(downloadCritiqueRecovery(recovery, { filename: 'recovery.json' }), {
+      status: 'download_started', filename: 'recovery.json', saved: false,
+    });
+    failClick = true;
+    assert.throws(() => downloadDataBackup(backup()), /blocked/);
+    assert.ok(anchors.every(anchor => anchor.removed));
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(revoked, 3);
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    URL.createObjectURL = previousCreate;
+    URL.revokeObjectURL = previousRevoke;
+  }
+});
 
 test('許可した保存キーとプロジェクト項目だけをバックアップする', async () => {
   const storage = new MemoryStorage({

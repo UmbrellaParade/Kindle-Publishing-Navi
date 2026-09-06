@@ -79,7 +79,7 @@ function KdpTaskRow({ task, state, onChange, fieldData, onFieldChange }) {
   const hasInline = task.inlineFields?.length > 0;
 
   return (
-    <div className={`rounded-lg border transition-all ${s.is_done ? 'opacity-50' : task.important ? 'border-neon-pink/30' : 'border-border/60'}`}
+    <div id={`checklist-task-${task.id}`} tabIndex={-1} className={`rounded-lg border transition-all scroll-mt-40 focus-visible:ring-2 focus-visible:ring-neon-cyan ${s.is_done ? 'opacity-50' : task.important ? 'border-neon-pink/30' : 'border-border/60'}`}
       style={{ background: s.is_done ? 'rgba(255,255,255,0.02)' : task.important ? 'rgba(255,45,120,0.04)' : 'rgba(255,255,255,0.03)' }}>
       {/* 行 */}
       <div className="flex flex-wrap sm:flex-nowrap items-start gap-2 px-3 py-2.5">

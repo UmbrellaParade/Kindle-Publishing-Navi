@@ -115,7 +115,86 @@ test('閲覧状態は専用localStorageだけに置き、共有・バックア�
   assert.match(homeSource, /collapsedOutlineCardKeys: nextKeys/);
   assert.match(planningSource, /collapsedOutlineCardKeys = \[\]/);
   assert.match(planningSource, /onCollapsedOutlineCardKeysChange\(nextKeys\)/);
-  assert.doesNotMatch(homeSource, /planning_notes[^\n]*viewResume|onProjectUpdate[^\n]*viewResume/i);
+  assert.doesNotMatch(homeSource, /planning_notes\s*:\s*[^,\n]*(?:viewResume|outlineNavigation)|onProjectUpdate[^\n]*viewResume/i);
   assert.doesNotMatch(backupSource, /VIEW_RESUME_STORAGE_KEY|kindle_publishing_navi_view_resume_v1/);
   assert.doesNotMatch(planningDataSource, /VIEW_RESUME_STORAGE_KEY|kindle_publishing_navi_view_resume_v1/);
+});
+
+test('目次の閲覧先と開いた履歴だけ復元し、フォームは開かない', () => {
+  assert.match(homeSource, /getProjectOutlineNavigation/);
+  assert.match(homeSource, /initialOutlineView=\{outlineNavigation\.outlineView\}/);
+  assert.match(homeSource, /initialOutlineHistoryId=\{outlineNavigation\.outlineHistoryId\}/);
+  assert.match(homeSource, /onOutlineViewChange=\{handleOutlineViewChange\}/);
+  assert.match(homeSource, /scrollOutlineView: context\.outlineView/);
+  assert.match(homeSource, /scrollOutlineHistoryId: context\.outlineHistoryId/);
+  assert.match(homeSource, /<PlanningNotesTab\s+key=\{currentProject\?\.id \|\| 'no-project'\}/);
+  assert.match(planningSource, /initialOutlineView = 'draft'/);
+  assert.match(planningSource, /initialOutlineHistoryId = ''/);
+  assert.match(planningSource, /normalizeOutlineNavigation/);
+  assert.match(planningSource, /onOutlineViewChange\?\.\(next\)/);
+  assert.match(planningSource, /open=\{outlineHistoryId === snapshot\.id\}/);
+  assert.match(planningSource, /setOutlineDialog\(null\)/);
+  assert.match(planningSource, /setManuscriptLinkEditor\(null\)/);
+  assert.match(planningSource, /setOutlineRewrite\(null\)/);
+});
+
+test('保存待ち中に本を切り替えたら古いタブ遷移を中止し、新しい本の状態を上書きしない', async () => {
+  const start = homeSource.indexOf('const handleTabChange = async');
+  const end = homeSource.indexOf('const handlePlanningSectionChange', start);
+  assert.ok(start >= 0 && end > start);
+  const handlerSource = homeSource.slice(start, end);
+  assert.match(handlerSource, /await flushPendingSaves\(\);[\s\S]*?if \(viewContextRef\.current\.projectId !== sourceProjectId\) return;[\s\S]*?rememberViewContext/);
+  const createHandler = new Function('bindings', `
+    const { MAIN_TAB_IDS, activeTab, switchingTab, currentProject, planningSection, critiqueSection,
+      viewContextRef, flushPendingSaves, captureCurrentViewScroll, setSwitchingTab,
+      rememberViewContext, setActiveTab, setWorkRequest, setMobileTabsOpen,
+      restoreMobileTabsToggleFocus, toast } = bindings;
+    ${handlerSource}
+    return handleTabChange;
+  `);
+  for (const switchedProject of [false, true]) {
+    let releaseSave;
+    const calls = [];
+    const viewContextRef = { current: { projectId: 'project-a' } };
+    const handler = createHandler({
+      MAIN_TAB_IDS: ['creation', 'notes'], activeTab: 'creation', switchingTab: false,
+      currentProject: { id: 'project-a' }, planningSection: 'chapters', critiqueSection: 'history',
+      viewContextRef,
+      flushPendingSaves: () => new Promise(resolve => { releaseSave = resolve; }),
+      captureCurrentViewScroll: () => calls.push(['capture']),
+      setSwitchingTab: value => calls.push(['switching', value]),
+      rememberViewContext: value => calls.push(['remember', value]),
+      setActiveTab: value => calls.push(['tab', value]),
+      setWorkRequest: () => calls.push(['work']),
+      setMobileTabsOpen: () => calls.push(['mobile']),
+      restoreMobileTabsToggleFocus: () => calls.push(['focus']),
+      toast: { error: message => { throw new Error(message); } },
+    });
+    const pending = handler('notes');
+    if (switchedProject) viewContextRef.current.projectId = 'project-b';
+    releaseSave();
+    await pending;
+    assert.deepEqual(calls.filter(([kind]) => kind === 'switching'), [['switching', true], ['switching', false]]);
+    assert.equal(calls.some(([kind]) => kind === 'remember'), !switchedProject);
+    assert.equal(calls.some(([kind]) => kind === 'tab'), !switchedProject);
+    assert.equal(calls.some(([kind]) => kind === 'work'), !switchedProject);
+    assert.equal(viewContextRef.current.projectId, switchedProject ? 'project-b' : 'project-a');
+  }
+});
+
+test('目次の検索が表示ツリーへ直接反映され、解除・未完成だけの操作がある', () => {
+  assert.match(planningSource, /filteredDraftOutline\.rows\.filter/);
+  assert.match(planningSource, /filterPlanningOutlineRows\(allVisibleRecords, searchFilters/);
+  assert.match(planningSource, /条件に一致する目次はありません/);
+  assert.match(planningSource, /checked=\{unfinishedOnly\}/);
+  assert.match(planningSource, /onChange=\{event => setUnfinishedOnly\(event\.target\.checked\)\}/);
+  assert.match(planningSource, /階層の親項目/);
+  assert.match(planningSource, /!\['gptSessions', 'chapters'\]\.includes\(activeSection\)/);
+});
+
+test('履歴の原稿リンクは読み取り専用で、保存時点の原稿と混同させない', () => {
+  assert.match(planningSource, /この項目に紐づく現在の原稿リンク（履歴保存時点の原稿ではありません）/);
+  assert.match(planningSource, /manuscript=\{manuscript\} readOnly/);
+  assert.match(planningSource, /!readOnly && <Button\s+key="edit-manuscript-link"/);
+  assert.match(planningSource, /<StatusBadge status=\{memo\.status\}/);
 });

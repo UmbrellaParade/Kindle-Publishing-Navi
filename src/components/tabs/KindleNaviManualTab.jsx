@@ -159,8 +159,8 @@ export default function KindleNaviManualTab({
   onNavigateTab,
   onOpenSchedule,
 }) {
-  const navigateToFeature = async tabId => {
-    await onNavigateTab(tabId);
+  const navigateToFeature = async (tabId, options = {}) => {
+    await onNavigateTab(tabId, { focusWork: true, ...options });
     window.setTimeout(() => {
       const tabButton = document.querySelector(`[data-main-tab="${tabId}"]`);
       if (tabButton instanceof HTMLElement) tabButton.focus({ preventScroll: true });
@@ -223,7 +223,7 @@ export default function KindleNaviManualTab({
           </div>
         </div>
         <div className="mt-3 rounded-xl border border-neon-cyan/25 bg-neon-cyan/5 px-4 py-3 text-sm leading-7 text-slate-300">
-          <p><strong className="text-neon-cyan">この4つは一度に終わらせなくて大丈夫です。</strong> 正式な発売日が決まっていなければ、まず1か月後を仮日にして進められます。日程を逆算すると、次に何をするかが見えやすくなります。</p>
+          <p><strong className="text-neon-cyan">この4つは一度に終わらせなくて大丈夫です。</strong> 正式な発売日が決まっていなければ、今日から8週間の仮日程で進められます。日程を決める前でも、フェーズ0の準備を始められます。</p>
           <p className="mt-1 text-xs leading-6 text-muted-foreground">まだ本がない場合だけ、日程の保存先となるプロジェクトを先に1つ作ります。</p>
         </div>
         <ol className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -244,7 +244,7 @@ export default function KindleNaviManualTab({
           <li className="flex flex-col rounded-xl border border-neon-cyan/25 bg-neon-cyan/5 p-4">
             <span className="text-xs font-black text-neon-cyan">STEP 1</span>
             <div className="mt-2 flex items-center gap-2 font-black text-foreground"><CalendarDays className="h-4 w-4" />仮日または正式日から逆算</div>
-            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">ここが実質的なスタートです。迷ったら1か月後の仮日で大丈夫。正式日が決まっている場合だけ、配信方法も選びます。</p>
+            <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">初めてなら「今日から8週間で日程を作る」で始められます。正式日が決まっている場合だけ、配信方法も選びます。日程設定は後からでも大丈夫です。</p>
             <button type="button" onClick={hasProject ? onOpenSchedule : onCreateProject} className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-neon-cyan/40 bg-neon-cyan/15 px-3 py-2 text-xs font-black text-neon-cyan transition hover:bg-neon-cyan/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70">
               {hasProject ? '発売日程を設定する' : '先に本を作る'}<ChevronRight className="h-4 w-4" />
             </button>
@@ -253,7 +253,7 @@ export default function KindleNaviManualTab({
             <span className="text-xs font-black text-neon-amber">STEP 2</span>
             <div className="mt-2 flex items-center gap-2 font-black text-foreground"><BookCheck className="h-4 w-4" />フェーズ0を1つ確認</div>
             <p className="mt-2 flex-1 text-xs leading-6 text-muted-foreground">制作進捗を個別表示にして、準備の一番上にある項目を確認します。全部進めなくて大丈夫です。</p>
-            <button type="button" onClick={hasProject ? () => navigateToFeature('creation') : onCreateProject} className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-neon-amber/40 bg-neon-amber/10 px-3 py-2 text-xs font-black text-neon-amber transition hover:bg-neon-amber/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-amber/70">
+            <button type="button" onClick={hasProject ? () => navigateToFeature('creation', { phaseId: 'phase0', taskId: 't01' }) : onCreateProject} className="mt-3 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-neon-amber/40 bg-neon-amber/10 px-3 py-2 text-xs font-black text-neon-amber transition hover:bg-neon-amber/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-amber/70">
               {hasProject ? '制作進捗を開く' : '本を作って準備を始める'}<ChevronRight className="h-4 w-4" />
             </button>
           </li>

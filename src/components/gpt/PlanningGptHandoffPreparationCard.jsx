@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { resolvePlanningGptHandoffTarget } from '@/lib/planningGptHandoffContext';
 import {
   getDefaultPlanningGptHandoffTemplate,
   renderPlanningGptHandoffTemplate,
@@ -68,15 +69,18 @@ export default function PlanningGptHandoffPreparationCard({
     () => getDefaultPlanningGptHandoffTemplate(kind),
     [kind],
   );
+  const handoffTarget = useMemo(() => resolvePlanningGptHandoffTarget({
+    kind, data, activeSession, nextManagementId,
+  }), [kind, data, activeSession, nextManagementId]);
   const templateValues = useMemo(() => Object.fromEntries(
     Object.entries({
       projectTitle,
-      currentManagementId: activeSession?.managementId,
-      nextManagementId,
+      currentManagementId: handoffTarget.currentManagementId,
+      nextManagementId: handoffTarget.nextManagementId,
       scope: activeSession?.scope,
       ...extraTemplateValues,
     }).map(([key, value]) => [key, normalizeTemplateValue(value)]),
-  ), [activeSession?.managementId, activeSession?.scope, extraTemplateValues, nextManagementId, projectTitle]);
+  ), [activeSession?.scope, extraTemplateValues, handoffTarget, projectTitle]);
 
   useEffect(() => {
     const identity = `${projectKey || ''}:${kind}`;
@@ -183,6 +187,14 @@ export default function PlanningGptHandoffPreparationCard({
             {open ? '全文編集を閉じる' : '全文を確認・編集'}
             {dirty && <span className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[10px] text-amber-200">未保存</span>}
           </Button>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-neon-cyan/25 bg-neon-cyan/[0.035] p-3 text-xs leading-relaxed" aria-live="polite">
+          <p className="font-bold text-foreground">コピー文の引継ぎ先：{handoffTarget.currentManagementId || '使用中GPT未登録'} → {handoffTarget.nextManagementId || '未設定'}</p>
+          <p className="mt-1 text-muted-foreground">{handoffTarget.isRegisteredTarget
+            ? '登録済みの引継ぎ先IDを差し込みます。受領確認後に、登録済みの新しいGPTを「使用中」にしてください。'
+            : '引継ぎ先は未登録です。次の管理ID候補を差し込みます。新しいGPTを登録した後は、この表示を確認してください。'}</p>
+          {handoffTarget.invalidTarget && <p className="mt-1 font-bold text-amber-200">以前の引継ぎ先を確認できないため、次の管理ID候補を表示しています。GPT管理の引継ぎ先IDを確認してください。</p>}
         </div>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-2">

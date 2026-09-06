@@ -38,21 +38,26 @@ function isNewerQuestionVersion(candidate, current) {
 
 /**
  * 執筆用指示書を、明示的に紐づく構成項目IDごとに索引化する。
- * 同じ文書系列の旧版は保存データに残したまま、目次上では現在の版だけを表示する。
+ * 最新案と、利用者が明示指定した正本・最初に見る版を表示する。
+ * 新しい下書きの作成だけで、承認した正本を目次から隠さない。
  */
 export function buildPlanningChapterQuestionIndex(records = []) {
   const newestByDocument = new Map();
+  const designatedById = new Map();
 
   for (const record of Array.isArray(records) ? records : []) {
     if (record?.role !== 'writing' || record?.status === 'rejected' || record?.referenceStatus === 'old') continue;
     const documentKey = String(record?.documentId || record?.id || '');
     if (!documentKey) continue;
+    if (record.canonicalFor?.length || record.firstReadFor?.length) designatedById.set(record.id, record);
     const current = newestByDocument.get(documentKey);
     if (!current || isNewerQuestionVersion(record, current)) newestByDocument.set(documentKey, record);
   }
 
   const byChapter = new Map();
-  for (const record of newestByDocument.values()) {
+  const displayedById = new Map([...newestByDocument.values()].map(record => [record.id, record]));
+  for (const [id, record] of designatedById) displayedById.set(id, record);
+  for (const record of displayedById.values()) {
     const chapterIds = Array.isArray(record?.chapterIds) ? [...new Set(record.chapterIds)] : [];
     for (const chapterId of chapterIds) {
       if (!chapterId) continue;

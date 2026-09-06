@@ -86,7 +86,7 @@ test('初めての利用者が開始からバックアップまで迷わず進�
   const requiredPhrases = [
     '「＋」',
     '仮リリース日または発売目標日から逆算',
-    '「1か月後を仮設定」',
+    '「今日から8週間で日程を作る」',
     '「この仮日で逆算」',
     '「正式日で逆算して設定」',
     'フェーズ0：準備',
@@ -511,9 +511,9 @@ test('マニュアルから現行11機能と初回4ステップへ移動でき�
   assert.match(manualComponentSource, /data-management-trigger/);
   assert.match(manualComponentSource, /仮日または発売目標日から始める初回ガイド/);
   assert.match(manualComponentSource, /この4つは一度に終わらせなくて大丈夫です/);
-  assert.match(manualComponentSource, /ここが実質的なスタートです/);
+  assert.match(manualComponentSource, /日程設定は後からでも大丈夫です/);
   assert.match(manualComponentSource, /初回準備[\s\S]*STEP 1[\s\S]*仮日または正式日から逆算/);
-  assert.match(manualComponentSource, /正式な発売日が決まっていなければ、まず1か月後を仮日にして進められます/);
+  assert.match(manualComponentSource, /正式な発売日が決まっていなければ、今日から8週間の仮日程で進められます/);
   assert.match(manualComponentSource, /発売日程を設定する/);
   assert.match(manualComponentSource, /この本は準備済み/);
   assert.match(manualComponentSource, /仮タイトルでも大丈夫です/);

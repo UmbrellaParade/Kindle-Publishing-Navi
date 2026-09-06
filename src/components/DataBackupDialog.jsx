@@ -34,11 +34,13 @@ import {
   createBackupFileName,
   createCritiqueRecoveryFileName,
   createDataBackupBundle,
+  createDataBackupSafetyCheckpoint,
   downloadCritiqueRecovery,
   downloadDataBackup,
   importDataBackup,
   previewDataBackupPlanningNotesConflicts,
   readDataBackupFile,
+  verifyDataBackupSafetyCheckpoint,
 } from '@/lib/dataBackup';
 
 const DEFAULT_APP_VERSION = packageInfo.version || 'unknown';
@@ -118,6 +120,7 @@ export default function DataBackupDialog({
   triggerClassName = '',
 }) {
   const fileInputRef = useRef(null);
+  const safetyCheckpointRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pendingBackup, setPendingBackup] = useState(null);
@@ -129,11 +132,14 @@ export default function DataBackupDialog({
   const [replacePhrase, setReplacePhrase] = useState('');
   const [replaceSafetyReady, setReplaceSafetyReady] = useState(false);
   const [replaceSafetyConfirmed, setReplaceSafetyConfirmed] = useState(false);
+  const [safetyFileNames, setSafetyFileNames] = useState([]);
 
   const resetReplaceConfirmation = () => {
     setReplacePhrase('');
     setReplaceSafetyReady(false);
     setReplaceSafetyConfirmed(false);
+    safetyCheckpointRef.current = null;
+    setSafetyFileNames([]);
   };
 
   const resetSelection = () => {
@@ -160,9 +166,9 @@ export default function DataBackupDialog({
       downloadDataBackup(backup, { filename: createBackupFileName() });
       const recoveryDownloaded = downloadRecoveryIfNeeded(critiqueRecovery);
       if (recoveryDownloaded) {
-        toast.warning('通常バックアップに加え、読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの原文を復旧用JSONとして保存しました。両方を保管してください');
+        toast.warning('通常バックアップと復旧用JSONのダウンロードを開始しました。保存先で両方のファイルを確認してください');
       } else {
-        toast.success('バックアップをダウンロードしました');
+        toast.info('バックアップのダウンロードを開始しました。保存先でファイルを確認してください');
       }
     } catch (error) {
       const message = error?.message || 'バックアップを作成できませんでした';
@@ -205,31 +211,35 @@ export default function DataBackupDialog({
     }
   };
 
-  const prepareReplaceSafetyBackup = async () => {
+  const prepareSafetyBackup = async () => {
     if (!pendingBackup || busy) return;
     setBusy(true);
     setErrorMessage('');
     setReplaceSafetyReady(false);
     setReplaceSafetyConfirmed(false);
+    safetyCheckpointRef.current = null;
+    setSafetyFileNames([]);
 
     try {
       if (beforeAction) await beforeAction();
       const { backup, critiqueRecovery } = await createDataBackupBundle({ appVersion });
-      downloadDataBackup(backup, {
-        filename: createBackupFileName('kindle-navi-before-restore'),
-      });
-      const recoveryDownloaded = downloadRecoveryIfNeeded(
-        critiqueRecovery,
-        'kindle-navi-before-restore-critique-recovery',
-      );
+      const checkpoint = createDataBackupSafetyCheckpoint({ backup, critiqueRecovery });
+      const backupName = createBackupFileName('kindle-navi-before-restore');
+      const recoveryName = critiqueRecovery
+        ? createCritiqueRecoveryFileName('kindle-navi-before-restore-critique-recovery')
+        : null;
+      downloadDataBackup(backup, { filename: backupName });
+      if (critiqueRecovery) downloadCritiqueRecovery(critiqueRecovery, { filename: recoveryName });
+      safetyCheckpointRef.current = checkpoint;
+      setSafetyFileNames([backupName, recoveryName].filter(Boolean));
       setReplaceSafetyReady(true);
-      if (recoveryDownloaded) {
-        toast.warning('復元前バックアップと、読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの復旧用JSONを保存しました。両方を保管してください');
+      if (critiqueRecovery) {
+        toast.warning('復元前バックアップと復旧用JSONのダウンロードを開始しました。保存先で両方のファイルを確認してください');
       } else {
-        toast.success('復元前バックアップのダウンロードを開始しました');
+        toast.info('復元前バックアップのダウンロードを開始しました。まだ復元は実行していません');
       }
     } catch (error) {
-      const message = error?.message || '復元前バックアップを保存できないため、全置換を停止しました';
+      const message = error?.message || '復元前バックアップを準備できないため、復元を停止しました';
       setErrorMessage(message);
       toast.error(message);
     } finally {
@@ -245,13 +255,13 @@ export default function DataBackupDialog({
       toast.error(message);
       return;
     }
-    if (mode === 'replace' && (!replaceSafetyReady || !replaceSafetyConfirmed)) return;
+    if (!replaceSafetyReady || !replaceSafetyConfirmed) return;
+    if (mode === 'replace' && replacePhrase !== '全置換') return;
     setBusy(true);
     setErrorMessage('');
 
     let result;
-    let preflightSnapshotDownloaded = false;
-    let preflightCritiqueRecoveryDownloaded = false;
+    let safetySnapshotConfirmed = false;
     try {
       if (beforeAction) await beforeAction();
     } catch (error) {
@@ -264,73 +274,35 @@ export default function DataBackupDialog({
 
     try {
       const beforeApply = ({ beforeSnapshot, beforeCritiqueRecovery }) => {
-          downloadDataBackup(beforeSnapshot, {
-            filename: createBackupFileName('kindle-navi-before-restore'),
-          });
-          preflightSnapshotDownloaded = true;
-          if (beforeCritiqueRecovery) {
-            preflightCritiqueRecoveryDownloaded = downloadRecoveryIfNeeded(
-              beforeCritiqueRecovery,
-              'kindle-navi-before-restore-critique-recovery',
-            );
-          }
-          return {
-            snapshotSaved: preflightSnapshotDownloaded,
-            critiqueRecoverySaved: !beforeCritiqueRecovery
-              || preflightCritiqueRecoveryDownloaded,
-          };
-        };
+        const verification = verifyDataBackupSafetyCheckpoint({
+          checkpoint: safetyCheckpointRef.current,
+          confirmed: replaceSafetyConfirmed,
+          beforeSnapshot,
+          beforeCritiqueRecovery,
+        });
+        safetySnapshotConfirmed = true;
+        return verification;
+      };
       result = await importDataBackup(pendingBackup, { mode, appVersion, beforeApply });
     } catch (error) {
-      let recoverySnapshotDownloaded = preflightSnapshotDownloaded;
-      let critiqueRecoveryDownloaded = preflightCritiqueRecoveryDownloaded;
-      if (!error?.preflightFailed && !recoverySnapshotDownloaded && error?.beforeSnapshot) {
-        try {
-          downloadDataBackup(error.beforeSnapshot, {
-            filename: createBackupFileName('kindle-navi-before-failed-restore'),
-          });
-          recoverySnapshotDownloaded = true;
-        } catch {
-          // 画面のエラーを優先し、ダウンロード失敗は下のメッセージにまとめます。
-        }
-      }
-      if (!error?.preflightFailed
-        && !critiqueRecoveryDownloaded
-        && error?.beforeCritiqueRecovery) {
-        try {
-          critiqueRecoveryDownloaded = downloadRecoveryIfNeeded(
-            error.beforeCritiqueRecovery,
-            'kindle-navi-before-failed-restore-critique-recovery',
-          );
-        } catch {
-          // 画面のエラーを優先し、ダウンロード失敗は下のメッセージにまとめます。
-        }
-      }
+      const safetyError = error?.cause?.code?.startsWith('BACKUP_SAFETY_');
+      if (safetyError) resetReplaceConfirmation();
       const rollbackNote = error?.rollbackSucceeded === false
-        ? recoverySnapshotDownloaded
-          ? ' 元データの自動復旧も完了していません。自動保存された復元前バックアップをご確認ください。'
+        ? safetySnapshotConfirmed
+          ? ' 元データの自動復旧も完了していません。事前にファイルを確認した復元前バックアップを保管してください。'
           : ' 元データの自動復旧と復元前バックアップの保存を完了できませんでした。'
         : '';
       const preflightNote = error?.preflightFailed
         ? ' 復元処理を始める前に停止したため、保存データは変更していません。'
         : '';
-      const critiqueRecoveryNote = critiqueRecoveryDownloaded
-        ? ' 読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの原文は、別の復旧用JSONにも保存しました。'
-        : error?.beforeCritiqueRecovery
-          ? ' 読み込めない辛口論評履歴／本の前提／企画・取材・構成ノートの復旧用JSONはダウンロードできませんでした。'
-          : '';
-      const message = `${error?.message || '復元できませんでした'}${rollbackNote}${preflightNote}${critiqueRecoveryNote}`;
+      const message = `${safetyError ? error.cause.message : error?.message || '復元できませんでした'}${rollbackNote}${preflightNote}`;
       setErrorMessage(message);
       toast.error(message);
       setBusy(false);
       return;
     }
 
-    // 結合前スナップショットは、書き込み前のbeforeApplyで保存済みです。
-    // 全置換は、書き込み前に明示保存できた場合だけ runImport へ到達します。
-    if (mode === 'merge' && preflightCritiqueRecoveryDownloaded) {
-      toast.warning('結合前にあった読み込めない項目の原文を、別の復旧用JSONへ保存しました');
-    }
+    // 保存をやり直さず、事前に利用者が確認したファイルと同じ内容であることを検証済みです。
 
     if (onRestored) {
       try {
@@ -347,6 +319,46 @@ export default function DataBackupDialog({
     setOpen(false);
     resetSelection();
   };
+
+  const safetyBackupControls = (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        先に復元前バックアップを保存してください。ブラウザから保存完了は確認できないため、保存先でファイルを確認してから進みます。内容が変わっていなければ、実行時の再ダウンロードはありません。
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        onClick={prepareSafetyBackup}
+        disabled={busy}
+        className="w-full min-h-11 border-amber-400/50 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+      >
+        {busy ? <Loader2 className="animate-spin" /> : <Download />}
+        {replaceSafetyReady ? '復元前バックアップをもう一度ダウンロード' : '1. 復元前バックアップをダウンロード'}
+      </Button>
+      {replaceSafetyReady && (
+        <>
+          <ul className="space-y-1 text-[11px] text-muted-foreground" aria-label="確認するバックアップファイル">
+            {safetyFileNames.map(name => <li key={name} className="break-all">{name}</li>)}
+          </ul>
+          <label className="flex min-h-11 cursor-pointer items-start gap-2 rounded-md border border-amber-400/30 bg-amber-500/5 p-3 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={replaceSafetyConfirmed}
+              onChange={event => setReplaceSafetyConfirmed(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-amber-500"
+            />
+            <span>2. 上記すべてのファイルが保存先にあり、空でないことを確認しました（保存をキャンセルした場合は進まないでください）</span>
+          </label>
+        </>
+      )}
+      {errorMessage && (
+        <div role="alert" className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <span className="break-words">{errorMessage}</span>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <>
@@ -464,7 +476,7 @@ export default function DataBackupDialog({
                 <div className="grid sm:grid-cols-2 gap-2">
                   <Button
                     type="button"
-                    onClick={() => setMergeConfirmOpen(true)}
+                    onClick={() => { resetReplaceConfirmation(); setMergeConfirmOpen(true); }}
                     disabled={busy || planningMergeConflicts.length > 0}
                     className="bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/35 hover:bg-neon-cyan/25"
                   >
@@ -473,14 +485,14 @@ export default function DataBackupDialog({
                   <Button
                     type="button"
                     variant="destructive"
-                    onClick={() => setReplaceConfirmOpen(true)}
+                    onClick={() => { resetReplaceConfirmation(); setReplaceConfirmOpen(true); }}
                     disabled={busy}
                   >
                     すべて置き換える
                   </Button>
                 </div>
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  結合では既存プロジェクトを残し、同じIDのデータだけバックアップ側で更新します。全置換では、復元前バックアップを先に保存して確認します。
+                  結合では既存プロジェクトを残し、同じIDのデータだけバックアップ側で更新します。どちらも復元前バックアップを先に保存して確認します。
                 </p>
               </div>
             )}
@@ -488,8 +500,12 @@ export default function DataBackupDialog({
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={mergeConfirmOpen} onOpenChange={setMergeConfirmOpen}>
-        <AlertDialogContent style={{ background: '#151527', border: '1px solid #2a2a4a' }}>
+      <AlertDialog open={mergeConfirmOpen} onOpenChange={(nextOpen) => {
+        if (busy) return;
+        setMergeConfirmOpen(nextOpen);
+        if (!nextOpen) resetReplaceConfirmation();
+      }}>
+        <AlertDialogContent className="max-h-[90dvh] overflow-y-auto" style={{ background: '#151527', border: '1px solid #2a2a4a' }}>
           <AlertDialogHeader>
             <AlertDialogTitle>バックアップを結合しますか？</AlertDialogTitle>
             <AlertDialogDescription>
@@ -498,11 +514,12 @@ export default function DataBackupDialog({
                 : '現在のプロジェクトは残ります。同じプロジェクトID、画像ID、原稿データはバックアップ側の内容で更新されます。'}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {safetyBackupControls}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>キャンセル</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => runImport('merge')}
-              disabled={busy || planningMergeConflicts.length > 0}
+              onClick={(event) => { event.preventDefault(); runImport('merge'); }}
+              disabled={busy || planningMergeConflicts.length > 0 || !replaceSafetyReady || !replaceSafetyConfirmed}
             >
               {busy && <Loader2 className="animate-spin" />}結合して復元
             </AlertDialogAction>
@@ -513,11 +530,12 @@ export default function DataBackupDialog({
       <AlertDialog
         open={replaceConfirmOpen}
         onOpenChange={(nextOpen) => {
+          if (busy) return;
           setReplaceConfirmOpen(nextOpen);
           if (!nextOpen) resetReplaceConfirmation();
         }}
       >
-        <AlertDialogContent style={{ background: '#151527', border: '1px solid #ef444466' }}>
+        <AlertDialogContent className="max-h-[90dvh] overflow-y-auto" style={{ background: '#151527', border: '1px solid #ef444466' }}>
           <AlertDialogHeader>
             <AlertDialogTitle className="text-destructive flex items-center gap-2">
               <AlertTriangle className="w-5 h-5" />現在の全データを置き換えます
@@ -526,36 +544,9 @@ export default function DataBackupDialog({
               <span className="block">
                 現在だけにあるプロジェクト、原稿状態、ルビ辞書、画像は削除されます。先に復元前バックアップを保存し、ファイルを確認した場合だけ実行できます。
               </span>
-              <span className="block font-bold text-foreground">1. 復元前バックアップをダウンロードしてください。</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={prepareReplaceSafetyBackup}
-            disabled={busy}
-            className="w-full border-amber-400/50 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
-          >
-            {busy ? <Loader2 className="animate-spin" /> : <Download />}
-            {replaceSafetyReady ? '復元前バックアップをもう一度保存' : '復元前バックアップをダウンロード'}
-          </Button>
-          {replaceSafetyReady && (
-            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-amber-400/30 bg-amber-500/5 p-3 text-sm text-foreground">
-              <input
-                type="checkbox"
-                checked={replaceSafetyConfirmed}
-                onChange={event => setReplaceSafetyConfirmed(event.target.checked)}
-                className="mt-0.5 h-4 w-4 accent-amber-500"
-              />
-              <span>2. ダウンロードしたバックアップファイルを確認しました</span>
-            </label>
-          )}
-          {errorMessage && (
-            <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              <span className="break-words">{errorMessage}</span>
-            </div>
-          )}
+          {safetyBackupControls}
           <p className="text-xs font-bold text-foreground">3. 続けるには「全置換」と入力してください。</p>
           <input
             autoFocus
@@ -567,7 +558,7 @@ export default function DataBackupDialog({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>キャンセル</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => runImport('replace')}
+              onClick={(event) => { event.preventDefault(); runImport('replace'); }}
               disabled={busy || !replaceSafetyReady || !replaceSafetyConfirmed || replacePhrase !== '全置換'}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >

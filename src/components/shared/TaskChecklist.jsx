@@ -19,7 +19,7 @@ function TaskRow({ task, state, onChange }) {
   const dueDateInputId = `task-due-date-${task.id}`;
 
   return (
-    <div className={`rounded-lg border transition-all ${s.is_done ? 'opacity-50' : task.important ? 'border-neon-pink/30' : 'border-border/60 hover:border-border'}`}
+    <div id={`checklist-task-${task.id}`} tabIndex={-1} className={`rounded-lg border transition-all scroll-mt-40 focus-visible:ring-2 focus-visible:ring-neon-cyan ${s.is_done ? 'opacity-50' : task.important ? 'border-neon-pink/30' : 'border-border/60 hover:border-border'}`}
       style={{ background: s.is_done ? 'rgba(255,255,255,0.02)' : task.important ? 'rgba(255,45,120,0.04)' : 'rgba(255,255,255,0.03)' }}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
         <button
@@ -80,8 +80,11 @@ function TaskRow({ task, state, onChange }) {
   );
 }
 
-export function PhaseSection({ phase, checklistData, onTaskChange }) {
+export function PhaseSection({ phase, checklistData, onTaskChange, navigationRequest = null }) {
   const [open, setOpen] = useState(true);
+  React.useEffect(() => {
+    if (navigationRequest?.phaseId === phase.id) setOpen(true);
+  }, [navigationRequest, phase.id]);
   const c = PHASE_COLORS[phase.color] || PHASE_COLORS.cyan;
   const done = phase.tasks.filter(t => checklistData[t.id]?.is_done).length;
 
@@ -136,7 +139,7 @@ export function ChecklistProgress({ allTaskIds, checklistData, customTasks = [],
  * allTaskIds: 全タスクID配列（進捗計算用）
  * checklistData / customTasks / onTaskChange / onCustomTaskChange / onDeleteCustomTask / onAddCustomTask: 親から渡す
  */
-export default function TaskChecklist({ phases, allTaskIds, checklistData, customTasks, onTaskChange, onCustomTaskChange, onDeleteCustomTask, onAddCustomTask, progressLabel, showProgress = true, afterPhases = null }) {
+export default function TaskChecklist({ phases, allTaskIds, checklistData, customTasks, onTaskChange, onCustomTaskChange, onDeleteCustomTask, onAddCustomTask, progressLabel, showProgress = true, afterPhases = null, navigationRequest = null }) {
   const [addingTask, setAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
 
@@ -162,7 +165,7 @@ export default function TaskChecklist({ phases, allTaskIds, checklistData, custo
 
       {/* フェーズ別 */}
       {phases.map(phase => (
-        <PhaseSection key={phase.id} phase={phase} checklistData={checklistData} onTaskChange={onTaskChange} />
+        <PhaseSection key={phase.id} phase={phase} checklistData={checklistData} onTaskChange={onTaskChange} navigationRequest={navigationRequest} />
       ))}
 
       {afterPhases}

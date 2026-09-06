@@ -135,7 +135,10 @@ test('サポートGPT管理は初心者向け案内・世代管理・安全な�
   assert.match(source, /共有用JSON／Markdownからは除外されます/);
   assert.match(source, /通常ノートへAPIキー・認証情報・非公開会話URLを保存しない/);
   assert.match(source, /Object\.entries\(SECTION_META\)\.filter\(\(\[key\]\) => !\['overview', 'concept', 'gptSessions'\]\.includes\(key\)\)/);
-  assert.equal((source.match(/activeSection !== 'gptSessions' && searchableRecordCount > 0/g) || []).length, 2);
+  // The outline now filters its tree in place, so only other notes use the
+  // separate results list. Both search surfaces must still exclude private GPT management.
+  assert.match(source, /activeSection !== 'gptSessions' && searchableRecordCount > 0 && \(\s*<section[^>]*aria-label="ノートを検索・絞り込み"/);
+  assert.match(source, /!\['gptSessions', 'chapters'\]\.includes\(activeSection\) && searchableRecordCount > 0 && filtersActive && \(\s*<section[^>]*>\s*<h2[^>]*>検索結果<\/h2>/);
   assert.match(source, /createPlanningGptHandoffTarget/);
   assert.match(source, /activatePlanningGptSession/);
   assert.match(source, /activeSource = records\.find\(record => record\.sessionStatus === 'active'\)/);
@@ -565,7 +568,7 @@ test('仮・確定・過去の目次項目を個別に折りたたみ、見出�
   assert.match(source, /collapseScope=\{`history:\$\{snapshot\.id\}`\}/);
   assert.match(source, /id=\{activeSection === 'chapters' \? outlineCardBodyId\(outlineCardKey\) : undefined\}/);
   assert.match(source, /hidden=\{activeSection === 'chapters' && outlineCardCollapsed\}/);
-  assert.match(source, /visibleRecords\.map\(\(\{ record, depth \}\) =>/);
+  assert.match(source, /visibleRecords\.map\(\(\{ record, depth, filterContext \}\) =>/);
   assert.doesNotMatch(source, /collapsed[^\n]*(?:filter|flatMap)[^\n]*(?:parentId|pathIds)/);
 });
 
@@ -627,7 +630,8 @@ test('仮・確定・過去の表示範囲ごとに全項目をまとめて開�
 test('目次は並び順から自動番号を表示し、種類と題名を分けて編集できる', () => {
   assert.match(source, /buildPlanningChapterOrdinalLabels/);
   assert.match(source, /chapterRows\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/);
-  assert.ok((source.match(/chapterRows\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/g) || []).length >= 4);
+  assert.match(source, /draftDisplayChapters\),/);
+  assert.match(source, /filteredDraftOutline\.rows\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/);
   assert.match(source, /getPlanningChapterDisplayTitle/);
   assert.match(source, /getPlanningChapterPresentation/);
   assert.match(source, /const \{ ordinalLabel, displayTitle \} = chapterPresentation/);
@@ -643,7 +647,7 @@ test('目次は並び順から自動番号を表示し、種類と題名を分�
   assert.match(source, /chapterContextPathLabel\(record, allChapters, activeChapterIds/);
   assert.match(source, /getPlanningChapterDisplayTitle\(record\.title\)/);
   assert.match(source, /title: getPlanningChapterDisplayTitle\(record\.title\)/);
-  assert.match(source, /visibleRecords\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/);
+  assert.match(source, /allVisibleRecords\.filter\(\(\{ record \}\) => record\.status !== 'rejected'\)/);
   assert.match(source, /itemLabel=\{outlineItemLabel\}/);
   assert.match(source, /itemLabel=\{itemLabel\}/);
   assert.match(source, /aria-label=\{`\$\{outlineItemLabel\}を\$\{siblingLocation\}上へ`\}/);

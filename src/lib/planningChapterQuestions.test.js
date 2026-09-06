@@ -89,3 +89,14 @@ test('壊れた入力や未紐づけ質問は安全に無視する', () => {
   assert.deepEqual([...buildPlanningChapterQuestionIndex(null)], []);
   assert.deepEqual([...buildPlanningChapterQuestionIndex([null, {}, question({ chapterIds: [] })])], []);
 });
+
+test('承認した正本は新しい下書きと区別して目次に残し、指定なし旧版は隠す', () => {
+  const canonical = question({ id: 'approved-v1', status: 'approved', canonicalFor: ['author'] });
+  const draft = question({ id: 'draft-v2', versionNumber: 2 });
+  const before = structuredClone([canonical, draft]);
+  const index = buildPlanningChapterQuestionIndex([canonical, draft]);
+  assert.deepEqual(index.get('chapter-a').map(record => record.id), ['approved-v1', 'draft-v2']);
+  assert.deepEqual(index.get('chapter-a').map(record => record.status), ['approved', 'draft']);
+  assert.deepEqual([canonical, draft], before);
+  assert.deepEqual(buildPlanningChapterQuestionIndex([{ ...canonical, canonicalFor: [] }, draft]).get('chapter-a').map(record => record.id), ['draft-v2']);
+});

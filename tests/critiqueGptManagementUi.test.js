@@ -14,6 +14,10 @@ const handoffSource = readFileSync(
   new URL('../src/components/gpt/PlanningGptHandoffPreparationCard.jsx', import.meta.url),
   'utf8',
 );
+const handoffContextSource = readFileSync(
+  new URL('../src/lib/planningGptHandoffContext.js', import.meta.url),
+  'utf8',
+);
 const homeSource = readFileSync(
   new URL('../src/pages/Home.jsx', import.meta.url),
   'utf8',
@@ -111,8 +115,8 @@ test('両GPT管理の引継ぎ準備は差込・編集・コピー失敗時の�
   assert.match(managerSource, /kind="critique"/);
   assert.match(managerSource, /targetManuscriptVersionId/);
   assert.match(managerSource, /critiqueRound/);
-  assert.match(managerSource, /previousFindings/);
-  assert.match(managerSource, /unresolvedFindings/);
+  assert.match(handoffContextSource, /previousFindings/);
+  assert.match(handoffContextSource, /unresolvedFindings/);
   assert.match(managerSource, /updatePlanningGptHandoffTemplates\(current, 'critique'/);
   assert.match(handoffSource, /引継ぎ書の作成指示をコピー/);
   assert.match(handoffSource, /新しいGPTへの開始指示をコピー/);
@@ -124,4 +128,17 @@ test('両GPT管理の引継ぎ準備は差込・編集・コピー失敗時の�
   assert.match(handoffSource, /必要な一般公開URLは利用できます/);
   assert.match(handoffSource, /role="status" aria-live="polite"/);
   assert.match(handoffSource, /identityRef\.current !== identity/);
+});
+
+test('コピー文の引継ぎ先をプレビューし、論評履歴は同じ版から明示的に選べる', () => {
+  assert.match(handoffSource, /resolvePlanningGptHandoffTarget/);
+  assert.match(handoffSource, /nextManagementId: handoffTarget\.nextManagementId/);
+  assert.match(handoffSource, /コピー文の引継ぎ先/);
+  assert.match(handoffSource, /登録済みの引継ぎ先IDを差し込みます/);
+  assert.match(managerSource, /resolveCritiqueHandoffContext/);
+  assert.match(managerSource, /コピー文へ差し込む履歴（同じ原稿版のみ）/);
+  assert.match(managerSource, /handoffEntrySelection\?\.contextKey === handoffContextKey/);
+  assert.match(managerSource, /value=\{handoffContext\.entry\?\.id \|\| ''\}/);
+  assert.match(managerSource, /この選択は保存・共有されません/);
+  assert.doesNotMatch(managerSource, /critiqueRound: entries\.length|formatFindingBlocks\(latestEntry/);
 });

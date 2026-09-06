@@ -82,7 +82,7 @@ function KdpPhaseSummary({ state, onChange, onNavigateTab }) {
   );
 }
 
-export default function PublishingChecklistTab({ project, onProjectUpdate, onNavigateTab }) {
+export default function PublishingChecklistTab({ project, onProjectUpdate, onNavigateTab, navigationRequest }) {
   const { checklistData, customTasks, handleTaskChange, handleCustomTaskChange, handleDeleteCustomTask, handleAddCustomTask } =
     useChecklistState(project, onProjectUpdate);
   const [viewPreference, setViewPreference] = React.useState(readViewPreference);
@@ -96,6 +96,12 @@ export default function PublishingChecklistTab({ project, onProjectUpdate, onNav
       // 表示設定を保存できなくても、チェックリスト本体の操作は継続できます。
     }
   };
+
+  React.useEffect(() => {
+    if (navigationRequest?.tabId === 'creation' && VALID_PHASE_IDS.has(navigationRequest.phaseId)) {
+      updateViewPreference({ mode: 'individual', phaseId: navigationRequest.phaseId });
+    }
+  }, [navigationRequest]);
 
   if (!project) {
     return <div className="text-center py-20 text-muted-foreground"><span className="text-4xl">📚</span><p className="mt-3 text-sm">ヘッダーの「＋」からプロジェクトを作成してください</p></div>;
@@ -195,6 +201,7 @@ export default function PublishingChecklistTab({ project, onProjectUpdate, onNav
       ) : (
         <div className="w-full">
           <TaskChecklist
+            navigationRequest={navigationRequest}
             phases={selectedPhase.kind === 'checklist' ? [selectedPhase.phase] : []}
             allTaskIds={selectedPhase.kind === 'checklist' ? selectedPhase.phase.tasks.map(task => task.id) : []}
             checklistData={checklistData}
